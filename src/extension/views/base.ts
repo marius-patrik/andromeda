@@ -44,35 +44,16 @@ export function setViewHtml(options: ViewHtmlOptions): void {
       </div>
       <script nonce="${nonce}">
         (function () {
-          const vscode = acquireVsCodeApi();
           const projectId = ${JSON.stringify(projectId)};
           const viewType = ${JSON.stringify(viewType)};
           const status = document.getElementById('status');
 
-          window.vsdaw = {
-            projectId,
-            viewType,
-            postMessage(type, payload) {
-              vscode.postMessage({ projectId, direction: 'view-to-host', type, payload });
-            }
-          };
-
-          window.addEventListener('message', function (event) {
-            if (event.source !== window) return;
-            const msg = event.data;
-            if (msg && msg.projectId === projectId) {
-              if (window.onVsdawMessage) {
-                window.onVsdawMessage(msg);
-              }
-            }
-          });
+          window.vsdaw = { projectId, viewType };
 
           window.addEventListener('error', function (event) {
             console.error('[vsdaw] runtime error', event.error);
-            if (status) status.textContent = 'Error: ' + (event.error && event.error.message || event.message);
+            if (status) status.textContent = 'Error: ' + ((event.error && event.error.message) || event.message);
           });
-
-          window.vsdaw.postMessage('view.ready', { viewType });
         })();
       </script>
       <script nonce="${nonce}" src="${bundleUri.toString()}" onerror="document.getElementById('status').textContent = 'Failed to load view bundle'"></script>
