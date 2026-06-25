@@ -1,0 +1,124 @@
+/**
+ * Shared message types for view ↔ extension host communication.
+ * Views do not own audio state; every mutation is sent to the host,
+ * which broadcasts authoritative state updates.
+ */
+
+export interface WebviewApi<T = unknown> {
+  postMessage(message: T): void;
+  getState(): unknown;
+  setState(state: unknown): void;
+}
+
+export interface TimePosition {
+  bars: number;
+  beats: number;
+  ticks: number;
+  seconds: number;
+}
+
+export interface TimeSignature {
+  numerator: number;
+  denominator: number;
+}
+
+export interface TrackState {
+  id: string;
+  name: string;
+  color: string;
+  muted: boolean;
+  soloed: boolean;
+  armed: boolean;
+  volume: number; // 0..1
+  pan: number; // -1..1
+  height: number;
+  regions: RegionState[];
+}
+
+export interface RegionState {
+  id: string;
+  start: number; // beats
+  duration: number; // beats
+  name: string;
+  color: string;
+}
+
+export interface NoteState {
+  id: string;
+  start: number; // beats
+  duration: number; // beats
+  pitch: number; // MIDI note number
+  velocity: number; // 0..127
+}
+
+export interface DeviceItem {
+  id: string;
+  name: string;
+  category: "instrument" | "effect" | "utility";
+}
+
+export interface BrowserNode {
+  id: string;
+  name: string;
+  type: "folder" | "file" | "device";
+  children?: BrowserNode[];
+  device?: DeviceItem;
+}
+
+// Messages sent from a view to the extension host
+export type ViewMessage =
+  | { type: "view/ready"; view: ViewName }
+  | { type: "transport/play" }
+  | { type: "transport/pause" }
+  | { type: "transport/stop" }
+  | { type: "transport/record" }
+  | { type: "transport/toggleLoop" }
+  | { type: "transport/toggleMetronome" }
+  | { type: "transport/setTempo"; bpm: number }
+  | { type: "transport/setTimeSignature"; timeSignature: TimeSignature }
+  | { type: "track/setMute"; trackId: string; muted: boolean }
+  | { type: "track/setSolo"; trackId: string; soloed: boolean }
+  | { type: "track/setArm"; trackId: string; armed: boolean }
+  | { type: "track/setVolume"; trackId: string; volume: number }
+  | { type: "track/setPan"; trackId: string; pan: number }
+  | { type: "track/setName"; trackId: string; name: string }
+  | { type: "timeline/selectRegion"; regionId: string | null }
+  | { type: "timeline/moveRegion"; regionId: string; start: number }
+  | { type: "pianoRoll/addNote"; note: NoteState }
+  | { type: "pianoRoll/setNoteVelocity"; noteId: string; velocity: number }
+  | { type: "pianoRoll/deleteNote"; noteId: string }
+  | { type: "mixer/openDevice"; trackId: string; slotIndex: number }
+  | { type: "browser/preview"; nodeId: string }
+  | { type: "browser/dragStart"; nodeId: string }
+  | { type: "command/undo" }
+  | { type: "command/redo" }
+  | { type: "command/delete" }
+  | { type: "command/duplicate" }
+  | { type: "command/export" }
+  | { type: "command/show"; view: ViewName };
+
+export interface SelectionState {
+  trackId?: string;
+  regionId?: string;
+  noteIds?: string[];
+}
+
+// Messages sent from the extension host to views
+export type HostMessage =
+  | {
+      type: "host/transport";
+      isPlaying: boolean;
+      isRecording: boolean;
+      isLooping: boolean;
+      isMetronomeEnabled: boolean;
+      position: TimePosition;
+      bpm: number;
+      timeSignature: TimeSignature;
+    }
+  | { type: "host/tracks"; tracks: TrackState[] }
+  | ({ type: "host/selection" } & SelectionState)
+  | { type: "host/browser"; root: BrowserNode }
+  | { type: "host/project"; name: string; saved: boolean }
+  | { type: "host/error"; message: string };
+
+export type ViewName = "timeline" | "mixer" | "pianoRoll" | "browser" | "graph";

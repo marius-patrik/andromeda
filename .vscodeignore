@@ -1,0 +1,16 @@
+.gitignore
+.github/**
+.vscode/**
+node_modules/**
+scripts/**
+src/**
+specs/**
+plans/**
+docs/**
+tests/**
+*.log
+*.vsix
+.env*
+
+# Keep build outputs but strip source maps from the package.
+out/**/*.map
