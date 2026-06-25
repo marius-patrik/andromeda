@@ -7,15 +7,17 @@ export interface ViewHtmlOptions {
   extensionUri: vscode.Uri;
   projectId: string;
   viewType: string;
+  bundleName?: string;
   serverOrigin: string;
 }
 
 export function setViewHtml(options: ViewHtmlOptions): void {
-  const { webview, extensionUri, projectId, viewType, serverOrigin } = options;
+  const { webview, extensionUri, projectId, viewType, bundleName, serverOrigin } = options;
   const nonce = crypto.randomUUID();
   const cspSource = webview.cspSource;
+  const resolvedBundleName = bundleName ?? viewType;
   const bundleUri = webview.asWebviewUri(
-    vscode.Uri.joinPath(extensionUri, "out", "webview", "views", `${viewType}.js`),
+    vscode.Uri.joinPath(extensionUri, "out", "webview", "views", `${resolvedBundleName}.js`),
   );
 
   webview.html = `

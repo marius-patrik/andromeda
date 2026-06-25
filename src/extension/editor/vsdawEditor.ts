@@ -49,6 +49,7 @@ export class VsdawEditorProvider implements vscode.CustomEditorProvider<VsdawDoc
       extensionUri: this.context.extensionUri,
       projectId: session.projectId,
       viewType: VsdawEditorProvider.viewType,
+      bundleName: "timeline",
       serverOrigin: this.getServerOrigin() ?? "",
     });
 

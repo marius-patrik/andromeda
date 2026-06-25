@@ -33,7 +33,9 @@ suite("VSDAW Extension Integration", () => {
   });
 
   test("creates a new project", async () => {
-    const workspacePath = getWorkspacePath();
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    assert.ok(workspaceFolder, "No workspace folder open");
+    const workspacePath = workspaceFolder.uri.fsPath;
     fs.mkdirSync(workspacePath, { recursive: true });
 
     // Remove any existing untitled projects.

@@ -44,6 +44,10 @@ async function build() {
   } else {
     await esbuild.build(extensionConfig);
     await esbuild.build(serverConfig);
+    fs.writeFileSync(
+      path.join(outdir, "package.json"),
+      JSON.stringify({ type: "commonjs" }, null, 2),
+    );
     console.log("Extension build complete.");
   }
 }
