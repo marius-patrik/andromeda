@@ -14,6 +14,10 @@ import {
   type MidiNoteVelocityPayload,
   type RegionMovePayload,
   type TrackBooleanPayload,
+  type TrackColorPayload,
+  type TrackCreatePayload,
+  type TrackIdPayload,
+  type TrackInsertPayload,
   type TrackNamePayload,
   type TrackPanPayload,
   type TrackVolumePayload,
@@ -24,6 +28,23 @@ import {
 import type { ViewMessage } from "../views/shared/types.js";
 
 const MIN_VOLUME_DB = -120;
+
+const DEFAULT_TRACK_COLORS: Record<"audio" | "midi" | "bus", string> = {
+  audio: "hsl(210, 70%, 50%)",
+  midi: "hsl(280, 70%, 50%)",
+  bus: "hsl(35, 70%, 50%)",
+};
+
+function defaultTrackName(type: "audio" | "midi" | "bus"): string {
+  switch (type) {
+    case "audio":
+      return "Audio Track";
+    case "midi":
+      return "MIDI Track";
+    case "bus":
+      return "Bus Track";
+  }
+}
 
 function linearToDb(volume: number): number {
   const clamped = Math.max(0, Math.min(1, volume));
@@ -116,6 +137,33 @@ export function adaptViewMessage(
         name: message.name,
       };
       return { ...base, type: MessageType.TrackSetName, payload };
+    }
+    case "track/create": {
+      const payload: TrackCreatePayload = {
+        type: message.trackType,
+        name: message.name ?? defaultTrackName(message.trackType),
+        color: message.color ?? DEFAULT_TRACK_COLORS[message.trackType],
+      };
+      return { ...base, type: MessageType.TrackCreate, payload };
+    }
+    case "track/delete": {
+      const payload: TrackIdPayload = { trackId: message.trackId };
+      return { ...base, type: MessageType.TrackDelete, payload };
+    }
+    case "track/setColor": {
+      const payload: TrackColorPayload = {
+        trackId: message.trackId,
+        color: message.color,
+      };
+      return { ...base, type: MessageType.TrackSetColor, payload };
+    }
+    case "track/addInsert": {
+      const payload: TrackInsertPayload = {
+        trackId: message.trackId,
+        deviceName: message.deviceName,
+        insertIndex: message.insertIndex,
+      };
+      return { ...base, type: MessageType.TrackAddInsert, payload };
     }
 
     // Timeline

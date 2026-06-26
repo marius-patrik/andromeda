@@ -158,6 +158,73 @@ describe("viewMessageAdapter", () => {
       expect(result.type).toBe(MessageType.TrackSetName);
       expect(result.payload).toEqual({ trackId: "track-1", name: "Lead" });
     });
+
+    test("track/create -> track.create with defaults", () => {
+      const result = adaptViewMessage(PROJECT_ID, {
+        type: "track/create",
+        trackType: "midi",
+      });
+      expectEnvelope(result);
+      expect(result.type).toBe(MessageType.TrackCreate);
+      expect(result.payload).toMatchObject({
+        type: "midi",
+        name: "MIDI Track",
+      });
+      expect(typeof (result.payload as { color: string }).color).toBe("string");
+    });
+
+    test("track/create -> track.create with custom name/color", () => {
+      const result = adaptViewMessage(PROJECT_ID, {
+        type: "track/create",
+        trackType: "audio",
+        name: "Vocals",
+        color: "#ff0000",
+      });
+      expectEnvelope(result);
+      expect(result.type).toBe(MessageType.TrackCreate);
+      expect(result.payload).toEqual({
+        type: "audio",
+        name: "Vocals",
+        color: "#ff0000",
+      });
+    });
+
+    test("track/delete -> track.delete", () => {
+      const result = adaptViewMessage(PROJECT_ID, {
+        type: "track/delete",
+        trackId: "track-1",
+      });
+      expectEnvelope(result);
+      expect(result.type).toBe(MessageType.TrackDelete);
+      expect(result.payload).toEqual({ trackId: "track-1" });
+    });
+
+    test("track/setColor -> track.setColor", () => {
+      const result = adaptViewMessage(PROJECT_ID, {
+        type: "track/setColor",
+        trackId: "track-1",
+        color: "#00ff00",
+      });
+      expectEnvelope(result);
+      expect(result.type).toBe(MessageType.TrackSetColor);
+      expect(result.payload).toEqual({ trackId: "track-1", color: "#00ff00" });
+    });
+
+    test("track/addInsert -> track.addInsert", () => {
+      const result = adaptViewMessage(PROJECT_ID, {
+        type: "track/addInsert",
+        trackId: "track-1",
+        deviceName: "Reverb",
+        insertIndex: 0,
+      });
+      expectEnvelope(result);
+      expect(result.type).toBe(MessageType.TrackAddInsert);
+      expect(result.payload).toEqual({
+        trackId: "track-1",
+        deviceName: "Reverb",
+        insertIndex: 0,
+      });
+    });
   });
 
   describe("timeline messages", () => {

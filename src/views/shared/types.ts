@@ -83,6 +83,10 @@ export type ViewMessage =
   | { type: "track/setVolume"; trackId: string; volume: number }
   | { type: "track/setPan"; trackId: string; pan: number }
   | { type: "track/setName"; trackId: string; name: string }
+  | { type: "track/create"; trackType: "audio" | "midi" | "bus"; name?: string; color?: string }
+  | { type: "track/delete"; trackId: string }
+  | { type: "track/setColor"; trackId: string; color: string }
+  | { type: "track/addInsert"; trackId: string; deviceName: string; insertIndex?: number }
   | { type: "timeline/selectRegion"; regionId: string | null }
   | { type: "timeline/moveRegion"; regionId: string; start: number }
   | { type: "pianoRoll/addNote"; note: NoteState }

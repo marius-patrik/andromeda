@@ -94,6 +94,12 @@ export function useViewState(view: ViewName) {
       send({ type: "track/setVolume", trackId, volume }),
     setPan: (trackId: string, pan: number) => send({ type: "track/setPan", trackId, pan }),
     setName: (trackId: string, name: string) => send({ type: "track/setName", trackId, name }),
+    createTrack: (trackType: "audio" | "midi" | "bus", name?: string, color?: string) =>
+      send({ type: "track/create", trackType, name, color }),
+    deleteTrack: (trackId: string) => send({ type: "track/delete", trackId }),
+    setColor: (trackId: string, color: string) => send({ type: "track/setColor", trackId, color }),
+    addInsert: (trackId: string, deviceName: string, insertIndex?: number) =>
+      send({ type: "track/addInsert", trackId, deviceName, insertIndex }),
   };
 
   const timelineActions = {
