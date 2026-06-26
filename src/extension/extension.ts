@@ -28,9 +28,17 @@ export async function activate(context: vscode.ExtensionContext) {
       outputChannel.appendLine(`[engine] error for ${projectId}: ${JSON.stringify(payload)}`);
       projectManager?.onEngineError(projectId, payload);
     },
+    onEngineStateUpdate: (projectId, message) => {
+      outputChannel.appendLine(`[engine] state update for ${projectId}: ${message.type}`);
+      projectManager?.onEngineStateUpdate(projectId, message);
+    },
     onViewMessage: (projectId, message) => {
       outputChannel.appendLine(`[view] ${projectId}: ${message.type}`);
       projectManager?.onViewMessage(projectId, message);
+    },
+    onViewSelection: (projectId, regionId) => {
+      outputChannel.appendLine(`[view] ${projectId}: selection=${regionId}`);
+      projectManager?.onViewSelection(projectId, regionId);
     },
   });
   context.subscriptions.push(router);

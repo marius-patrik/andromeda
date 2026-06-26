@@ -29,3 +29,24 @@ validate the raw view message, call `adaptViewMessage`, validate the resulting
 envelope, notify `ProjectManager` via `onViewMessage`, and route to the engine.
 Engine `error` messages are also forwarded to views as `host/error` so users see
  failures in the UI.
+
+## State broadcast
+
+The extension host owns authoritative project state and projects it into typed
+`HostMessage` updates that React views consume:
+
+- `src/extension/stateProjector.ts` contains `ProjectStateProjector`, which
+  listens to engine `StateUpdate` and `TransportPositionChanged` messages.
+- A full `ProjectState` is converted into `host/tracks` (with decibel-to-linear
+  volume, default colors, and per-track regions) and `host/transport` (with
+  bars/beats/ticks/seconds derived from PPQN ticks).
+- Transport position updates are throttled and broadcast as `host/transport`
+  using the most recent full transport state for BPM and time signature.
+- Selection changes from view messages (`timeline/selectRegion`) are tracked and
+  broadcast as `host/selection` only when they actually change.
+- `ProjectManager` creates one projector per session. When the engine reports
+  `EngineReady`, the manager sends an initial `host/project` message and requests
+  a full state dump via `MessageType.StateGet`.
+- `MessageRouter` routes engine `StateUpdate`/`TransportPositionChanged`
+  messages to the projector and continues to forward engine errors to views as
+  `host/error`.

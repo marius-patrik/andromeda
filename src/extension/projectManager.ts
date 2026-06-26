@@ -8,11 +8,13 @@ import {
   MessageType,
   type ProjectLoadPayload,
   type ProjectNewPayload,
+  type ProjectState,
 } from "../shared/protocol.js";
 import type { ProjectJson } from "../shared/schemas.js";
 import { acquireServer, releaseServer } from "./audioServer.js";
 import type { MessageRouter } from "./messageRouter.js";
 import type { PlaywrightEngineManager } from "./playwrightEngine.js";
+import { ProjectStateProjector } from "./stateProjector.js";
 import type { MessageEnvelope, ProjectSession } from "./types.js";
 
 export interface ProjectManagerOptions {
@@ -33,6 +35,7 @@ const BACKUP_INTERVAL_MS = 60000;
 
 export class ProjectManager implements vscode.Disposable {
   private sessions = new Map<string, ProjectSession>();
+  private projectors = new Map<string, ProjectStateProjector>();
   private uriToProjectId = new Map<string, string>();
   private activeProjectId: string | undefined;
   private serverOrigin: string | undefined;
@@ -166,6 +169,14 @@ export class ProjectManager implements vscode.Disposable {
       this.uriToProjectId.set(uri.toString(), projectId);
       this.activeProjectId = projectId;
 
+      const projector = new ProjectStateProjector({
+        projectId,
+        router: this.router,
+        getProjectName: () => this.getSessionProjectName(session),
+        getSaved: () => !session.isDirty,
+      });
+      this.projectors.set(projectId, projector);
+
       cleanupDisposables.push(
         engineTransport.onDidDispose(() => {
           if (!this.sessions.has(projectId)) return;
@@ -227,6 +238,9 @@ export class ProjectManager implements vscode.Disposable {
     const session = this.sessions.get(projectId);
     if (!session || session.isClosing) return;
     session.isClosing = true;
+
+    this.projectors.get(projectId)?.dispose();
+    this.projectors.delete(projectId);
 
     this.clearAutoSave(session);
     this.router.unregisterEngine(projectId);
@@ -350,6 +364,7 @@ export class ProjectManager implements vscode.Disposable {
       session.projectJson = projectJson;
       session.isDirty = false;
       this.updateSaveIndicator(session);
+      this.projectors.get(session.projectId)?.broadcastProject();
       this.outputChannel.appendLine(`[project] saved ${targetUri.fsPath}`);
     } finally {
       session.isSaving = false;
@@ -363,6 +378,7 @@ export class ProjectManager implements vscode.Disposable {
     session.isDirty = true;
     if (becameDirty) {
       this._onDidChangeProject.fire(projectId);
+      this.projectors.get(projectId)?.broadcastProject();
     }
     this.updateSaveIndicator(session);
     this.scheduleAutoSave(session);
@@ -380,6 +396,9 @@ export class ProjectManager implements vscode.Disposable {
       this.router.routeToEngine(projectId, queued);
     }
     session.pendingEngineMessages = [];
+
+    this.projectors.get(projectId)?.broadcastProject();
+    this.requestEngineStateDump(projectId);
   }
 
   onEngineError(projectId: string, payload: unknown): void {
@@ -391,6 +410,44 @@ export class ProjectManager implements vscode.Disposable {
 
   onViewMessage(projectId: string, _message: MessageEnvelope): void {
     this.markDirty(projectId);
+  }
+
+  onEngineStateUpdate(projectId: string, message: MessageEnvelope): void {
+    const projector = this.projectors.get(projectId);
+    if (!projector) return;
+
+    if (message.type === MessageType.StateUpdate) {
+      projector.handleStateUpdate(message.payload as ProjectState);
+    } else if (message.type === MessageType.TransportPositionChanged) {
+      const position = (message.payload as { position?: number }).position ?? 0;
+      projector.handleTransportPositionChanged(position);
+    }
+  }
+
+  onViewSelection(projectId: string, regionId: string | null): void {
+    this.projectors.get(projectId)?.updateSelection({
+      regionId: regionId ?? undefined,
+    });
+  }
+
+  private async requestEngineStateDump(projectId: string): Promise<void> {
+    try {
+      const response = await this.router.requestEngine(projectId, MessageType.StateGet, undefined, {
+        responseType: `${MessageType.StateGet}.result`,
+        timeoutMs: 10000,
+      });
+      this.projectors.get(projectId)?.handleStateUpdate(response.payload as ProjectState);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.outputChannel.appendLine(`[project] state dump failed: ${message}`);
+    }
+  }
+
+  private getSessionProjectName(session: ProjectSession): string {
+    if (session.projectJson?.project.name) {
+      return session.projectJson.project.name;
+    }
+    return path.basename(session.uri.fsPath, ".vsdaw") || "Untitled";
   }
 
   private scheduleAutoSave(session: ProjectSession): void {

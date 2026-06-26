@@ -1,6 +1,6 @@
 import type * as vscode from "vscode";
 import { MessageSchema, MessageType } from "../shared/protocol.js";
-import type { ViewMessage } from "../views/shared/types.js";
+import type { HostMessage, ViewMessage } from "../views/shared/types.js";
 import type { EngineTransport } from "./engineTransport.js";
 import type { MessageEnvelope, PendingRequest } from "./types.js";
 import { adaptViewMessage } from "./viewMessageAdapter.js";
@@ -8,7 +8,9 @@ import { adaptViewMessage } from "./viewMessageAdapter.js";
 export interface MessageRouterCallbacks {
   onEngineReady: (projectId: string, payload: unknown) => void;
   onEngineError: (projectId: string, payload: unknown) => void;
+  onEngineStateUpdate: (projectId: string, message: MessageEnvelope) => void;
   onViewMessage: (projectId: string, message: MessageEnvelope) => void;
+  onViewSelection?: (projectId: string, regionId: string | null) => void;
 }
 
 export class MessageRouter implements vscode.Disposable {
@@ -158,6 +160,18 @@ export class MessageRouter implements vscode.Disposable {
     }
   }
 
+  broadcastToViews(projectId: string, message: HostMessage): void {
+    const set = this.views.get(projectId);
+    if (!set) return;
+    for (const panel of set) {
+      Promise.resolve(panel.webview.postMessage(message)).catch((error) => {
+        this.outputChannel.appendLine(
+          `[router] failed to broadcast to view ${projectId}: ${String(error)}`,
+        );
+      });
+    }
+  }
+
   private routeErrorToViews(projectId: string, text: string): void {
     const set = this.views.get(projectId);
     if (!set) return;
@@ -282,6 +296,14 @@ export class MessageRouter implements vscode.Disposable {
       return;
     }
 
+    if (
+      message.type === MessageType.StateUpdate ||
+      message.type === MessageType.TransportPositionChanged
+    ) {
+      this.callbacks.onEngineStateUpdate(projectId, message);
+      return;
+    }
+
     // Broadcast engine state to all views for this project.
     this.routeToViews(projectId, {
       projectId,
@@ -323,6 +345,11 @@ export class MessageRouter implements vscode.Disposable {
 
     // Lifecycle/UI-only messages are not forwarded to the engine.
     if (viewMessage.type === "view/ready") {
+      return;
+    }
+
+    if (viewMessage.type === "timeline/selectRegion") {
+      this.callbacks.onViewSelection?.(projectId, viewMessage.regionId ?? null);
       return;
     }
 

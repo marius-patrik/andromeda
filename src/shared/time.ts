@@ -114,3 +114,66 @@ export function formatBarsBeatsTicks(position: BarsBeatsTicks): string {
   const ticks = String(position.ticks).padStart(3, "0");
   return `${bars}:${beats}:${ticks}`;
 }
+
+export function ppqnToBeats(ticks: number, ppqn = DEFAULT_PPQN): number {
+  assertPositive(ppqn, "ppqn");
+  return ticks / ppqn;
+}
+
+export function beatsToPpqn(beats: number, ppqn = DEFAULT_PPQN): number {
+  assertPositive(ppqn, "ppqn");
+  return beats * ppqn;
+}
+
+export function ppqnToSeconds(ticks: number, bpm: number, ppqn = DEFAULT_PPQN): number {
+  assertPositive(bpm, "bpm");
+  assertPositive(ppqn, "ppqn");
+  return (ticks * 60) / (bpm * ppqn);
+}
+
+export function secondsToPpqn(seconds: number, bpm: number, ppqn = DEFAULT_PPQN): number {
+  assertPositive(bpm, "bpm");
+  assertPositive(ppqn, "ppqn");
+  return (seconds * bpm * ppqn) / 60;
+}
+
+export function ppqnToBarsBeatsTicks(
+  ticks: number,
+  timeSignature: [number, number],
+  ppqn = DEFAULT_PPQN,
+): BarsBeatsTicks {
+  assertPositive(ppqn, "ppqn");
+  assertValidTimeSignature(timeSignature);
+
+  const totalBeats = ppqnToBeats(ticks, ppqn);
+  const [numerator] = timeSignature;
+  const totalBars = Math.floor(totalBeats / numerator);
+  const remainingBeats = totalBeats - totalBars * numerator;
+  const beatIndex = Math.floor(remainingBeats);
+  const tickCount = Math.round((remainingBeats - beatIndex) * ppqn);
+  return { bars: totalBars, beats: beatIndex, ticks: tickCount };
+}
+
+export function barsBeatsTicksToPpqn(
+  position: BarsBeatsTicks,
+  timeSignature: [number, number],
+  ppqn = DEFAULT_PPQN,
+): number {
+  assertPositive(ppqn, "ppqn");
+  assertValidTimeSignature(timeSignature);
+
+  if (
+    !Number.isFinite(position.bars) ||
+    !Number.isFinite(position.beats) ||
+    !Number.isFinite(position.ticks) ||
+    position.bars < 0 ||
+    position.beats < 0 ||
+    position.ticks < 0
+  ) {
+    throw new RangeError("Bars, beats, and ticks must be non-negative finite numbers");
+  }
+
+  const [numerator] = timeSignature;
+  const totalBeats = position.bars * numerator + position.beats + position.ticks / ppqn;
+  return beatsToPpqn(totalBeats, ppqn);
+}

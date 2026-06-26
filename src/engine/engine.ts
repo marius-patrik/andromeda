@@ -62,9 +62,9 @@ function post<T>(type: string, payload: T, requestId?: string) {
   sendToHost(message);
 }
 
-function broadcast<T>(type: string, payload: T) {
+function notifyHost<T>(type: string, payload: T) {
   const message: Message<T> = {
-    direction: "host-to-view",
+    direction: "engine-to-host",
     projectId,
     type,
     payload,
@@ -116,10 +116,10 @@ async function boot() {
       bootEnv,
       projectId,
       onStateChange: (state: ProjectState) => {
-        broadcast(MessageType.StateUpdate, state);
+        notifyHost(MessageType.StateUpdate, state);
       },
       onTransportPosition: (position: number) => {
-        broadcast(MessageType.TransportPositionChanged, { position });
+        notifyHost(MessageType.TransportPositionChanged, { position });
       },
     });
 
