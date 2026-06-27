@@ -1,4 +1,4 @@
-import type * as vscode from "vscode";
+import * as vscode from "vscode";
 import { MessageSchema, MessageType } from "../shared/protocol.js";
 import type { HostMessage, ViewMessage } from "../views/shared/types.js";
 import type { EngineTransport } from "./engineTransport.js";
@@ -350,6 +350,16 @@ export class MessageRouter implements vscode.Disposable {
 
     if (viewMessage.type === "timeline/selectRegion") {
       this.callbacks.onViewSelection?.(projectId, viewMessage.regionId ?? null);
+      return;
+    }
+
+    if (viewMessage.type === "command/importAudio") {
+      void vscode.commands.executeCommand("vsdaw.importAudio");
+      return;
+    }
+
+    if (viewMessage.type === "command/importMidi") {
+      void vscode.commands.executeCommand("vsdaw.importMidi");
       return;
     }
 

@@ -19,6 +19,7 @@ export interface ProjectSession {
   projectJson?: ProjectJson;
   lastSnapshot?: unknown;
   engineDisposables?: vscode.Disposable[];
+  audioFiles: Map<string, Uint8Array>;
 }
 
 export interface PendingRequest {

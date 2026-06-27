@@ -37,7 +37,8 @@ function createMockPage(): MockPage {
   const handlers: Record<string, Array<(...args: unknown[]) => void>> = {};
   return {
     on: jest.fn((_event: string, handler: (...args: unknown[]) => void) => {
-      (handlers[_event] ??= []).push(handler);
+      handlers[_event] ??= [];
+      handlers[_event].push(handler);
     }) as MockPage["on"],
     evaluate: jest.fn().mockResolvedValue(undefined),
     exposeFunction: jest.fn().mockResolvedValue(undefined),

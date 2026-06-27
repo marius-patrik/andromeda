@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { BundleError, createEmptyProject, readBundle, writeBundle } from "../shared/bundle.js";
+import { parseMidiFile } from "../shared/midi.js";
 import {
   MessageType,
   type ProjectLoadPayload,
@@ -160,6 +161,7 @@ export class ProjectManager implements vscode.Disposable {
         isDirty: false,
         isUntitled,
         engineDisposables: [engineTransport, engineDisposable],
+        audioFiles: new Map(),
       };
 
       session.views.set("vsdaw.editor", timelinePanel);
@@ -359,7 +361,7 @@ export class ProjectManager implements vscode.Disposable {
 
       const engineBin = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
       const projectJson = this.buildProjectJsonForSave(session, targetUri);
-      const bundle = await writeBundle(projectJson, new Map(), engineBin);
+      const bundle = await writeBundle(projectJson, session.audioFiles, engineBin);
       await this.writeProjectBytes(targetUri, bundle);
       session.projectJson = projectJson;
       session.isDirty = false;
@@ -596,7 +598,7 @@ export class ProjectManager implements vscode.Disposable {
       if (!bytes) return;
       const engineBin = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
       const projectJson = this.buildProjectJsonForSave(session, session.uri);
-      const bundle = await writeBundle(projectJson, new Map(), engineBin);
+      const bundle = await writeBundle(projectJson, session.audioFiles, engineBin);
       await fs.writeFile(recoveryPath, bundle);
 
       const metadata: RecoveryMetadata = {
@@ -745,11 +747,134 @@ export class ProjectManager implements vscode.Disposable {
     };
   }
 
+  async importAudio(uri: vscode.Uri, trackId?: string): Promise<void> {
+    const projectId = this.getActiveProjectId();
+    if (!projectId) {
+      throw new Error("No active VSDAW project");
+    }
+    const session = this.sessions.get(projectId);
+    if (!session) {
+      throw new Error(`No session for project ${projectId}`);
+    }
+
+    const fileName = path.basename(uri.fsPath);
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    const audioFileId = `audio/${safeAudioFileName(fileName)}`;
+    session.audioFiles.set(audioFileId, bytes);
+
+    const imported = await this.router.requestEngine(
+      projectId,
+      MessageType.AudioImport,
+      {
+        data: Buffer.from(bytes).toString("base64"),
+        name: fileName,
+      },
+      { responseType: `${MessageType.AudioImport}.ack`, timeoutMs: 60000 },
+    );
+    const sample = (imported.payload as { sampleId: string; sample: unknown }).sample;
+
+    const targetTrackId = trackId ?? (await this.createTrack(projectId, "audio"));
+
+    await this.router.requestEngine(
+      projectId,
+      MessageType.RegionCreateAudio,
+      {
+        trackId: targetTrackId,
+        audioFileId,
+        sample,
+        position: 0,
+        name: fileName,
+      },
+      { responseType: `${MessageType.RegionCreateAudio}.ack`, timeoutMs: 30000 },
+    );
+
+    this.markDirty(projectId);
+  }
+
+  async importMidi(uri: vscode.Uri, trackId?: string): Promise<void> {
+    const projectId = this.getActiveProjectId();
+    if (!projectId) {
+      throw new Error("No active VSDAW project");
+    }
+    const session = this.sessions.get(projectId);
+    if (!session) {
+      throw new Error(`No session for project ${projectId}`);
+    }
+
+    const fileName = path.basename(uri.fsPath);
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    const parsed = parseMidiFile(bytes);
+
+    const targetTrackId = trackId ?? (await this.createTrack(projectId, "midi"));
+
+    const ticksPerQuarter = parsed.ticksPerQuarter || 960;
+    const ppqn = 960;
+    const regionDuration =
+      parsed.notes.length > 0
+        ? Math.max(
+            ...parsed.notes.map((n) =>
+              Math.round((n.tick + n.duration) * (ppqn / ticksPerQuarter)),
+            ),
+          )
+        : ppqn * 4;
+
+    const regionResponse = await this.router.requestEngine(
+      projectId,
+      MessageType.RegionCreateMidi,
+      {
+        trackId: targetTrackId,
+        position: 0,
+        duration: regionDuration,
+        name: fileName,
+      },
+      { responseType: `${MessageType.RegionCreateMidi}.ack`, timeoutMs: 30000 },
+    );
+    const regionId = (regionResponse.payload as { regionId: string }).regionId;
+
+    for (const note of parsed.notes) {
+      const position = Math.round(note.tick * (ppqn / ticksPerQuarter));
+      const duration = Math.max(1, Math.round(note.duration * (ppqn / ticksPerQuarter)));
+      this.queueEngineMessage(session, {
+        projectId,
+        direction: "host-to-engine",
+        type: MessageType.MidiAddNote,
+        payload: {
+          regionId,
+          position,
+          duration,
+          pitch: note.pitch,
+          velocity: note.velocity,
+        },
+      });
+    }
+
+    this.markDirty(projectId);
+  }
+
+  private async createTrack(projectId: string, type: "audio" | "midi"): Promise<string> {
+    const response = await this.router.requestEngine(
+      projectId,
+      MessageType.TrackCreate,
+      { type, name: type === "audio" ? "Audio Track" : "MIDI Track" },
+      { responseType: `${MessageType.TrackCreate}.ack`, timeoutMs: 30000 },
+    );
+    const trackId = (response.payload as { trackId: string }).trackId;
+    if (!trackId) {
+      throw new Error(`Track creation failed for ${type}`);
+    }
+    return trackId;
+  }
+
   updateSessionUri(session: ProjectSession, newUri: vscode.Uri): void {
     this.uriToProjectId.delete(session.uri.toString());
     session.uri = newUri;
     this.uriToProjectId.set(newUri.toString(), session.projectId);
   }
+}
+
+function safeAudioFileName(input: string): string {
+  const base = path.basename(input).replace(/[^\w\-. ]+/g, "_");
+  return base || `audio-${Date.now()}.wav`;
 }
 
 export async function createNewProjectUri(

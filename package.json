@@ -29,6 +29,8 @@
     "onCommand:vsdaw.showPianoRoll",
     "onCommand:vsdaw.showBrowser",
     "onCommand:vsdaw.showGraph",
+    "onCommand:vsdaw.importAudio",
+    "onCommand:vsdaw.importMidi",
     "onCommand:vsdaw.export",
     "onCommand:vsdaw.settings",
     "onCommand:vsdaw.engineHealth",
@@ -69,6 +71,16 @@
       {
         "command": "vsdaw.showGraph",
         "title": "Show Graph",
+        "category": "VSDAW"
+      },
+      {
+        "command": "vsdaw.importAudio",
+        "title": "Import Audio",
+        "category": "VSDAW"
+      },
+      {
+        "command": "vsdaw.importMidi",
+        "title": "Import MIDI",
         "category": "VSDAW"
       },
       {

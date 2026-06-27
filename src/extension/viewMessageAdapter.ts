@@ -202,6 +202,8 @@ export function adaptViewMessage(
     case "command/delete":
     case "command/duplicate":
     case "command/export":
+    case "command/importAudio":
+    case "command/importMidi":
     case "command/show":
       return undefined;
 

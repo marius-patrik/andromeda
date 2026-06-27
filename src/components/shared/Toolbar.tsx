@@ -1,5 +1,15 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Download, LayoutGrid, MoreHorizontal, Plus, Save, Settings } from "lucide-react";
+import {
+  Download,
+  FileAudio,
+  FileMusic,
+  LayoutGrid,
+  MoreHorizontal,
+  Plus,
+  Save,
+  Settings,
+  Upload,
+} from "lucide-react";
 import * as React from "react";
 import type { TimePosition, TimeSignature, ViewName } from "../../views/shared/types.js";
 import { TimeDisplay } from "../transport/TimeDisplay.js";
@@ -27,6 +37,8 @@ export interface ToolbarProps {
   onSetTimeSignature: (timeSignature: TimeSignature) => void;
   onShowView: (view: ViewName) => void;
   onAddTrack?: (trackType: "audio" | "midi" | "bus") => void;
+  onImportAudio?: () => void;
+  onImportMidi?: () => void;
   onSettings: () => void;
   onExport: () => void;
 }
@@ -52,6 +64,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onSetTimeSignature,
   onShowView,
   onAddTrack,
+  onImportAudio,
+  onImportMidi,
   onSettings,
   onExport,
 }) => {
@@ -93,6 +107,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         </div>
 
         {onAddTrack && <AddTrackButton onAddTrack={onAddTrack} />}
+
+        {(onImportAudio || onImportMidi) && (
+          <ImportButton onImportAudio={onImportAudio} onImportMidi={onImportMidi} />
+        )}
 
         <ViewSwitcher active={view.toLowerCase() as ViewName} onChange={onShowView} />
       </div>
@@ -176,6 +194,87 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   );
 };
 
+const ImportButton: React.FC<{
+  onImportAudio?: () => void;
+  onImportMidi?: () => void;
+}> = ({ onImportAudio, onImportMidi }) => {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <DropdownMenu.Root open={open} onOpenChange={setOpen}>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Import"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded cursor-pointer"
+          style={{
+            border: "1px solid var(--vsdaw-border)",
+            backgroundColor: "var(--vsdaw-button-bg)",
+            color: "var(--vsdaw-button-fg)",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = "var(--vsdaw-button-hover)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = "var(--vsdaw-button-bg)";
+          }}
+        >
+          <Upload size={14} />
+          Import
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="rounded z-50 min-w-[160px]"
+          style={{
+            backgroundColor: "var(--vsdaw-panel-bg)",
+            border: "1px solid var(--vsdaw-border)",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+          }}
+        >
+          {onImportAudio && (
+            <DropdownMenu.Item
+              className="px-3 py-2 text-xs cursor-pointer outline-none"
+              style={{ color: "inherit" }}
+              onSelect={() => onImportAudio()}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "transparent";
+              }}
+            >
+              <span className="inline-flex items-center gap-2">
+                <FileAudio size={14} />
+                Audio
+              </span>
+            </DropdownMenu.Item>
+          )}
+          {onImportMidi && (
+            <DropdownMenu.Item
+              className="px-3 py-2 text-xs cursor-pointer outline-none"
+              style={{ color: "inherit" }}
+              onSelect={() => onImportMidi()}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = "transparent";
+              }}
+            >
+              <span className="inline-flex items-center gap-2">
+                <FileMusic size={14} />
+                MIDI
+              </span>
+            </DropdownMenu.Item>
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+};
+
 const AddTrackButton: React.FC<{ onAddTrack: (trackType: "audio" | "midi" | "bus") => void }> = ({
   onAddTrack,
 }) => {
@@ -218,8 +317,12 @@ const AddTrackButton: React.FC<{ onAddTrack: (trackType: "audio" | "midi" | "bus
             className="px-3 py-2 text-xs cursor-pointer outline-none"
             style={{ color: "inherit" }}
             onSelect={() => onAddTrack("audio")}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)")}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = "transparent";
+            }}
           >
             Audio Track
           </DropdownMenu.Item>
@@ -227,8 +330,12 @@ const AddTrackButton: React.FC<{ onAddTrack: (trackType: "audio" | "midi" | "bus
             className="px-3 py-2 text-xs cursor-pointer outline-none"
             style={{ color: "inherit" }}
             onSelect={() => onAddTrack("midi")}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)")}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = "transparent";
+            }}
           >
             MIDI Track
           </DropdownMenu.Item>
@@ -236,8 +343,12 @@ const AddTrackButton: React.FC<{ onAddTrack: (trackType: "audio" | "midi" | "bus
             className="px-3 py-2 text-xs cursor-pointer outline-none"
             style={{ color: "inherit" }}
             onSelect={() => onAddTrack("bus")}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)")}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = "transparent";
+            }}
           >
             Bus Track
           </DropdownMenu.Item>
@@ -258,8 +369,12 @@ const OverflowItem: React.FC<{
     onClick={onClick}
     className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left bg-transparent border-0 text-inherit cursor-pointer"
     style={{ color: "inherit" }}
-    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)")}
-    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+    onMouseEnter={(e) => {
+      e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)";
+    }}
+    onMouseLeave={(e) => {
+      e.currentTarget.style.backgroundColor = "transparent";
+    }}
   >
     {icon}
     {label}

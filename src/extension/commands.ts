@@ -84,6 +84,44 @@ export function registerCommands(deps: CommandDependencies): vscode.Disposable[]
     deps.graphProvider.show(projectId);
   });
 
+  register("vsdaw.importAudio", async () => {
+    const projectId = getActiveProjectId(projectManager);
+    if (!projectId) return;
+
+    const uris = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: {
+        "Audio Files": ["wav", "aiff", "flac", "mp3", "ogg", "m4a"],
+        "All Files": ["*"],
+      },
+      openLabel: "Import Audio",
+    });
+    if (!uris || uris.length === 0) return;
+
+    await projectManager.importAudio(uris[0]);
+  });
+
+  register("vsdaw.importMidi", async () => {
+    const projectId = getActiveProjectId(projectManager);
+    if (!projectId) return;
+
+    const uris = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      filters: {
+        "MIDI Files": ["mid", "midi"],
+        "All Files": ["*"],
+      },
+      openLabel: "Import MIDI",
+    });
+    if (!uris || uris.length === 0) return;
+
+    await projectManager.importMidi(uris[0]);
+  });
+
   register("vsdaw.export", async () => {
     const projectId = getActiveProjectId(projectManager);
     if (!projectId) return;

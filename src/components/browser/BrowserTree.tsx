@@ -103,10 +103,18 @@ const TreeNode: React.FC<{
           cursor: "pointer",
           outline: "none",
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)")}
-        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-        onFocus={(e) => (e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)")}
-        onBlur={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.backgroundColor = "transparent";
+        }}
+        onFocus={(e) => {
+          e.currentTarget.style.backgroundColor = "var(--vsdaw-hover-bg)";
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.backgroundColor = "transparent";
+        }}
       >
         {hasChildren ? (
           expanded ? (

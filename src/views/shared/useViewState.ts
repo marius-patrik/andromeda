@@ -124,6 +124,8 @@ export function useViewState(view: ViewName) {
     delete: () => send({ type: "command/delete" }),
     duplicate: () => send({ type: "command/duplicate" }),
     export: () => send({ type: "command/export" }),
+    importAudio: () => send({ type: "command/importAudio" }),
+    importMidi: () => send({ type: "command/importMidi" }),
     showView: (target: ViewName) => send({ type: "command/show", view: target }),
   };
 

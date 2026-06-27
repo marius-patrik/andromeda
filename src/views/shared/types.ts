@@ -100,6 +100,8 @@ export type ViewMessage =
   | { type: "command/delete" }
   | { type: "command/duplicate" }
   | { type: "command/export" }
+  | { type: "command/importAudio" }
+  | { type: "command/importMidi" }
   | { type: "command/show"; view: ViewName };
 
 export interface SelectionState {
