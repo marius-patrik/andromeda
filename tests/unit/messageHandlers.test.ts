@@ -47,6 +47,13 @@ function createMockController(): MockController {
     deleteDevice: record("deleteDevice"),
     moveDevice: record("moveDevice"),
     setDeviceParameter: record("setDeviceParameter"),
+    listDevices: record("listDevices", [
+      { id: "Tape", name: "Tape", category: "instrument" },
+      { id: "Compressor", name: "Compressor", category: "audio-effect" },
+    ]),
+    getDeviceParameters: record("getDeviceParameters", [
+      { name: "mix", value: 0.5, min: 0, max: 1, type: "number" },
+    ]),
 
     createAudioRegion: record("createAudioRegion", "region-audio-new"),
     createMidiRegion: record("createMidiRegion", "region-midi-new"),
@@ -353,6 +360,49 @@ describe("messageHandlers - track operations", () => {
       method: "setDeviceParameter",
       args: ["i1", "mix", 0.5],
     });
+  });
+
+  test("TrackAddInsert uses slot when provided", async () => {
+    const controller = createMockController();
+    await expectOk(
+      handleMessage(
+        controller,
+        makeMessage(MessageType.TrackAddInsert, {
+          trackId: "t1",
+          deviceName: "Tape",
+          slot: "instrument",
+          insertIndex: 0,
+        }),
+      ),
+    );
+    expect(controller.calls).toContainEqual({
+      method: "createDevice",
+      args: ["instrument", "Tape", "t1", 0],
+    });
+  });
+});
+
+describe("messageHandlers - device catalog and parameters", () => {
+  test("DeviceList returns controller.listDevices", async () => {
+    const controller = createMockController();
+    const result = await expectOk(handleMessage(controller, makeMessage(MessageType.DeviceList)));
+    expect(result.payload).toEqual(controller.listDevices());
+  });
+
+  test("DeviceGetParameters forwards deviceId and returns descriptors", async () => {
+    const controller = createMockController();
+    const result = await expectOk(
+      handleMessage(controller, makeMessage(MessageType.DeviceGetParameters, { deviceId: "d1" })),
+    );
+    expect(controller.calls).toContainEqual({ method: "getDeviceParameters", args: ["d1"] });
+    expect(result.payload).toEqual(controller.getDeviceParameters("d1"));
+  });
+
+  test("DeviceGetParameters returns error when deviceId is missing", async () => {
+    const controller = createMockController();
+    const result = await handleMessage(controller, makeMessage(MessageType.DeviceGetParameters, {}));
+    expect(result.type).toBe("error");
+    expect((result as { message: string }).message).toContain("deviceId is required");
   });
 });
 

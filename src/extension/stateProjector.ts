@@ -1,11 +1,14 @@
-import type {
-  RegionState as EngineRegionState,
-  TrackState as EngineTrackState,
-  ProjectState,
-  TransportState,
+import {
+  MessageType,
+  type DeviceListItem,
+  type RegionState as EngineRegionState,
+  type TrackState as EngineTrackState,
+  type ProjectState,
+  type TransportState,
 } from "../shared/protocol.js";
 import { DEFAULT_PPQN, ppqnToBarsBeatsTicks, ppqnToSeconds } from "../shared/time.js";
 import type {
+  BrowserNode,
   HostMessage,
   SelectionState,
   TimePosition,
@@ -144,6 +147,21 @@ export class ProjectStateProjector {
     });
   }
 
+  async requestDeviceList(): Promise<void> {
+    try {
+      const response = await this.router.requestEngine(
+        this.projectId,
+        MessageType.DeviceList,
+        undefined,
+        { responseType: MessageType.DeviceList, timeoutMs: 10000 },
+      );
+      const devices = (response.payload as DeviceListItem[] | undefined) ?? [];
+      this.broadcast({ type: "host/browser", root: buildBrowserRoot(devices) });
+    } catch (error) {
+      console.error("[projector] device list request failed", error);
+    }
+  }
+
   private broadcast(message: HostMessage): void {
     this.router.broadcastToViews(this.projectId, message);
   }
@@ -203,6 +221,13 @@ export class ProjectStateProjector {
       volume: dbToLinear(track.volumeDb),
       pan: track.pan,
       height: DEFAULT_TRACK_HEIGHT,
+      inserts: track.inserts.map((insert) => ({
+        id: insert.id,
+        name: insert.name,
+        type: insert.type,
+        enabled: insert.enabled,
+        index: insert.index,
+      })),
       regions: regions
         .filter((region) => region.trackId === track.id)
         .map((region) => this.convertRegion(region)),
@@ -218,6 +243,66 @@ export class ProjectStateProjector {
       color: regionColor(region.hue),
     };
   }
+}
+
+function buildBrowserRoot(devices: DeviceListItem[]): BrowserNode {
+  const makeDeviceNode = (device: DeviceListItem): BrowserNode => ({
+    id: `dev-${device.id}`,
+    name: device.name,
+    type: "device",
+    device,
+  });
+
+  return {
+    id: "root",
+    name: "Browser",
+    type: "folder",
+    children: [
+      {
+        id: "devices",
+        name: "Devices",
+        type: "folder",
+        children: [
+          {
+            id: "devices-instruments",
+            name: "Instruments",
+            type: "folder",
+            children: devices
+              .filter((device) => device.category === "instrument")
+              .map(makeDeviceNode),
+          },
+          {
+            id: "devices-audio-effects",
+            name: "Audio Effects",
+            type: "folder",
+            children: devices
+              .filter((device) => device.category === "audio-effect")
+              .map(makeDeviceNode),
+          },
+          {
+            id: "devices-midi-effects",
+            name: "MIDI Effects",
+            type: "folder",
+            children: devices
+              .filter((device) => device.category === "midi-effect")
+              .map(makeDeviceNode),
+          },
+        ],
+      },
+      {
+        id: "workspace",
+        name: "Workspace Samples",
+        type: "folder",
+        children: [],
+      },
+      {
+        id: "project",
+        name: "Project Samples",
+        type: "folder",
+        children: [],
+      },
+    ],
+  };
 }
 
 function selectionEquals(a: SelectionState, b: SelectionState): boolean {

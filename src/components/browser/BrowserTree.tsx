@@ -1,14 +1,15 @@
-import { ChevronDown, ChevronRight, Cpu, FileAudio, Folder, Music } from "lucide-react";
-import * as React from "react";
-import type { BrowserNode } from "../../views/shared/types.js";
+import { ChevronDown, ChevronRight, Cpu, FileAudio, Folder, Music, Plus } from "lucide-react";
+import { useState, type KeyboardEvent } from "react";
+import type { BrowserNode, DeviceItem } from "../../views/shared/types.js";
 
 export interface BrowserTreeProps {
   root: BrowserNode;
   onPreview: (nodeId: string) => void;
   onDragStart: (nodeId: string) => void;
+  onAddToTrack?: (device: DeviceItem) => void;
 }
 
-export const BrowserTree: React.FC<BrowserTreeProps> = ({ root, onPreview, onDragStart }) => {
+export const BrowserTree: React.FC<BrowserTreeProps> = ({ root, onPreview, onDragStart, onAddToTrack }) => {
   if ((root.children?.length ?? 0) === 0) {
     return (
       <output
@@ -47,6 +48,7 @@ export const BrowserTree: React.FC<BrowserTreeProps> = ({ root, onPreview, onDra
           depth={0}
           onPreview={onPreview}
           onDragStart={onDragStart}
+          onAddToTrack={onAddToTrack}
         />
       ))}
     </div>
@@ -58,10 +60,12 @@ const TreeNode: React.FC<{
   depth: number;
   onPreview: (nodeId: string) => void;
   onDragStart: (nodeId: string) => void;
-}> = ({ node, depth, onPreview, onDragStart }) => {
-  const [expanded, setExpanded] = React.useState(true);
+  onAddToTrack?: (device: DeviceItem) => void;
+}> = ({ node, depth, onPreview, onDragStart, onAddToTrack }) => {
+  const [expanded, setExpanded] = useState(true);
   const hasChildren = (node.children?.length ?? 0) > 0;
   const isLeaf = node.type === "file" || node.type === "device";
+  const device = node.device;
   const Icon =
     node.type === "folder"
       ? Folder
@@ -71,7 +75,7 @@ const TreeNode: React.FC<{
           ? Music
           : FileAudio;
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === "ArrowRight" && hasChildren && !expanded) setExpanded(true);
     if (e.key === "ArrowLeft" && hasChildren && expanded) setExpanded(false);
     if (e.key === "Enter" || e.key === " ") {
@@ -128,6 +132,7 @@ const TreeNode: React.FC<{
         <Icon size={14} />
         <span
           style={{
+            flex: 1,
             fontSize: 12,
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -136,6 +141,32 @@ const TreeNode: React.FC<{
         >
           {node.name}
         </span>
+        {node.type === "device" && device && onAddToTrack && (
+          <button
+            type="button"
+            aria-label={`Add ${node.name} to selected track`}
+            title="Add to selected track"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddToTrack(device);
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 16,
+              height: 16,
+              padding: 0,
+              border: "1px solid var(--vsdaw-border)",
+              borderRadius: 2,
+              backgroundColor: "transparent",
+              color: "inherit",
+              cursor: "pointer",
+            }}
+          >
+            <Plus size={10} />
+          </button>
+        )}
       </div>
       {expanded && hasChildren && (
         <div role="group">
@@ -146,6 +177,7 @@ const TreeNode: React.FC<{
               depth={depth + 1}
               onPreview={onPreview}
               onDragStart={onDragStart}
+              onAddToTrack={onAddToTrack}
             />
           ))}
         </div>

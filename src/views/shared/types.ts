@@ -4,6 +4,8 @@
  * which broadcasts authoritative state updates.
  */
 
+import type { InsertState as ProtocolInsertState } from "../../shared/protocol.js";
+
 export interface WebviewApi<T = unknown> {
   postMessage(message: T): void;
   getState(): unknown;
@@ -32,6 +34,7 @@ export interface TrackState {
   volume: number; // 0..1
   pan: number; // -1..1
   height: number;
+  inserts: ProtocolInsertState[];
   regions: RegionState[];
 }
 
@@ -51,10 +54,12 @@ export interface NoteState {
   velocity: number; // 0..127
 }
 
+export type DeviceCategory = "instrument" | "audio-effect" | "midi-effect";
+
 export interface DeviceItem {
   id: string;
   name: string;
-  category: "instrument" | "effect" | "utility";
+  category: DeviceCategory;
 }
 
 export interface BrowserNode {
@@ -63,6 +68,14 @@ export interface BrowserNode {
   type: "folder" | "file" | "device";
   children?: BrowserNode[];
   device?: DeviceItem;
+}
+
+export interface DeviceParameter {
+  name: string;
+  value: number | boolean;
+  min: number;
+  max: number;
+  type: "number" | "boolean";
 }
 
 // Messages sent from a view to the extension host
@@ -86,13 +99,15 @@ export type ViewMessage =
   | { type: "track/create"; trackType: "audio" | "midi" | "bus"; name?: string; color?: string }
   | { type: "track/delete"; trackId: string }
   | { type: "track/setColor"; trackId: string; color: string }
-  | { type: "track/addInsert"; trackId: string; deviceName: string; insertIndex?: number }
+  | { type: "track/addInsert"; trackId: string; deviceName: string; slot?: DeviceCategory; insertIndex?: number }
   | { type: "timeline/selectRegion"; regionId: string | null }
   | { type: "timeline/moveRegion"; regionId: string; start: number }
   | { type: "pianoRoll/addNote"; note: NoteState }
   | { type: "pianoRoll/setNoteVelocity"; noteId: string; velocity: number }
   | { type: "pianoRoll/deleteNote"; noteId: string }
   | { type: "mixer/openDevice"; trackId: string; slotIndex: number }
+  | { type: "device/getParameters"; deviceId: string }
+  | { type: "device/setParameter"; deviceId: string; parameter: string; value: number | boolean }
   | { type: "browser/preview"; nodeId: string }
   | { type: "browser/dragStart"; nodeId: string }
   | { type: "command/undo" }
@@ -125,6 +140,7 @@ export type HostMessage =
   | { type: "host/tracks"; tracks: TrackState[] }
   | ({ type: "host/selection" } & SelectionState)
   | { type: "host/browser"; root: BrowserNode }
+  | { type: "host/deviceParameters"; deviceId: string; parameters: DeviceParameter[] }
   | { type: "host/project"; name: string; saved: boolean }
   | { type: "host/error"; message: string };
 

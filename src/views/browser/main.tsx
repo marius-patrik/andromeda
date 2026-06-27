@@ -4,7 +4,7 @@ import { ErrorBoundary } from "../../components/shared/ErrorBoundary.js";
 import { PanelShell } from "../../components/shared/PanelShell.js";
 import { ThemeProvider } from "../../components/shared/ThemeProvider.js";
 import { Toolbar } from "../../components/shared/Toolbar.js";
-import type { BrowserNode } from "../shared/types.js";
+import type { BrowserNode, DeviceItem } from "../shared/types.js";
 import { useViewState } from "../shared/useViewState.js";
 
 const defaultBrowserRoot: BrowserNode = {
@@ -17,67 +17,16 @@ const defaultBrowserRoot: BrowserNode = {
       name: "Devices",
       type: "folder",
       children: [
-        {
-          id: "devices-instruments",
-          name: "Instruments",
-          type: "folder",
-          children: [
-            {
-              id: "dev-synth",
-              name: "OpenDAW Synth",
-              type: "device",
-              device: { id: "synth", name: "OpenDAW Synth", category: "instrument" },
-            },
-            {
-              id: "dev-sampler",
-              name: "OpenDAW Sampler",
-              type: "device",
-              device: { id: "sampler", name: "OpenDAW Sampler", category: "instrument" },
-            },
-          ],
-        },
-        {
-          id: "devices-effects",
-          name: "Effects",
-          type: "folder",
-          children: [
-            {
-              id: "dev-eq",
-              name: "OpenDAW EQ",
-              type: "device",
-              device: { id: "eq", name: "OpenDAW EQ", category: "effect" },
-            },
-            {
-              id: "dev-comp",
-              name: "OpenDAW Compressor",
-              type: "device",
-              device: { id: "comp", name: "OpenDAW Compressor", category: "effect" },
-            },
-          ],
-        },
-        {
-          id: "devices-utilities",
-          name: "Utilities",
-          type: "folder",
-          children: [
-            {
-              id: "dev-gain",
-              name: "Gain",
-              type: "device",
-              device: { id: "gain", name: "Gain", category: "utility" },
-            },
-          ],
-        },
+        { id: "devices-instruments", name: "Instruments", type: "folder", children: [] },
+        { id: "devices-audio-effects", name: "Audio Effects", type: "folder", children: [] },
+        { id: "devices-midi-effects", name: "MIDI Effects", type: "folder", children: [] },
       ],
     },
     {
       id: "workspace",
       name: "Workspace Samples",
       type: "folder",
-      children: [
-        { id: "ws-kick", name: "kick.wav", type: "file" },
-        { id: "ws-snare", name: "snare.wav", type: "file" },
-      ],
+      children: [],
     },
     {
       id: "project",
@@ -91,6 +40,14 @@ const defaultBrowserRoot: BrowserNode = {
 const BrowserView: React.FC = () => {
   const state = useViewState("browser");
   const root = state.browserRoot ?? defaultBrowserRoot;
+
+  const handleAddToTrack = (device: DeviceItem) => {
+    const trackId = state.selection.trackId;
+    if (!trackId) {
+      return;
+    }
+    state.trackActions.addInsert(trackId, device.id, device.category);
+  };
 
   return (
     <ErrorBoundary viewName="Browser">
@@ -123,6 +80,7 @@ const BrowserView: React.FC = () => {
             root={root}
             onPreview={state.browserActions.preview}
             onDragStart={state.browserActions.dragStart}
+            onAddToTrack={handleAddToTrack}
           />
         </PanelShell>
       </ThemeProvider>

@@ -1,4 +1,5 @@
 import { WavFile } from "@opendaw/lib-dsp";
+import { PrimitiveType } from "@opendaw/lib-box";
 import { Option, UUID } from "@opendaw/lib-std";
 import {
   type AnyRegionBoxAdapter,
@@ -44,6 +45,8 @@ import {
 import { SampleStorage, SoundfontStorage } from "@opendaw/studio-core";
 import type {
   TrackType as ApiTrackType,
+  DeviceListItem,
+  DeviceParameterDescriptor,
   ExportFormat,
   ExportRenderResult,
   InsertState,
@@ -756,6 +759,72 @@ export class ProjectController {
       }
     }
     this.broadcastState();
+  }
+
+  listDevices(): DeviceListItem[] {
+    const instruments = Object.entries(InstrumentFactories.Named).map(([id, factory]) => ({
+      id,
+      name: (factory as any).defaultName ?? id,
+      category: "instrument" as const,
+    }));
+    const audioEffects = Object.entries(EffectFactories.AudioNamed).map(([id, factory]) => ({
+      id,
+      name: (factory as any).defaultName ?? id,
+      category: "audio-effect" as const,
+    }));
+    const midiEffects = Object.entries(EffectFactories.MidiNamed).map(([id, factory]) => ({
+      id,
+      name: (factory as any).defaultName ?? id,
+      category: "midi-effect" as const,
+    }));
+    return [...instruments, ...audioEffects, ...midiEffects];
+  }
+
+  getDeviceParameters(deviceId: string): DeviceParameterDescriptor[] {
+    const device = this.resolveDevice(deviceId);
+    const params = (device as any).namedParameter as Record<
+      string,
+      {
+        name: string;
+        type: PrimitiveType;
+        getValue: () => number | boolean;
+        valueMapping?: { y: (x: number) => number };
+      }
+    >;
+    if (!params) {
+      return [];
+    }
+
+    return Object.entries(params).map(([key, param]) => {
+      const value = param.getValue();
+      const isBoolean = param.type === PrimitiveType.Boolean;
+      if (isBoolean) {
+        return {
+          name: param.name ?? key,
+          value,
+          min: false,
+          max: true,
+          type: "boolean" as const,
+        };
+      }
+      let min = 0;
+      let max = 1;
+      try {
+        if (param.valueMapping) {
+          min = param.valueMapping.y(0);
+          max = param.valueMapping.y(1);
+        }
+      } catch {
+        // Keep defaults if the mapping cannot be sampled.
+      }
+      return {
+        name: param.name ?? key,
+        value,
+        min,
+        max,
+        type: "number" as const,
+      };
+    });
   }
 
   // ---------------------------------------------------------------------------

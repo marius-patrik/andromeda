@@ -2,6 +2,7 @@ import {
   type AudioImportPayload,
   type DeviceCreatePayload,
   type DeviceIdPayload,
+  type DeviceListPayload,
   type DeviceMovePayload,
   type DeviceParameterPayload,
   type ExportRenderPayload,
@@ -227,7 +228,7 @@ function routeMessage(
         return { type: "error", message: "trackId and deviceName are required" };
       }
       const id = controller.createDevice(
-        "audio-effect",
+        opts.slot ?? "audio-effect",
         opts.deviceName,
         opts.trackId,
         opts.insertIndex,
@@ -473,6 +474,21 @@ function routeMessage(
       }
       controller.setDeviceParameter(opts.deviceId, opts.parameter, opts.value);
       return { type: "ok" };
+    }
+    case MessageType.DeviceList: {
+      const opts = (p ?? {}) as DeviceListPayload;
+      const devices = controller.listDevices();
+      const payload = opts.category
+        ? devices.filter((device) => device.category === opts.category)
+        : devices;
+      return { type: "ok", payload };
+    }
+    case MessageType.DeviceGetParameters: {
+      const opts = p as DeviceIdPayload;
+      if (!opts?.deviceId) {
+        return { type: "error", message: "deviceId is required" };
+      }
+      return { type: "ok", payload: controller.getDeviceParameters(opts.deviceId) };
     }
 
     // Audio import

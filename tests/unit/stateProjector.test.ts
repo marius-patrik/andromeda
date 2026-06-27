@@ -24,6 +24,13 @@ function createRouter(): MessageRouter {
   return {
     broadcastToViews: jest.fn(),
     routeToViews: jest.fn(),
+    requestEngine: jest.fn().mockResolvedValue({
+      type: "device.list",
+      payload: [
+        { id: "Tape", name: "Tape", category: "instrument" },
+        { id: "Compressor", name: "Compressor", category: "audio-effect" },
+      ],
+    }),
   } as unknown as MessageRouter;
 }
 
@@ -237,5 +244,32 @@ describe("ProjectStateProjector", () => {
     expect(projectCall).toBeDefined();
     if (!projectCall) throw new Error("project message not broadcast");
     expect(projectCall[1]).toEqual({ type: "host/project", name: "My Song", saved: false });
+  });
+
+  test("requestDeviceList broadcasts host/browser with device tree", async () => {
+    const router = createRouter();
+    const projector = new ProjectStateProjector({
+      projectId: PROJECT_ID,
+      router,
+      getProjectName: () => "Test",
+      getSaved: () => true,
+    });
+
+    await projector.requestDeviceList();
+
+    expect(router.requestEngine).toHaveBeenCalledWith(
+      PROJECT_ID,
+      "device.list",
+      undefined,
+      { responseType: "device.list", timeoutMs: 10000 },
+    );
+
+    const calls = (router.broadcastToViews as jest.Mock).mock.calls as [string, HostMessage][];
+    const browserCall = calls.find(([id, msg]) => id === PROJECT_ID && msg.type === "host/browser");
+    expect(browserCall).toBeDefined();
+    if (!browserCall) throw new Error("browser message not broadcast");
+    const browser = browserCall[1] as Extract<HostMessage, { type: "host/browser" }>;
+    expect(browser.root.type).toBe("folder");
+    expect(browser.root.children?.length).toBeGreaterThan(0);
   });
 });

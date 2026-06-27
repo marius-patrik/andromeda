@@ -353,6 +353,30 @@ export class MessageRouter implements vscode.Disposable {
       return;
     }
 
+    if (viewMessage.type === "device/getParameters") {
+      void this.requestEngine(projectId, MessageType.DeviceGetParameters, {
+        deviceId: viewMessage.deviceId,
+      })
+        .then((response) => {
+          this.broadcastToViews(projectId, {
+            type: "host/deviceParameters",
+            deviceId: viewMessage.deviceId,
+            parameters: response.payload as {
+              name: string;
+              value: number | boolean;
+              min: number;
+              max: number;
+              type: "number" | "boolean";
+            }[],
+          });
+        })
+        .catch((error: unknown) => {
+          const text = error instanceof Error ? error.message : String(error);
+          this.routeErrorToViews(projectId, text);
+        });
+      return;
+    }
+
     if (viewMessage.type === "command/importAudio") {
       void vscode.commands.executeCommand("vsdaw.importAudio");
       return;

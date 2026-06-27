@@ -225,6 +225,40 @@ describe("viewMessageAdapter", () => {
         insertIndex: 0,
       });
     });
+
+    test("track/addInsert forwards slot when provided", () => {
+      const result = adaptViewMessage(PROJECT_ID, {
+        type: "track/addInsert",
+        trackId: "track-1",
+        deviceName: "Tape",
+        slot: "instrument",
+        insertIndex: 0,
+      });
+      expectEnvelope(result);
+      expect(result.type).toBe(MessageType.TrackAddInsert);
+      expect(result.payload).toEqual({
+        trackId: "track-1",
+        deviceName: "Tape",
+        slot: "instrument",
+        insertIndex: 0,
+      });
+    });
+
+    test("device/setParameter -> device.setParameter", () => {
+      const result = adaptViewMessage(PROJECT_ID, {
+        type: "device/setParameter",
+        deviceId: "device-1",
+        parameter: "mix",
+        value: 0.75,
+      });
+      expectEnvelope(result);
+      expect(result.type).toBe(MessageType.DeviceSetParameter);
+      expect(result.payload).toEqual({
+        deviceId: "device-1",
+        parameter: "mix",
+        value: 0.75,
+      });
+    });
   });
 
   describe("timeline messages", () => {

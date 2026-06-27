@@ -3,6 +3,8 @@ import type * as React from "react";
 import type { TrackState } from "../../views/shared/types.js";
 import { Meter } from "./Meter.js";
 
+const SLOT_IDS = ["insert-slot-1", "insert-slot-2", "insert-slot-3", "insert-slot-4"];
+
 export interface MixerStripProps {
   track: TrackState;
   isMaster?: boolean;
@@ -128,26 +130,42 @@ export const MixerStrip: React.FC<MixerStripProps> = ({
 
       {!isMaster && (
         <div style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%" }}>
-          {Array.from({ length: 4 }).map((_, i) => (
-            <button
-              key={i}
-              aria-label={`Insert slot ${i + 1}`}
-              onDoubleClick={() => onOpenInsert(i)}
-              style={{
-                height: 18,
-                border: "1px dashed var(--vsdaw-border)",
-                borderRadius: 2,
-                backgroundColor: "transparent",
-                color: "inherit",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Plus size={10} />
-            </button>
-          ))}
+          {SLOT_IDS.map((slotId, i) => {
+            const insert = track.inserts[i];
+            return (
+              <button
+                key={slotId}
+                type="button"
+                aria-label={insert ? `${insert.name} insert slot` : `Insert slot ${i + 1}`}
+                title={insert?.name}
+                onClick={() => insert && onOpenInsert(i)}
+                style={{
+                  height: 18,
+                  border: "1px dashed var(--vsdaw-border)",
+                  borderRadius: 2,
+                  backgroundColor: insert
+                    ? insert.enabled
+                      ? "var(--vsdaw-button-bg)"
+                      : "var(--vsdaw-panel-bg)"
+                    : "transparent",
+                  color: insert ? "var(--vsdaw-button-fg)" : "inherit",
+                  cursor: insert ? "pointer" : "default",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 8,
+                  fontWeight: 600,
+                  overflow: "hidden",
+                  whiteSpace: "nowrap",
+                  textOverflow: "ellipsis",
+                  padding: "0 2px",
+                  opacity: insert && !insert.enabled ? 0.5 : 1,
+                }}
+              >
+                {insert ? insert.name : <Plus size={10} />}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -167,6 +185,7 @@ const StripButton: React.FC<{
   children: React.ReactNode;
 }> = ({ ariaLabel, active, onClick, color, children }) => (
   <button
+    type="button"
     aria-label={ariaLabel}
     aria-pressed={active}
     onClick={onClick}

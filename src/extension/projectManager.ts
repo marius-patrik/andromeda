@@ -401,6 +401,7 @@ export class ProjectManager implements vscode.Disposable {
 
     this.projectors.get(projectId)?.broadcastProject();
     this.requestEngineStateDump(projectId);
+    void this.projectors.get(projectId)?.requestDeviceList();
   }
 
   onEngineError(projectId: string, payload: unknown): void {

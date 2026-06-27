@@ -17,6 +17,8 @@ import {
   type TrackColorPayload,
   type TrackCreatePayload,
   type TrackIdPayload,
+  type DeviceIdPayload,
+  type DeviceParameterPayload,
   type TrackInsertPayload,
   type TrackNamePayload,
   type TrackPanPayload,
@@ -162,8 +164,23 @@ export function adaptViewMessage(
         trackId: message.trackId,
         deviceName: message.deviceName,
         insertIndex: message.insertIndex,
+        slot: message.slot,
       };
       return { ...base, type: MessageType.TrackAddInsert, payload };
+    }
+
+    // Devices
+    case "device/getParameters": {
+      const payload: DeviceIdPayload = { deviceId: message.deviceId };
+      return { ...base, type: MessageType.DeviceGetParameters, payload };
+    }
+    case "device/setParameter": {
+      const payload: DeviceParameterPayload = {
+        deviceId: message.deviceId,
+        parameter: message.parameter,
+        value: message.value,
+      };
+      return { ...base, type: MessageType.DeviceSetParameter, payload };
     }
 
     // Timeline

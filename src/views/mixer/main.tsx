@@ -1,5 +1,6 @@
-import * as React from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { DevicePanel } from "../../components/device/DevicePanel.js";
 import { MixerStrip } from "../../components/mixer/MixerStrip.js";
 import { EmptyState } from "../../components/shared/EmptyState.js";
 import { ErrorBoundary } from "../../components/shared/ErrorBoundary.js";
@@ -19,17 +20,50 @@ const masterTrack = (tracks: TrackState[], themeColor: string): TrackState => ({
   volume: 0.8,
   pan: 0,
   height: 0,
+  inserts: [],
   regions: [],
 });
 
 const MixerView: React.FC = () => {
   const state = useViewState("mixer");
-  const [accentColor, setAccentColor] = React.useState("#cccccc");
+  const [accentColor, setAccentColor] = useState("#cccccc");
+  const [selectedInsert, setSelectedInsert] = useState<{
+    trackId: string;
+    insertId: string;
+    name: string;
+  } | null>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     const styles = getComputedStyle(document.documentElement);
     setAccentColor(styles.getPropertyValue("--vsdaw-button-bg").trim() || "#cccccc");
   }, []);
+
+  useEffect(() => {
+    if (selectedInsert) {
+      state.deviceActions.getParameters(selectedInsert.insertId);
+    }
+  }, [selectedInsert, state.deviceActions.getParameters]);
+
+  const handleOpenInsert = (trackId: string, slot: number) => {
+    const track = state.tracks.find((t) => t.id === trackId);
+    const insert = track?.inserts[slot];
+    if (!insert) {
+      return;
+    }
+    setSelectedInsert({ trackId, insertId: insert.id, name: insert.name });
+  };
+
+  const handleParameterChange = (parameter: string, value: number | boolean) => {
+    if (!selectedInsert) {
+      return;
+    }
+    state.deviceActions.setParameter(selectedInsert.insertId, parameter, value);
+  };
+
+  const parameters =
+    selectedInsert && state.deviceParameters?.deviceId === selectedInsert.insertId
+      ? state.deviceParameters.parameters
+      : [];
 
   return (
     <ErrorBoundary viewName="Mixer">
@@ -64,41 +98,52 @@ const MixerView: React.FC = () => {
               subtitle="Tracks added to the project will appear here as channel strips."
             />
           ) : (
-            <fieldset
-              aria-label="Mixer channels"
-              style={{
-                flex: 1,
-                display: "flex",
-                overflowX: "auto",
-                overflowY: "hidden",
-                border: 0,
-                margin: 0,
-                padding: 0,
-              }}
-            >
-              {state.tracks.map((track: TrackState) => (
+            <div style={{ position: "relative", flex: 1, display: "flex" }}>
+              <fieldset
+                aria-label="Mixer channels"
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  overflowX: "auto",
+                  overflowY: "hidden",
+                  border: 0,
+                  margin: 0,
+                  padding: 0,
+                }}
+              >
+                {state.tracks.map((track: TrackState) => (
+                  <MixerStrip
+                    key={track.id}
+                    track={track}
+                    onMute={() => state.trackActions.setMute(track.id, !track.muted)}
+                    onSolo={() => state.trackActions.setSolo(track.id, !track.soloed)}
+                    onArm={() => state.trackActions.setArm(track.id, !track.armed)}
+                    onVolume={(v: number) => state.trackActions.setVolume(track.id, v)}
+                    onPan={(p: number) => state.trackActions.setPan(track.id, p)}
+                    onOpenInsert={(slot: number) => handleOpenInsert(track.id, slot)}
+                  />
+                ))}
                 <MixerStrip
-                  key={track.id}
-                  track={track}
-                  onMute={() => state.trackActions.setMute(track.id, !track.muted)}
-                  onSolo={() => state.trackActions.setSolo(track.id, !track.soloed)}
-                  onArm={() => state.trackActions.setArm(track.id, !track.armed)}
-                  onVolume={(v: number) => state.trackActions.setVolume(track.id, v)}
-                  onPan={(p: number) => state.trackActions.setPan(track.id, p)}
-                  onOpenInsert={(slot: number) => state.mixerActions.openDevice(track.id, slot)}
+                  track={masterTrack(state.tracks, accentColor)}
+                  isMaster
+                  onMute={() => {}}
+                  onSolo={() => {}}
+                  onArm={() => {}}
+                  onVolume={() => {}}
+                  onPan={() => {}}
+                  onOpenInsert={() => {}}
                 />
-              ))}
-              <MixerStrip
-                track={masterTrack(state.tracks, accentColor)}
-                isMaster
-                onMute={() => {}}
-                onSolo={() => {}}
-                onArm={() => {}}
-                onVolume={() => {}}
-                onPan={() => {}}
-                onOpenInsert={() => {}}
-              />
-            </fieldset>
+              </fieldset>
+              {selectedInsert && (
+                <DevicePanel
+                  deviceId={selectedInsert.insertId}
+                  deviceName={selectedInsert.name}
+                  parameters={parameters}
+                  onParameterChange={handleParameterChange}
+                  onClose={() => setSelectedInsert(null)}
+                />
+              )}
+            </div>
           )}
         </PanelShell>
       </ThemeProvider>
