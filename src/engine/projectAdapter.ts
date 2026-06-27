@@ -1235,9 +1235,9 @@ export class ProjectController {
         solo: unit.namedParameter.solo.getValue(),
         arm: capture.mapOr((c) => c.armed.getValue(), false),
         inserts,
-        outputTrackId: this.trackOutputs.get(trackId) ?? null,
-        inputDeviceId: this.trackInputDevices.get(trackId),
-        sends: this.trackSends.get(trackId) ?? [],
+        outputTrackId: this.trackOutputs.get(id) ?? null,
+        inputDeviceId: this.trackInputDevices.get(id),
+        sends: this.trackSends.get(id) ?? [],
       });
 
       for (const track of unit.tracks.values()) {

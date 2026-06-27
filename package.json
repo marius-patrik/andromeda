@@ -2,7 +2,7 @@
   "name": "vsdaw",
   "displayName": "VSDAW",
   "description": "OpenDAW-powered digital audio workstation inside VS Code.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "marius-patrik",
   "license": "AGPL-3.0-or-later",
   "private": true,

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-27
+
+### Added
+
+- Piano roll note editing (create, move, resize, delete, velocity) (#21).
+- Mixer routing: per-track output selector and send protocol/UI foundation (#22).
+- Automation lanes and envelope point editing on the timeline (#23).
+- Audio input device selection for recording on audio tracks (#24).
+- Timeline zoom slider / Ctrl+wheel zoom and snap-to-grid selector (#25).
+- Plugin browser folder with scan protocol; native VST3/AU hosting stubbed (#26).
+
 ## [0.2.0] - 2026-06-27
 
 ### Added
