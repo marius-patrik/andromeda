@@ -1,6 +1,6 @@
-[submodule "packages/andromeda"]
-	path = packages/andromeda
-	url = https://github.com/marius-patrik/andromeda.git
+[submodule "packages/agent-harness"]
+	path = packages/agent-harness
+	url = https://github.com/marius-patrik/agent-harness.git
 	branch = main
 [submodule "packages/agi"]
 	path = packages/agi

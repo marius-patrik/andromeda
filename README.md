@@ -1,6 +1,6 @@
-# agents
+# agent-os
 
-Agent package-manager workspace with the `agents` CLI for managing agent
+Agent OS workspace with the `agents` CLI for managing agent
 packages, shared skills/plugins, CLI data, and a common credit store.
 
 ## Usage
@@ -12,15 +12,15 @@ agents list
 agents state init
 agents state env
 agents cli doctor
-agents packages register packages/andromeda
-agents harness doctor andromeda
+agents packages register packages/agent-harness
+agents harness doctor agent-harness
 agents doctor
 ```
 
 ## Layout
 
-- `packages/agents-core` contains the `agents` CLI source and tests.
-- `packages/andromeda`, `packages/agi`, `packages/skyblock-agent`, and
+- `packages/agent-package-manager` contains the `agents` CLI source and tests.
+- `packages/agent-harness`, `packages/agi`, `packages/skyblock-agent`, and
   `packages/vibe-bot` are managed agent package submodules.
 - `packages/templates/*` contains managed repository templates.
 
@@ -34,7 +34,7 @@ agents doctor
 - `agents state init` initializes shared runtime state.
 - `agents cli list|doctor|env|exec|materialize-creds` manages Codex, Claude, Kimi, and Agy through one adapter layer.
 - `agents packages register <path>` registers a local package manifest.
-- `agents harness list|doctor|run` manages runtime harnesses such as Andromeda.
+- `agents harness list|doctor|run` manages runtime harnesses such as Agent Harness.
 - `agents install <skill|plugin|hook|template|cli|harness> <name> <source-path-or-url>` installs shared capabilities.
 - `agents credits` shows the shared credit store.
 - `agents doctor` checks package registration and shared state.

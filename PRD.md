@@ -1,8 +1,8 @@
-# Agent Package Manager PRD
+# Agent OS / Agent Package Manager PRD
 
 ## Overview
 
-`agents` is a Bun TypeScript CLI and workspace for managing agent packages. It installs and tracks agent repos, CLI adapters, skills, plugins, and shared runtime state so every managed CLI sees the same installed capabilities and credit store.
+`agent-os` is a workspace for managing agent packages. Its `agents` CLI is a Bun TypeScript package manager that installs and tracks agent repos, CLI adapters, skills, plugins, and shared runtime state so every managed CLI sees the same installed capabilities and credit store.
 
 ## Goals
 
@@ -30,10 +30,10 @@
 ## Core Concepts
 
 - Package: a git submodule or local package managed by `agents`.
-- Harness: a managed runtime package, such as Andromeda, launched by `agents`.
+- Harness: a managed runtime package, such as Agent Harness, launched by `agents`.
 - CLI adapter: the shared rooting and credential contract for a vendor CLI.
 - Shared state: the root `.agents` directory.
-- Core package: the CLI implementation and tests under `packages/agents-core`.
+- Core package: the CLI implementation and tests under `packages/agent-package-manager`.
 - Managed package checkout: a git-backed package under `packages/<name>`.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
 - Skill install: files installed under `.agents/skills/<name>`.
@@ -60,11 +60,11 @@
 
 ```text
 packages/
-  agents-core/
+  agent-package-manager/
     src/
     test/
   agi/
-  andromeda/
+  agent-harness/
   skyblock-agent/
   templates/
     template-bot/
@@ -100,7 +100,7 @@ Harnesses declare an `agent.package.json` manifest:
 ```json
 {
   "schemaVersion": 1,
-  "id": "andromeda",
+  "id": "agent-harness",
   "kind": "harness",
   "entry": "go run ./cmd/rommie",
   "workingDirectory": "services/cli",
@@ -141,4 +141,4 @@ CI runs on pushes and pull requests to `main`:
 4. Credit store schema and update commands.
 5. Per-CLI adapter contracts for consuming shared state.
 6. Harness package install, doctor, and run commands.
-7. Andromeda harness bridge through `AGENTS_HOME`.
+7. Agent Harness bridge through `AGENTS_HOME`.

@@ -1,14 +1,14 @@
 {
-  "name": "@marius-patrik/agents",
+  "name": "@marius-patrik/agent-os",
   "version": "0.1.0",
-  "description": "Bun TypeScript agent package manager with shared CLI state.",
+  "description": "Agent OS workspace with a Bun TypeScript agent package manager and shared CLI state.",
   "type": "module",
   "bin": {
-    "agents": "./packages/agents-core/src/cli.ts"
+    "agents": "./packages/agent-package-manager/src/cli.ts"
   },
   "scripts": {
     "check": "bunx tsc --noEmit",
-    "test": "bun test packages/agents-core/test/gitmodules.test.ts packages/agents-core/test/adapters.test.ts packages/agents-core/test/packages.test.ts packages/agents-core/test/harness-cli.test.ts",
+    "test": "bun test packages/agent-package-manager/test/gitmodules.test.ts packages/agent-package-manager/test/adapters.test.ts packages/agent-package-manager/test/packages.test.ts packages/agent-package-manager/test/harness-cli.test.ts",
     "ci": "bun run check && bun run test"
   },
   "devDependencies": {

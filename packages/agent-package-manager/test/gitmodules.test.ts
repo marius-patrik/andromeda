@@ -23,15 +23,15 @@ describe("gitmodules", () => {
     expect(
       serializeGitmodules([
         {
-          name: "packages/rommie",
-          path: "packages/rommie",
-          url: "https://github.com/marius-patrik/andromeda.git",
+          name: "packages/agent-harness",
+          path: "packages/agent-harness",
+          url: "https://github.com/marius-patrik/agent-harness.git",
           branch: "main",
         },
       ]),
-    ).toBe(`[submodule "packages/rommie"]
-\tpath = packages/rommie
-\turl = https://github.com/marius-patrik/andromeda.git
+    ).toBe(`[submodule "packages/agent-harness"]
+\tpath = packages/agent-harness
+\turl = https://github.com/marius-patrik/agent-harness.git
 \tbranch = main
 `);
   });
