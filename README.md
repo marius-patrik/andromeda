@@ -25,3 +25,7 @@ Workspace for agent projects.
 
 - `wiki/`
 
+## Research
+
+- `research/`
+
