@@ -1,0 +1,22 @@
+{
+  "name": "@marius-patrik/agents",
+  "version": "0.1.0",
+  "description": "Bun TypeScript agent package manager with shared CLI state.",
+  "type": "module",
+  "bin": {
+    "agents": "./src/cli.ts"
+  },
+  "scripts": {
+    "check": "bunx tsc --noEmit",
+    "test": "bun test test/gitmodules.test.ts",
+    "ci": "bun run check && bun run test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "license": "MIT"
+}
