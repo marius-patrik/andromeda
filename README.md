@@ -7,10 +7,18 @@ Workspace for agent projects.
 - `andromeda-engine`
 - `agent-manager`
 
-## Harnesses
+## Agents
 
-- `harnesses/rommie`
-- `harnesses/README.md`
+- `agents/rommie`
+- `agents/README.md`
+
+## Templates
+
+- `templates/template-bot`
+- `templates/template-cli`
+- `templates/template-mono`
+- `templates/template-repo`
+- `templates/template-web`
 
 ## Avatars
 

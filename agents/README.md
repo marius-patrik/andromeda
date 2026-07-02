@@ -1,6 +1,6 @@
-# harnesses
+# agents
 
-Harnesses and external agent runtimes.
+Agent runtimes and external agent references.
 
 ## Local
 
@@ -11,4 +11,3 @@ Harnesses and external agent runtimes.
 - [Codex](https://github.com/openai/codex)
 - [Claude Code](https://github.com/anthropics/claude-code)
 - [Kimi Code](https://github.com/MoonshotAI/kimi-code)
-
