@@ -63,9 +63,15 @@ packages/
   agents-core/
     src/
     test/
+  agi/
   andromeda/
-  personal-assistant/
-  skye/
+  skyblock-agent/
+  templates/
+    template-bot/
+    template-cli/
+    template-mono/
+    template-repo/
+    template-web/
   vibe-bot/
 ```
 

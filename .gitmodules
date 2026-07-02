@@ -2,15 +2,35 @@
 	path = packages/andromeda
 	url = https://github.com/marius-patrik/andromeda.git
 	branch = main
-[submodule "packages/personal-assistant"]
-	path = packages/personal-assistant
-	url = https://github.com/marius-patrik/personal-assistant.git
+[submodule "packages/agi"]
+	path = packages/agi
+	url = https://github.com/marius-patrik/agi.git
 	branch = main
-[submodule "packages/skye"]
-	path = packages/skye
-	url = https://github.com/marius-patrik/skye.git
+[submodule "packages/skyblock-agent"]
+	path = packages/skyblock-agent
+	url = https://github.com/marius-patrik/skyblock-agent.git
 	branch = main
 [submodule "packages/vibe-bot"]
 	path = packages/vibe-bot
 	url = https://github.com/marius-patrik/vibe-bot.git
+	branch = main
+[submodule "packages/templates/template-bot"]
+	path = packages/templates/template-bot
+	url = https://github.com/marius-patrik/template-bot.git
+	branch = main
+[submodule "packages/templates/template-cli"]
+	path = packages/templates/template-cli
+	url = https://github.com/marius-patrik/template-cli.git
+	branch = main
+[submodule "packages/templates/template-mono"]
+	path = packages/templates/template-mono
+	url = https://github.com/marius-patrik/template-mono.git
+	branch = main
+[submodule "packages/templates/template-repo"]
+	path = packages/templates/template-repo
+	url = https://github.com/marius-patrik/template-repo.git
+	branch = main
+[submodule "packages/templates/template-web"]
+	path = packages/templates/template-web
+	url = https://github.com/marius-patrik/template-web.git
 	branch = main

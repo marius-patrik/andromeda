@@ -20,8 +20,9 @@ agents doctor
 ## Layout
 
 - `packages/agents-core` contains the `agents` CLI source and tests.
-- `packages/andromeda`, `packages/personal-assistant`, `packages/skye`, and
+- `packages/andromeda`, `packages/agi`, `packages/skyblock-agent`, and
   `packages/vibe-bot` are managed agent package submodules.
+- `packages/templates/*` contains managed repository templates.
 
 ## Commands
 
