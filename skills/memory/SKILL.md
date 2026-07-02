@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Manage the user's layered Codex memory system and enforce memory hygiene. Use when Codex needs to read, update, or reason about LONG.md, MEMORY.md, SHORT.md, PARK.md, ARCHIVE.md, cache.md, handoff.md, startup memory hooks, cross-session handoffs, context compaction survival, multi-session workstreams, or the memory-plugin repository.
+description: Manage the user's layered Codex memory and context engine system and enforce memory hygiene. Use when Codex needs to read, update, or reason about LONG.md, MEMORY.md, SHORT.md, PARK.md, ARCHIVE.md, cache.md, handoff.md, startup or stop memory hooks, cross-session handoffs, context compaction survival, multi-session workstreams, or the context-engine plugin repository.
 ---
 
 # Memory

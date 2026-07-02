@@ -1,20 +1,20 @@
 {
-  "name": "memory-plugin",
+  "name": "context-engine",
   "version": "0.1.0",
-  "description": "Layered Codex memory files, startup hook, and memory skill for durable cross-session operating context.",
+  "description": "Layered Codex context and memory files, startup/stop hooks, and memory skill for durable cross-session operating context.",
   "author": {
     "name": "marius-patrik"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "Memory Plugin",
-    "shortDescription": "Use layered Codex memory across sessions.",
-    "longDescription": "Memory Plugin provides a layered memory convention, a SessionStart hook template, and a memory skill for managing long-term rules, active work, parked context, archives, task cache, and handoff notes.",
+    "displayName": "Context Engine",
+    "shortDescription": "Use layered Codex context across sessions.",
+    "longDescription": "Context Engine provides a layered context and memory convention, SessionStart and Stop hook templates, and a memory skill for managing long-term rules, active work, parked context, archives, task cache, and handoff notes.",
     "developerName": "marius-patrik",
     "category": "Productivity",
     "capabilities": [
       "Skills"
     ],
-    "defaultPrompt": "Use the memory plugin to maintain layered session memory."
+    "defaultPrompt": "Use Context Engine to maintain layered session context."
   }
 }

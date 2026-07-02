@@ -1,11 +1,11 @@
 {
-  "name": "memory-plugin",
+  "name": "context-engine",
   "interface": {
-    "displayName": "Memory Plugin"
+    "displayName": "Context Engine"
   },
   "plugins": [
     {
-      "name": "memory-plugin",
+      "name": "context-engine",
       "source": {
         "source": "local",
         "path": "."

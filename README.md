@@ -1,6 +1,6 @@
-# memory-plugin
+# context-engine
 
-Codex plugin for a layered local memory system.
+Codex plugin for a layered local context and memory system.
 
 Layers:
 - `LONG.md`: stable general operating rules.
@@ -11,5 +11,5 @@ Layers:
 - `PARK.md`: inactive context kept for possible recovery.
 - `ARCHIVE.md`: distilled low-churn lessons.
 
-The plugin includes a `memory` skill and a `SessionStart` hook template. The active hook on this machine lives at `C:\Users\patrik\.codex\hooks\session_start_memory.ps1`.
+The plugin includes a `memory` skill plus `SessionStart` and `Stop` hook templates. The active hooks on this machine live under `C:\Users\patrik\.codex\hooks`.
 
