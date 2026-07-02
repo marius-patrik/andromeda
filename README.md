@@ -1,7 +1,7 @@
-# agent-kernel
+# agents
 
-Agent kernel workspace with the `agents` CLI for managing agent packages,
-shared skills/plugins, CLI data, and a common credit store.
+Agent package-manager workspace with the `agents` CLI for managing agent
+packages, shared skills/plugins, CLI data, and a common credit store.
 
 ## Usage
 
