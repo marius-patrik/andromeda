@@ -31,6 +31,13 @@ defaults to `false`; in VS1 no cloud model is enabled, so cloud is unreachable.
 ### `GET /v1/models`
 List enabled models (OpenAI format).
 
+### `POST /route` and `GET /route/{task_class}`
+Resolve a work class to the configured provider, model, params, fallbacks, and
+budget caps. Classes are configured in `registry/routing.yaml` and include
+`mechanical`, `standard-impl`, `hard-impl`, `review`, and
+`judgment/orchestration`. Consumers such as DarkFactory workers should call this
+surface instead of hard-coding model names.
+
 ### `GET /healthz` (and `/health` alias)
 Health report + per-backend probe status. Returns HTTP 200 even when engines
 are offline (the report's `status` reflects reachability).
@@ -59,9 +66,24 @@ this is the salvaged v3 role-pin behaviour).
   `conv-14b-1m` (:8005, conversation) — all `provider: local`,
   `api_base http://127.0.0.1:<port>/v1`.
 - `registry/active.yaml` — active model per role (unpinned out-of-box).
+- `registry/routing.yaml` — task-class routing policy: class to ordered
+  `(provider, model_id, params, budget)` candidates. Disabled cloud candidates
+  remain visible as fallbacks but are skipped until enabled and `allow_cloud`
+  is set.
 
 Per-model env override: `GATEWAY_MODEL_<ID>_API_BASE` (ID upper-cased,
 non-alnum → `_`).
+
+## CLI
+
+```bash
+uv run gateway route standard-impl --json
+uv run gateway route judgment/orchestration
+```
+
+The resolver records `route.resolve` entries in `AGENTS_CREDITS` when that
+ledger path is configured. Chat requests may also send `task_class`; successful
+requests then write per-provider and per-class token usage to the same ledger.
 
 ## Deferred cloud OAuth dispatch
 
