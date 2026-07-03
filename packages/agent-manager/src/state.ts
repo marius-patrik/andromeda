@@ -1,6 +1,9 @@
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 
+const defaultDataPath = path.join("packages", "data", "data-agentos");
+const defaultDataRepoPath = (root: string) => path.join(root, defaultDataPath);
+
 export type InstallKind =
   | "agent"
   | "app"
@@ -147,7 +150,7 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
           {
             id: "agentos-data",
             repo: "marius-patrik/agentos-data",
-            path: path.join(state.root, "packages", "agentos-data"),
+            path: defaultDataRepoPath(state.root),
             branch: "main",
             env: "AGENTOS_DATA_ROOT",
             configuredAt: new Date().toISOString(),
@@ -173,7 +176,7 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
       `AGENTS_SECRETS=${state.secretsDir}`,
       `AGENTS_CREDITS=${state.creditsFile}`,
       `AGENTS_DATA_REPOS=${state.dataReposFile}`,
-      `AGENTOS_DATA_ROOT=${path.join(state.root, "packages", "agentos-data")}`,
+      `AGENTOS_DATA_ROOT=${defaultDataRepoPath(state.root)}`,
       "",
     ].join("\n"),
   );

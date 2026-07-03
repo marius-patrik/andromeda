@@ -92,7 +92,7 @@ export function adapterEnv(state: SharedState, id: CliId): Record<string, string
     AGENTS_SECRETS: state.secretsDir,
     AGENTS_CREDITS: state.creditsFile,
     AGENTS_DATA_REPOS: state.dataReposFile,
-    AGENTOS_DATA_ROOT: path.join(state.root, "packages", "agentos-data"),
+    AGENTOS_DATA_ROOT: path.join(state.root, defaultDataPath),
   };
   for (const [name, dir] of Object.entries(spec.homeEnv)) env[name] = path.join(state.clisDir, dir);
   return env;
@@ -158,3 +158,4 @@ export async function materializeCredentials(state: SharedState, id: CliId): Pro
   }
   return copied;
 }
+const defaultDataPath = path.join("packages", "data", "data-agentos");

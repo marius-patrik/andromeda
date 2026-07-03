@@ -23,6 +23,7 @@ import { listSecrets, secretPath, syncGitHubSecret, writeSecret } from "./secret
 
 const root = process.cwd();
 const gitmodulesPath = path.join(root, ".gitmodules");
+const defaultDataPath = path.join("packages", "data", "data-agentos");
 const packageKinds = new Map([
   ["agent", "packages"],
   ["app", "packages"],
@@ -57,7 +58,7 @@ Usage:
   agents packages list [--json]
   agents packages run <name-or-path> -- <args...>
   agents data repo list [--json]
-  agents data repo set <id> <owner/name> [--path packages/name] [--branch main] [--managed-path path] [--env NAME]
+  agents data repo set <id> <owner/name> [--path packages/data/name] [--branch main] [--managed-path path] [--env NAME]
   agents data repo path <id>
   agents data repo env <id>
   agents harness list [--json]
@@ -110,11 +111,11 @@ function inferKind(packagePath: string): string {
   const first = packagePath.split(/[\\/]/)[0];
   const base = path.basename(packagePath);
   if (first === "packages") {
-    if (base === "agentos-data" || base.endsWith("-data")) return "data";
+    if (base === "data-agentos" || base.endsWith("-data")) return "data";
+    if (base === "fabrica" || base === "singularity") return "app";
     if (base.includes("harness")) return "harness";
     if (base.includes("workspace")) return "workspace";
     if (base.includes("template")) return "template";
-    if (base === "singularity") return "app";
     if (["darkfactory-agent", "life-support", "rommie-agent", "skyblock-agent"].includes(base)) return "agent";
     return "package";
   }
@@ -447,7 +448,7 @@ function sharedHarnessEnv(state: SharedState, harness: { id: string }): Record<s
     AGENTS_SECRETS: state.secretsDir,
     AGENTS_CREDITS: state.creditsFile,
     AGENTS_DATA_REPOS: state.dataReposFile,
-    AGENTOS_DATA_ROOT: path.join(state.root, "packages", "agentos-data"),
+    AGENTOS_DATA_ROOT: path.join(state.root, defaultDataPath),
     ROMMIE_HOME: path.join(state.harnessesDir, harness.id, "runtime"),
   };
 }
@@ -467,7 +468,7 @@ function sharedPackageEnv(state: SharedState): Record<string, string> {
     AGENTS_SECRETS: state.secretsDir,
     AGENTS_CREDITS: state.creditsFile,
     AGENTS_DATA_REPOS: state.dataReposFile,
-    AGENTOS_DATA_ROOT: path.join(state.root, "packages", "agentos-data"),
+    AGENTOS_DATA_ROOT: path.join(state.root, defaultDataPath),
   };
 }
 
@@ -498,7 +499,7 @@ async function dataCommand(args: string[], flags: Record<string, string | boolea
     const registration = await upsertDataRepo(state, {
       id,
       repo,
-      path: String(flags.path ?? path.join("packages", id)),
+      path: String(flags.path ?? (id === "agentos-data" ? path.join("packages", "data", "data-agentos") : path.join("packages", id))),
       branch: typeof flags.branch === "string" ? flags.branch : "main",
       managedPath: typeof flags["managed-path"] === "string" ? flags["managed-path"] : undefined,
       env: typeof flags.env === "string" ? flags.env : undefined,

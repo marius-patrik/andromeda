@@ -19,7 +19,7 @@ describe("package manifests", () => {
           dataRepo: {
             id: "darkfactory-workspace",
             repo: "marius-patrik/agentos-data",
-            path: "packages/agentos-data",
+            path: "packages/data/data-agentos",
             managedPath: "managed-repository",
             env: "DARK_FACTORY_WORKSPACE_ROOT",
           },

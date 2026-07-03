@@ -4,15 +4,15 @@ import { parseGitmodules, serializeGitmodules } from "../src/gitmodules";
 describe("gitmodules", () => {
   test("parses submodule entries", () => {
     expect(
-      parseGitmodules(`[submodule "packages/skyblock-agent"]
-\tpath = packages/skyblock-agent
+      parseGitmodules(`[submodule "packages/agents/skyblock-agent"]
+\tpath = packages/agents/skyblock-agent
 \turl = https://github.com/marius-patrik/skyblock-agent.git
 \tbranch = main
 `),
     ).toEqual([
       {
-        name: "packages/skyblock-agent",
-        path: "packages/skyblock-agent",
+        name: "packages/agents/skyblock-agent",
+        path: "packages/agents/skyblock-agent",
         url: "https://github.com/marius-patrik/skyblock-agent.git",
         branch: "main",
       },
@@ -23,14 +23,14 @@ describe("gitmodules", () => {
     expect(
       serializeGitmodules([
         {
-          name: "packages/andromeda-harness",
-          path: "packages/andromeda-harness",
+          name: "packages/harnesses/andromeda-harness",
+          path: "packages/harnesses/andromeda-harness",
           url: "https://github.com/marius-patrik/andromeda-harness.git",
           branch: "main",
         },
       ]),
-    ).toBe(`[submodule "packages/andromeda-harness"]
-\tpath = packages/andromeda-harness
+    ).toBe(`[submodule "packages/harnesses/andromeda-harness"]
+\tpath = packages/harnesses/andromeda-harness
 \turl = https://github.com/marius-patrik/andromeda-harness.git
 \tbranch = main
 `);

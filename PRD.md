@@ -2,7 +2,7 @@
 
 ## Overview
 
-`agentos` is a workspace for managing agent packages. Its `agents` CLI is a Bun TypeScript package manager that installs and tracks agent repos, app repos, templates, private workspace state, CLI adapters, skills, plugins, and shared runtime state so every managed CLI sees the same installed capabilities and credit store.
+`agents-os` is a workspace for managing agent packages. Its `agents` CLI is a Bun TypeScript package manager that installs and tracks agent repos, app repos, templates, private workspace state, CLI adapters, skills, plugins, and shared runtime state so every managed CLI sees the same installed capabilities and credit store.
 
 ## Goals
 
@@ -39,7 +39,7 @@
 - Gateway package: OpenAI-format model gateway and registry routing under `packages/agentos-gateway`.
 - Inferer package: agent loop, runtime services, engine work, and deploy assets under `packages/agentos-inferer`.
 - Manager package: the CLI implementation and tests under `packages/agentos-manager`.
-- Managed checkout: a git-backed package under `packages/<name>`. Agents, apps, harnesses, templates, data repositories, and workspace repositories all live under `packages/`.
+- Managed checkout: a git-backed package under `packages/<category>/<name>`. Agents, apps, harnesses, templates, data repositories, and workspace repositories are organized under explicit category folders.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
 - Skill install: files installed under `.agents/skills/<name>`.
 - Plugin install: files installed under `.agents/plugins/<name>`.
@@ -72,16 +72,25 @@ packages/
   agentos-manager/
     src/
     test/
-  agentos-data/
-  andromeda-harness/
-  darkfactory-agent/
-  darkfactory-templates/
-  darkfactory-workspace/
-  fabrica/
-  life-support/
-  rommie-agent/
-  singularity/
-  skyblock-agent/
+  data/
+    data-agentos/
+  agents/
+    darkfactory-agent/
+    life-support/
+    rommie-agent/
+    skyblock-agent/
+  apps/
+    fabrica/
+    singularity/
+  harnesses/
+    andromeda-harness/
+  templates/
+    darkfactory-templates/
+  workspaces/
+    darkfactory-workspace/
+  plugins/
+    dream/
+  skills/
 ```
 
 ## State Layout
@@ -132,7 +141,7 @@ Harnesses declare an `agent.package.json` manifest:
 {
   "id": "agentos-data",
   "repo": "marius-patrik/agentos-data",
-  "path": "packages/agentos-data",
+  "path": "packages/data/data-agentos",
   "branch": "main",
   "env": "AGENTOS_DATA_ROOT"
 }

@@ -23,18 +23,18 @@ unfinished work and blockers, and persist continuity snapshots into:
 From the repository root:
 
 ```sh
-agents packages register packages/dream
+agents packages register packages/plugins/dream
 ```
 
 Or install as a shared plugin:
 
 ```sh
-agents install plugin dream packages/dream
+agents install plugin dream packages/plugins/dream
 ```
+
 
 ## Run
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\skills\dream\scripts\run_dream.ps1
 ```
-

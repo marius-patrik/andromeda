@@ -1,4 +1,4 @@
-# agentos
+# agents-os
 
 Agentos workspace with the `agents` CLI for managing agent packages, apps,
 templates, private workspace state, shared skills/plugins, CLI data, and a
@@ -13,7 +13,7 @@ agents list
 agents state init
 agents state env
 agents cli doctor
-agents packages register packages/andromeda-harness
+agents packages register packages/harnesses/andromeda-harness
 agents harness doctor andromeda-harness
 agents data repo list
 agents doctor
@@ -25,14 +25,15 @@ agents doctor
 - `packages/agentos-gateway` contains the OpenAI-format LLM gateway, model registry routing, fallback, switchers, quota, OAuth seams, and tests.
 - `packages/agentos-inferer` contains the Python agent loop, Go runtime services, engine work, deploy assets, and inference architecture.
 - `packages/agentos-manager` contains the `agents` CLI source and tests.
-- `packages/andromeda-harness` contains the managed Rommie runtime harness.
-- `packages/darkfactory-agent`, `packages/life-support`, `packages/rommie-agent`, and
-  `packages/skyblock-agent` are managed agent submodules.
-- `packages/singularity` contains the managed Singularity app.
-- `packages/fabrica` contains the managed Fabrica app workspace.
-- `packages/darkfactory-templates` contains the Bun templates monorepo and nested template submodules.
-- `packages/agentos-data` contains the private AgentOS managed data repository and migrated non-code material.
-- `packages/darkfactory-workspace` contains the lightweight DarkFactory workspace package that points at `agentos-data`.
+- `packages/harnesses/andromeda-harness` contains the managed Rommie runtime harness.
+- `packages/agents/darkfactory-agent`, `packages/agents/life-support`, `packages/agents/rommie-agent`, and
+  `packages/agents/skyblock-agent` are managed agent submodules.
+- `packages/apps/singularity` contains the managed Singularity app.
+- `packages/apps/fabrica` contains the managed Fabrica app workspace.
+- `packages/templates/darkfactory-templates` contains the Bun templates monorepo and nested template submodules.
+- `packages/data/data-agentos` contains the private AgentOS managed data repository and migrated non-code material.
+- `packages/workspaces/darkfactory-workspace` contains the lightweight DarkFactory workspace package that points at `agentos-data`.
+- `packages/plugins/dream` is the local plugin package for Dream.
 
 ## Commands
 
