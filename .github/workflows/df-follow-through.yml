@@ -19,9 +19,9 @@ on:
       - closed
 permissions:
   actions: read
-  contents: read
+  contents: write
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   follow-through:

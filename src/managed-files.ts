@@ -10,6 +10,7 @@ export const DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH = ".github/workflows/dark-fac
 export const DARK_FACTORY_RELEASE_WORKFLOW_PATH = ".github/workflows/dark-factory-release.yml";
 export const DARK_FACTORY_PLAN_WORKFLOW_PATH = ".github/workflows/df-plan.yml";
 export const DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH = ".github/workflows/df-follow-through.yml";
+export const DARK_FACTORY_WORKFLOW_PATH = ".github/workflows/df-work.yml";
 export const CODEX_REVIEW_WORKFLOW_PATH = ".github/workflows/codex-review.yml";
 export const CODEX_REVIEW_DOCKERFILE_PATH = ".github/codex-review.Dockerfile";
 export const CODEX_REVIEW_SCHEMA_PATH = ".github/codex-review.schema.json";
@@ -18,6 +19,7 @@ export const DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH = ".github/scripts/dark-fact
 export const DARK_FACTORY_SCRIPT_LIB_PATH = ".github/scripts/df-lib.mjs";
 export const DARK_FACTORY_PLAN_SCRIPT_PATH = ".github/scripts/df-plan.mjs";
 export const DARK_FACTORY_SWEEP_SCRIPT_PATH = ".github/scripts/df-sweep.mjs";
+export const DARK_FACTORY_WORK_SCRIPT_PATH = ".github/scripts/df-work.mjs";
 export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".darkfactory/managed-repository.json";
 export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".darkfactory/installer-policy.json";
 export const DARK_FACTORY_RELEASE_POLICY_PATH = ".darkfactory/release-policy.json";
@@ -40,9 +42,11 @@ const MANAGED_COMMON_FILES = [AGENTS_ENTRYPOINT_PATH] as const;
 const PACKAGE_MANAGED_FILES = [
   DARK_FACTORY_PLAN_WORKFLOW_PATH,
   DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
+  DARK_FACTORY_WORKFLOW_PATH,
   DARK_FACTORY_SCRIPT_LIB_PATH,
   DARK_FACTORY_PLAN_SCRIPT_PATH,
-  DARK_FACTORY_SWEEP_SCRIPT_PATH
+  DARK_FACTORY_SWEEP_SCRIPT_PATH,
+  DARK_FACTORY_WORK_SCRIPT_PATH
 ] as const;
 const DATA_REPO_PATH_SEGMENTS = ["data", "data-agentos"] as const;
 const WORKSPACE_PATH_SEGMENTS = ["workspaces", "darkfactory-workspace"] as const;
@@ -98,6 +102,7 @@ export function requiredManagedFilePaths(): string[] {
     DARK_FACTORY_RELEASE_WORKFLOW_PATH,
     DARK_FACTORY_PLAN_WORKFLOW_PATH,
     DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
+    DARK_FACTORY_WORKFLOW_PATH,
     CODEX_REVIEW_WORKFLOW_PATH,
     CODEX_REVIEW_DOCKERFILE_PATH,
     CODEX_REVIEW_SCHEMA_PATH,
@@ -106,6 +111,7 @@ export function requiredManagedFilePaths(): string[] {
     DARK_FACTORY_SCRIPT_LIB_PATH,
     DARK_FACTORY_PLAN_SCRIPT_PATH,
     DARK_FACTORY_SWEEP_SCRIPT_PATH,
+    DARK_FACTORY_WORK_SCRIPT_PATH,
     DARK_FACTORY_BRANCHING_POLICY_PATH,
     DARK_FACTORY_LABELS_PATH,
     DARK_FACTORY_MANAGED_CONFIG_PATH,
