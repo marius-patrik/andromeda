@@ -3,6 +3,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const AGENTS_GLOBAL_VERSION_PATH = ".agents/.global/VERSION";
+export const AGENTS_ENTRYPOINT_PATH = "AGENTS.md";
+export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 export const GITHUB_BOOTSTRAP_WORKFLOW_PATH = ".github/workflows/dark-factory-bootstrap.yml";
 export const DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH = ".github/workflows/dark-factory-autoupdate.yml";
 export const DARK_FACTORY_RELEASE_WORKFLOW_PATH = ".github/workflows/dark-factory-release.yml";
@@ -14,6 +16,9 @@ export const DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH = ".github/scripts/dark-fact
 export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".darkfactory/managed-repository.json";
 export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".darkfactory/installer-policy.json";
 export const DARK_FACTORY_RELEASE_POLICY_PATH = ".darkfactory/release-policy.json";
+export const DARK_FACTORY_BRANCHING_POLICY_PATH = ".darkfactory/branching-policy.md";
+export const DARK_FACTORY_LABELS_PATH = ".darkfactory/labels.json";
+export const DARK_FACTORY_RELEASE_CONVENTIONS_PATH = ".darkfactory/release-conventions.md";
 
 export interface ManagedFile {
   path: string;
@@ -26,6 +31,7 @@ export interface ManagedRepositoryRef {
 }
 
 const MANAGED_COMMON_DIRS = [".agents/.global", ".github", ".darkfactory"] as const;
+const MANAGED_COMMON_FILES = [AGENTS_ENTRYPOINT_PATH] as const;
 const DATA_REPO_PATH_SEGMENTS = ["data", "data-agentos"] as const;
 const WORKSPACE_PATH_SEGMENTS = ["workspaces", "darkfactory-workspace"] as const;
 
@@ -34,6 +40,13 @@ export function readManagedFiles(repository?: ManagedRepositoryRef, root = resol
 
   for (const dir of MANAGED_COMMON_DIRS) {
     for (const file of readManagedTree(root, dir)) {
+      files.set(file.path, file);
+    }
+  }
+
+  for (const filePath of MANAGED_COMMON_FILES) {
+    const file = readManagedFile(root, filePath);
+    if (file) {
       files.set(file.path, file);
     }
   }
@@ -57,7 +70,9 @@ export function readManagedFiles(repository?: ManagedRepositoryRef, root = resol
 
 export function requiredManagedFilePaths(): string[] {
   return [
+    AGENTS_ENTRYPOINT_PATH,
     AGENTS_GLOBAL_VERSION_PATH,
+    CI_WORKFLOW_PATH,
     GITHUB_BOOTSTRAP_WORKFLOW_PATH,
     DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH,
     DARK_FACTORY_RELEASE_WORKFLOW_PATH,
@@ -66,10 +81,26 @@ export function requiredManagedFilePaths(): string[] {
     CODEX_REVIEW_SCHEMA_PATH,
     CODEX_REVIEW_SCRIPT_PATH,
     DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH,
+    DARK_FACTORY_BRANCHING_POLICY_PATH,
+    DARK_FACTORY_LABELS_PATH,
     DARK_FACTORY_MANAGED_CONFIG_PATH,
     DARK_FACTORY_INSTALLER_POLICY_PATH,
+    DARK_FACTORY_RELEASE_CONVENTIONS_PATH,
     DARK_FACTORY_RELEASE_POLICY_PATH
   ];
+}
+
+function readManagedFile(root: string, relativePath: string): ManagedFile | null {
+  const fullPath = resolve(root, relativePath);
+
+  if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+    return null;
+  }
+
+  return {
+    path: relativePath,
+    content: readFileSync(fullPath, "utf8").replace(/\r\n/g, "\n")
+  };
 }
 
 function readManagedTree(root: string, relativeDir: string): ManagedFile[] {
