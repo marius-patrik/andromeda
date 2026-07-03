@@ -1,5 +1,5 @@
 {
-  "name": "template-mono",
+  "name": "darkfactory-templates",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,6 +12,7 @@
     "dev:cli": "bun --filter @template/cli run dev",
     "dev:web": "bun --filter @template/web run dev",
     "start": "bun --filter @template/web run start",
+    "sync:submodules": "git submodule update --init --recursive",
     "typecheck": "bun run --filter '*' typecheck"
   },
   "devDependencies": {

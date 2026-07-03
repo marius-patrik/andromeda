@@ -1,16 +1,24 @@
-# template-mono
+# darkfactory-templates
 
-Bun and TypeScript monorepo template.
+Bun and TypeScript templates monorepo for DarkFactory-managed repositories.
 
-## Packages
+## Bun Workspaces
 
-- `packages/cli` - command-line package
-- `packages/web` - web package served by Bun
+- `packages/cli` - command-line package template.
+- `packages/web` - web package template served by Bun.
+
+## Template Submodules
+
+- `templates/template-bot`
+- `templates/template-cli`
+- `templates/template-repo`
+- `templates/template-web`
 
 ## Setup
 
 ```powershell
 bun install
+bun run sync:submodules
 bun run typecheck
 bun run build
 ```

@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "template-mono",
+      "name": "darkfactory-templates",
       "devDependencies": {
         "bun-types": "^1.3.14",
         "typescript": "^5.8.3",
