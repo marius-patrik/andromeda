@@ -51,8 +51,8 @@ To install the app on every repository, use the GitHub App installation UI and c
 ```powershell
 npm ci
 npm run build
-agents packages register packages/darkfactory-workspace
-agents packages register packages/darkfactory-agent
+agents packages register packages/workspaces/darkfactory-workspace
+agents packages register packages/agents/darkfactory-agent
 agents data repo path darkfactory-workspace
 ```
 

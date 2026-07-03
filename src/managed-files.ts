@@ -26,6 +26,8 @@ export interface ManagedRepositoryRef {
 }
 
 const MANAGED_COMMON_DIRS = [".agents/.global", ".github", ".darkfactory"] as const;
+const DATA_REPO_PATH_SEGMENTS = ["data", "data-agentos"] as const;
+const WORKSPACE_PATH_SEGMENTS = ["workspaces", "darkfactory-workspace"] as const;
 
 export function readManagedFiles(repository?: ManagedRepositoryRef, root = resolveManagedWorkspaceRoot()): ManagedFile[] {
   const files = new Map<string, ManagedFile>();
@@ -116,24 +118,44 @@ function resolveManagedWorkspaceRoot(): string {
   }
 
   const projectRoot = resolveProjectRoot();
-  const siblingDataRepo = resolve(projectRoot, "..", "agentos-data", "managed-repository");
+  const siblingDataRepo = resolve(projectRoot, "..", ...DATA_REPO_PATH_SEGMENTS, "managed-repository");
   if (existsSync(siblingDataRepo)) {
     return siblingDataRepo;
   }
 
-  const siblingWorkspace = resolve(projectRoot, "..", "darkfactory-workspace", "managed-repository");
+  const legacySiblingDataRepo = resolve(projectRoot, "..", "agentos-data", "managed-repository");
+  if (existsSync(legacySiblingDataRepo)) {
+    return legacySiblingDataRepo;
+  }
+
+  const siblingWorkspace = resolve(projectRoot, "..", ...WORKSPACE_PATH_SEGMENTS, "managed-repository");
   if (existsSync(siblingWorkspace)) {
     return siblingWorkspace;
   }
 
-  const bundledDataRepo = resolve(projectRoot, "agentos-data", "managed-repository");
+  const legacySiblingWorkspace = resolve(projectRoot, "..", "darkfactory-workspace", "managed-repository");
+  if (existsSync(legacySiblingWorkspace)) {
+    return legacySiblingWorkspace;
+  }
+
+  const bundledDataRepo = resolve(projectRoot, ...DATA_REPO_PATH_SEGMENTS, "managed-repository");
   if (existsSync(bundledDataRepo)) {
     return bundledDataRepo;
   }
 
-  const bundledWorkspace = resolve(projectRoot, "darkfactory-workspace", "managed-repository");
+  const legacyBundledDataRepo = resolve(projectRoot, "agentos-data", "managed-repository");
+  if (existsSync(legacyBundledDataRepo)) {
+    return legacyBundledDataRepo;
+  }
+
+  const bundledWorkspace = resolve(projectRoot, ...WORKSPACE_PATH_SEGMENTS, "managed-repository");
   if (existsSync(bundledWorkspace)) {
     return bundledWorkspace;
+  }
+
+  const legacyBundledWorkspace = resolve(projectRoot, "darkfactory-workspace", "managed-repository");
+  if (existsSync(legacyBundledWorkspace)) {
+    return legacyBundledWorkspace;
   }
 
   return resolve(projectRoot, "managed-repository");
