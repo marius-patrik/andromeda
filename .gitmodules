@@ -1,40 +1,41 @@
-[submodule "packages/harnesses/andromeda-harness"]
-	path = packages/harnesses/andromeda-harness
+[submodule "harnesses/andromeda-harness"]
+	path = harnesses/andromeda-harness
 	url = https://github.com/marius-patrik/andromeda-harness.git
 	branch = main
-[submodule "packages/agents/life-support"]
-	path = packages/agents/life-support
+[submodule "agents/life-support"]
+	path = agents/life-support
 	url = https://github.com/marius-patrik/life-support.git
 	branch = main
-[submodule "packages/agents/skyblock-agent"]
-	path = packages/agents/skyblock-agent
+[submodule "agents/skyblock-agent"]
+	path = agents/skyblock-agent
 	url = https://github.com/marius-patrik/skyblock-agent.git
 	branch = main
-[submodule "packages/agents/darkfactory-agent"]
-	path = packages/agents/darkfactory-agent
+[submodule "agents/darkfactory-agent"]
+	path = agents/darkfactory-agent
 	url = https://github.com/marius-patrik/darkfactory-agent.git
 	branch = main
-[submodule "packages/templates/darkfactory-templates"]
-	path = packages/templates/darkfactory-templates
+[submodule "templates/darkfactory-templates"]
+	path = templates/darkfactory-templates
 	url = https://github.com/marius-patrik/darkfactory-templates.git
 	branch = main
-[submodule "packages/apps/singularity"]
-	path = packages/apps/singularity
+[submodule "apps/singularity"]
+	path = apps/singularity
 	url = https://github.com/marius-patrik/singularity.git
 	branch = main
-[submodule "packages/agents/rommie-agent"]
-	path = packages/agents/rommie-agent
+[submodule "agents/rommie-agent"]
+	path = agents/rommie-agent
 	url = https://github.com/marius-patrik/rommie-agent.git
 	branch = main
-[submodule "packages/data/data-agentos"]
-	path = packages/data/data-agentos
+[submodule "data/data-agentos"]
+	path = data/data-agentos
 	url = https://github.com/marius-patrik/agentos-data.git
 	branch = main
-[submodule "packages/apps/fabrica"]
-	path = packages/apps/fabrica
+[submodule "apps/fabrica"]
+	path = apps/fabrica
 	url = https://github.com/marius-patrik/Fabrica.git
 	branch = dev
-[submodule "packages/workspaces/darkfactory-workspace"]
-	path = packages/workspaces/darkfactory-workspace
+[submodule "workspaces/darkfactory-workspace"]
+	path = workspaces/darkfactory-workspace
 	url = https://github.com/marius-patrik/darkfactory-workspace.git
 	branch = main
+

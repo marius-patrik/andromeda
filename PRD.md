@@ -2,14 +2,14 @@
 
 ## Overview
 
-`agents-os` is a workspace for managing agent packages. Its `agents` CLI is a Bun TypeScript package manager that installs and tracks agent repos, app repos, templates, private workspace state, CLI adapters, skills, plugins, and shared runtime state so every managed CLI sees the same installed capabilities and credit store.
+`agents-mono` is a workspace for managing agent packages. Its `agents` CLI is a Bun TypeScript package manager that installs and tracks agent repos, app repos, templates, private workspace state, CLI adapters, skills, plugins, and shared runtime state so every managed CLI sees the same installed capabilities and credit store.
 
 ## Goals
 
 - Manage git-backed agent packages from one workspace.
 - Keep CLI-specific metadata under `.agents/clis`.
 - Keep user-installed skills and plugins under `.agents/skills` and `.agents/plugins`.
-- Keep harness packages under `packages/` and launch them with shared state.
+- Keep harness packages under `` and launch them with shared state.
 - Configure git-backed data repositories such as `agentos-data`; workspace packages such as `darkfactory-workspace` can point at those data repos.
 - Expose one shared state root to every CLI through `.agents/env`.
 - Maintain a shared credit store at `.agents/credits.json`.
@@ -35,11 +35,11 @@
 - Data repo: a git-backed managed data package with an optional managed root and exported env var.
 - CLI adapter: the shared rooting and credential contract for a vendor CLI.
 - Shared state: the root `.agents` directory.
-- Core package: shared contracts and generated clients under `packages/agentos-core`.
-- Gateway package: OpenAI-format model gateway and registry routing under `packages/agentos-gateway`.
-- Inferer package: agent loop, runtime services, engine work, and deploy assets under `packages/agentos-inferer`.
-- Manager package: the CLI implementation and tests under `packages/agentos-manager`.
-- Managed checkout: a git-backed package under `packages/<category>/<name>`. Agents, apps, harnesses, templates, data repositories, and workspace repositories are organized under explicit category folders.
+- Core package: shared contracts and generated clients under `agentos-core`.
+- Gateway package: OpenAI-format model gateway and registry routing under `llm-gateway`.
+- Inferer package: agent loop, runtime services, engine work, and deploy assets under `inference-engine`.
+- Manager package: the CLI implementation and tests under `agent-manager`.
+- Managed checkout: a git-backed package under `<category>/<name>`. Agents, apps, harnesses, templates, data repositories, and workspace repositories are organized under explicit category folders.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
 - Skill install: files installed under `.agents/skills/<name>`.
 - Plugin install: files installed under `.agents/plugins/<name>`.
@@ -65,7 +65,7 @@
 ## Workspace Layout
 
 ```text
-packages/
+
   agentos-core/
   agentos-gateway/
   agentos-inferer/
@@ -141,7 +141,7 @@ Harnesses declare an `agent.package.json` manifest:
 {
   "id": "agentos-data",
   "repo": "marius-patrik/agentos-data",
-  "path": "packages/data/data-agentos",
+  "path": "data/data-agentos",
   "branch": "main",
   "env": "AGENTOS_DATA_ROOT"
 }
@@ -181,3 +181,5 @@ CI runs on pushes and pull requests to `main`:
 5. Per-CLI adapter contracts for consuming shared state.
 6. Harness package install, doctor, and run commands.
 7. Andromeda Harness bridge through `AGENTS_HOME`.
+
+
