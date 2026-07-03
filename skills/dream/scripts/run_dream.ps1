@@ -217,7 +217,22 @@ function Normalize-Items {
     return $results.ToArray()
 }
 
-Ensure-Directory -Path $MemoryRoot
+function New-EmptyState {
+    return [ordered]@{
+        version = "1.1"
+        last_run = ""
+        last_processed_file = ""
+        processed_total = 0
+        last_session_title = ""
+        pending_count = 0
+        open_items = @()
+        next_work = @()
+    }
+}
+
+if (-not $DryRun) {
+    Ensure-Directory -Path $MemoryRoot
+}
 
 if (-not (Test-Path -LiteralPath $rolloutRoot)) {
     throw "Missing rollout summaries folder: $rolloutRoot"
@@ -228,34 +243,15 @@ $nowPretty = Get-Date -Format "yyyy-MM-dd HH:mm:ss zzz"
 
 $storedState = $null
 if (-not (Test-Path -LiteralPath $statePath)) {
-    $storedState = [ordered]@{
-        version = "1.1"
-        last_run = ""
-        last_processed_file = ""
-        processed_total = 0
-        last_session_title = ""
-        pending_count = 0
-        open_items = @()
-        next_work = @()
-    }
+    $storedState = New-EmptyState
 } else {
     try {
         $storedState = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
     } catch {
-        $storedState = [ordered]@{
-            version = "1.1"
-            last_run = ""
-            last_processed_file = ""
-            processed_total = 0
-            last_session_title = ""
-            pending_count = 0
-            open_items = @()
-            next_work = @()
-        }
+        $storedState = New-EmptyState
     }
 }
 
-$storedState | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $statePath -Encoding UTF8
 $cursor = if ($Reset) { "" } else { if ($storedState.last_processed_file) { [string]$storedState.last_processed_file } else { "" } }
 
 $allSessions = Get-ChildItem -LiteralPath $rolloutRoot -Filter "*.md" -File | Sort-Object -Property Name
@@ -450,4 +446,3 @@ Write-Output "Dream workflow complete."
 Write-Output ("Processed sessions: " + $toProcess.Count)
 Write-Output ("Attention-needed items: " + $openItems.Count)
 Write-Output ("Next cursor: " + $nextCursor)
-
