@@ -1,7 +1,7 @@
-# agent-os
+# agentos
 
-Agent OS workspace with the `agents` CLI for managing agent
-packages, shared skills/plugins, CLI data, and a common credit store.
+Agentos workspace with the `agents` CLI for managing agent packages, apps,
+templates, shared skills/plugins, CLI data, and a common credit store.
 
 ## Usage
 
@@ -12,18 +12,19 @@ agents list
 agents state init
 agents state env
 agents cli doctor
-agents packages register packages/agent-harness
-agents harness doctor agent-harness
+agents packages register packages/agentos-harness
+agents harness doctor agentos-harness
 agents doctor
 ```
 
 ## Layout
 
-- `packages/agent-package-manager` contains the `agents` CLI source and tests.
-- `packages/agent-harness`, `packages/agi`, `packages/skyblock-agent`,
-  `packages/singularity`, and `packages/vibe-bot` are managed package
-  submodules.
-- `packages/templates/*` contains managed repository templates.
+- `packages/agentos-manager` contains the `agents` CLI source and tests.
+- `packages/agentos-harness` contains the managed Rommie runtime harness.
+- `agents/agi`, `agents/dark-factory`, `agents/rommie`, and
+  `agents/skyblock-agent` are managed agent submodules.
+- `apps/singularity` contains the managed Singularity app.
+- `templates/*` contains managed repository templates.
 
 ## Commands
 
@@ -35,7 +36,7 @@ agents doctor
 - `agents state init` initializes shared runtime state.
 - `agents cli list|doctor|env|exec|materialize-creds` manages Codex, Claude, Kimi, and Agy through one adapter layer.
 - `agents packages register <path>` registers a local package manifest.
-- `agents harness list|doctor|run` manages runtime harnesses such as Agent Harness.
+- `agents harness list|doctor|run` manages runtime harnesses such as Agentos Harness.
 - `agents install <skill|plugin|hook|template|cli|harness> <name> <source-path-or-url>` installs shared capabilities.
 - `agents credits` shows the shared credit store.
 - `agents doctor` checks package registration and shared state.

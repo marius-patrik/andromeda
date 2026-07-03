@@ -4,15 +4,15 @@ import { parseGitmodules, serializeGitmodules } from "../src/gitmodules";
 describe("gitmodules", () => {
   test("parses submodule entries", () => {
     expect(
-      parseGitmodules(`[submodule "packages/skyblock-agent"]
-\tpath = packages/skyblock-agent
+      parseGitmodules(`[submodule "agents/skyblock-agent"]
+\tpath = agents/skyblock-agent
 \turl = https://github.com/marius-patrik/skyblock-agent.git
 \tbranch = main
 `),
     ).toEqual([
       {
-        name: "packages/skyblock-agent",
-        path: "packages/skyblock-agent",
+        name: "agents/skyblock-agent",
+        path: "agents/skyblock-agent",
         url: "https://github.com/marius-patrik/skyblock-agent.git",
         branch: "main",
       },
@@ -23,15 +23,15 @@ describe("gitmodules", () => {
     expect(
       serializeGitmodules([
         {
-          name: "packages/agent-harness",
-          path: "packages/agent-harness",
-          url: "https://github.com/marius-patrik/agent-harness.git",
+          name: "packages/agentos-harness",
+          path: "packages/agentos-harness",
+          url: "https://github.com/marius-patrik/agentos-harness.git",
           branch: "main",
         },
       ]),
-    ).toBe(`[submodule "packages/agent-harness"]
-\tpath = packages/agent-harness
-\turl = https://github.com/marius-patrik/agent-harness.git
+    ).toBe(`[submodule "packages/agentos-harness"]
+\tpath = packages/agentos-harness
+\turl = https://github.com/marius-patrik/agentos-harness.git
 \tbranch = main
 `);
   });

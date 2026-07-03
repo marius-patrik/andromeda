@@ -1,40 +1,44 @@
-[submodule "packages/agent-harness"]
-	path = packages/agent-harness
-	url = https://github.com/marius-patrik/agent-harness.git
+[submodule "packages/agentos-harness"]
+	path = packages/agentos-harness
+	url = https://github.com/marius-patrik/agentos-harness.git
 	branch = main
-[submodule "packages/agi"]
-	path = packages/agi
+[submodule "agents/agi"]
+	path = agents/agi
 	url = https://github.com/marius-patrik/agi.git
 	branch = main
-[submodule "packages/skyblock-agent"]
-	path = packages/skyblock-agent
+[submodule "agents/skyblock-agent"]
+	path = agents/skyblock-agent
 	url = https://github.com/marius-patrik/skyblock-agent.git
 	branch = main
-[submodule "packages/vibe-bot"]
-	path = packages/vibe-bot
-	url = https://github.com/marius-patrik/vibe-bot.git
+[submodule "agents/dark-factory"]
+	path = agents/dark-factory
+	url = https://github.com/marius-patrik/dark-factory.git
 	branch = main
-[submodule "packages/templates/template-bot"]
-	path = packages/templates/template-bot
+[submodule "templates/template-bot"]
+	path = templates/template-bot
 	url = https://github.com/marius-patrik/template-bot.git
 	branch = main
-[submodule "packages/templates/template-cli"]
-	path = packages/templates/template-cli
+[submodule "templates/template-cli"]
+	path = templates/template-cli
 	url = https://github.com/marius-patrik/template-cli.git
 	branch = main
-[submodule "packages/templates/template-mono"]
-	path = packages/templates/template-mono
+[submodule "templates/template-mono"]
+	path = templates/template-mono
 	url = https://github.com/marius-patrik/template-mono.git
 	branch = main
-[submodule "packages/templates/template-repo"]
-	path = packages/templates/template-repo
+[submodule "templates/template-repo"]
+	path = templates/template-repo
 	url = https://github.com/marius-patrik/template-repo.git
 	branch = main
-[submodule "packages/templates/template-web"]
-	path = packages/templates/template-web
+[submodule "templates/template-web"]
+	path = templates/template-web
 	url = https://github.com/marius-patrik/template-web.git
 	branch = main
-[submodule "packages/singularity"]
-	path = packages/singularity
+[submodule "apps/singularity"]
+	path = apps/singularity
 	url = https://github.com/marius-patrik/singularity.git
+	branch = main
+[submodule "agents/rommie"]
+	path = agents/rommie
+	url = https://github.com/marius-patrik/rommie.git
 	branch = main

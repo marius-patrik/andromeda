@@ -1,8 +1,8 @@
-# Agent OS / Agent Package Manager PRD
+# Agentos / Agentos Manager PRD
 
 ## Overview
 
-`agent-os` is a workspace for managing agent packages. Its `agents` CLI is a Bun TypeScript package manager that installs and tracks agent repos, CLI adapters, skills, plugins, and shared runtime state so every managed CLI sees the same installed capabilities and credit store.
+`agentos` is a workspace for managing agent packages. Its `agents` CLI is a Bun TypeScript package manager that installs and tracks agent repos, app repos, templates, CLI adapters, skills, plugins, and shared runtime state so every managed CLI sees the same installed capabilities and credit store.
 
 ## Goals
 
@@ -30,11 +30,11 @@
 ## Core Concepts
 
 - Package: a git submodule or local package managed by `agents`.
-- Harness: a managed runtime package, such as Agent Harness, launched by `agents`.
+- Harness: a managed runtime package, such as Agentos Harness, launched by `agents`.
 - CLI adapter: the shared rooting and credential contract for a vendor CLI.
 - Shared state: the root `.agents` directory.
-- Core package: the CLI implementation and tests under `packages/agent-package-manager`.
-- Managed package checkout: a git-backed package under `packages/<name>`.
+- Core package: the CLI implementation and tests under `packages/agentos-manager`.
+- Managed checkout: a git-backed package under `packages/<name>`, agent under `agents/<name>`, app under `apps/<name>`, or template under `templates/<name>`.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
 - Skill install: files installed under `.agents/skills/<name>`.
 - Plugin install: files installed under `.agents/plugins/<name>`.
@@ -60,20 +60,23 @@
 
 ```text
 packages/
-  agent-package-manager/
+  agentos-manager/
     src/
     test/
+  agentos-harness/
+agents/
   agi/
-  agent-harness/
-  singularity/
+  dark-factory/
+  rommie/
   skyblock-agent/
-  templates/
-    template-bot/
-    template-cli/
-    template-mono/
-    template-repo/
-    template-web/
-  vibe-bot/
+apps/
+  singularity/
+templates/
+  template-bot/
+  template-cli/
+  template-mono/
+  template-repo/
+  template-web/
 ```
 
 ## State Layout
@@ -101,7 +104,7 @@ Harnesses declare an `agent.package.json` manifest:
 ```json
 {
   "schemaVersion": 1,
-  "id": "agent-harness",
+  "id": "agentos-harness",
   "kind": "harness",
   "entry": "go run ./cmd/rommie",
   "workingDirectory": "services/cli",

@@ -8,5 +8,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["packages/agent-package-manager/src/**/*.ts", "packages/agent-package-manager/test/**/*.ts"]
+  "include": ["packages/agentos-manager/src/**/*.ts", "packages/agentos-manager/test/**/*.ts"]
 }
