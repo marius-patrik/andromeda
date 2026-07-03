@@ -1,4 +1,4 @@
-# Agentos / Agentos Manager PRD
+# Agentos / Agents Manager PRD
 
 ## Overview
 
@@ -67,9 +67,9 @@
 ```text
 
   os/agents-core/
-  agentos-gateway/
-  agentos-inferer/
-  agents-manager/
+  llm-gateway/
+  inference-engine/
+  os/os/agents-manager/
     src/
     test/
   data/
@@ -77,7 +77,7 @@
   agents/
     darkfactory-agent/
     life-support/
-    rommie-agent/
+    
     skyblock-agent/
   apps/
     fabrica/
@@ -122,7 +122,7 @@ Harnesses declare an `agent.package.json` manifest:
   "schemaVersion": 1,
   "id": "andromeda-harness",
   "kind": "harness",
-  "entry": "go run ./cmd/rommie",
+  "entry": "go run ./cmd/andromeda",
   "workingDirectory": "services/cli",
   "requires": {
     "clis": ["codex", "claude", "kimi", "agy"],
@@ -181,6 +181,8 @@ CI runs on pushes and pull requests to `main`:
 5. Per-CLI adapter contracts for consuming shared state.
 6. Harness package install, doctor, and run commands.
 7. Andromeda Harness bridge through `AGENTS_HOME`.
+
+
 
 
 

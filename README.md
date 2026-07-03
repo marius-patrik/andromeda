@@ -21,25 +21,25 @@ agents doctor
 
 ## Layout
 
-- `os/agents-core` contains shared proto contracts, generated clients, schemas, and contract docs.
-- `llm-gateway` contains the OpenAI-format LLM gateway, model registry routing, fallback, switchers, quota, OAuth seams, and tests.
-- `inference-engine` contains the Python agent loop, Go runtime services, engine work, deploy assets, and inference architecture.
-- `os/agents-manager` contains the `agents` CLI source and tests.
-- `harnesses/andromeda-harness` contains the managed Rommie runtime harness.
-- `agents/darkfactory-agent`, `agents/life-support`, `agents/rommie-agent`, and
-  `agents/skyblock-agent` are managed agent submodules.
+- `os/agents-core` is a submodule containing shared proto contracts, generated clients, schemas, and contract docs.
+- `os/agents-manager` is a submodule containing the `agents` CLI source and tests.
+- `llm-gateway` is a submodule containing the OpenAI-format LLM gateway, model registry routing, fallback, switchers, quota, OAuth seams, and tests.
+- `inference-engine` is a submodule containing the Python agent loop, Go runtime services, engine work, deploy assets, and inference architecture.
+- `plugins/andromeda` is the Andromeda Codex plugin submodule.
+- `plugins/dream` is the Dream plugin submodule.
+- `harnesses/andromeda-harness` contains the managed Andromeda runtime harness.
+- `agents/darkfactory-agent`, `agents/life-support`, and `agents/skyblock-agent` are managed agent submodules.
 - `apps/singularity` contains the managed Singularity app.
 - `apps/fabrica` contains the managed Fabrica app workspace.
 - `templates/darkfactory-templates` contains the Bun templates monorepo and nested template submodules.
 - `data/data-agentos` contains the private AgentOS managed data repository and migrated non-code material.
 - `workspaces/darkfactory-workspace` contains the lightweight DarkFactory workspace package that points at `agentos-data`.
-- `plugins/dream` is the local plugin package for Dream.
 
 ## Commands
 
 - `agents list [--json]` lists registered packages from `.gitmodules`.
 - `agents info <name-or-path> [--json]` shows package metadata.
-- `agents add <name> <git-url> [--kind agent|app|data|package|template|workspace|harness|cli] [--branch main]` adds a git-backed package.
+- `agents add <name> <git-url> [--kind agent|app|data|package|template|workspace|harness|cli|plugin] [--branch main]` adds a git-backed package.
 - `agents remove <name-or-path>` removes a package submodule.
 - `agents sync` syncs and initializes submodules.
 - `agents state init` initializes shared runtime state.
@@ -69,8 +69,3 @@ runtime state:
 - `.agents/env` exports the paths every CLI should consume.
 
 See [PRD.md](PRD.md).
-
-
-
-
-
