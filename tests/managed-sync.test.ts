@@ -11,13 +11,18 @@ import type { ManagedFile } from "../src/managed-files.js";
 
 test("managedSetupPullRequestBody lists changed files and documents workspace-owned project state", () => {
   const body = managedSetupPullRequestBody([
+    "AGENTS.md",
     ".agents/.global/VERSION",
+    ".github/workflows/ci.yml",
     ".github/workflows/dark-factory-bootstrap.yml"
   ]);
 
+  assert.match(body, /AGENTS\.md/);
   assert.match(body, /\.agents\/\.global\/VERSION/);
+  assert.match(body, /\.github\/workflows\/ci\.yml/);
   assert.match(body, /\.github\/workflows\/dark-factory-bootstrap\.yml/);
   assert.match(body, /\.agents\/.project` is managed only when a repo-specific workspace overlay exists/);
+  assert.match(body, /labels, branching, installer, auto-updater, and release baseline/);
   assert.match(body, /dark-factory-autoupdate\.yml/);
   assert.match(body, /dark-factory-release\.yml/);
 });
@@ -72,7 +77,9 @@ test("ensureManagedRepositorySetup creates a managed PR when files are missing",
     }
   };
   const files: ManagedFile[] = [
+    { path: "AGENTS.md", content: "# Agent Entry Point\n" },
     { path: ".agents/.global/VERSION", content: "darkfactory-agent@1.0.0\n" },
+    { path: ".github/workflows/ci.yml", content: "name: CI\n" },
     { path: ".github/workflows/dark-factory-bootstrap.yml", content: "name: Dark Factory Bootstrap\n" }
   ];
 
@@ -84,7 +91,9 @@ test("ensureManagedRepositorySetup creates a managed PR when files are missing",
 
   assert.equal(result.status, "created");
   assert.deepEqual(result.changedPaths, [
+    "AGENTS.md",
     ".agents/.global/VERSION",
+    ".github/workflows/ci.yml",
     ".github/workflows/dark-factory-bootstrap.yml"
   ]);
   assert.equal(result.pullRequestUrl, "https://github.com/marius-patrik/example/pull/1");

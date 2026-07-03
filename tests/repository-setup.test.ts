@@ -16,7 +16,9 @@ test("expectedManagedFolderVersion uses the darkfactory-agent prefix", () => {
 test("checkRepositorySetup returns no comment when managed setup is current", async () => {
   const report = await checkRepositorySetup(
     createRequester({
+      "AGENTS.md": "# Agent Entry Point\n",
       ".agents/.global/VERSION": "darkfactory-agent@1.2.3\n",
+      ".github/workflows/ci.yml": "name: CI\n",
       ".github/workflows/dark-factory-bootstrap.yml": "name: Dark Factory Bootstrap\n",
       ".github/workflows/dark-factory-autoupdate.yml": "name: DarkFactory Auto Update\n",
       ".github/workflows/dark-factory-release.yml": "name: DarkFactory Release\n",
@@ -25,8 +27,11 @@ test("checkRepositorySetup returns no comment when managed setup is current", as
       ".github/codex-review.schema.json": "{}\n",
       ".github/scripts/run-codex-review.sh": "#!/usr/bin/env bash\n",
       ".github/scripts/dark-factory-release-check.mjs": "#!/usr/bin/env node\n",
+      ".darkfactory/branching-policy.md": "# Branching\n",
+      ".darkfactory/labels.json": "{}\n",
       ".darkfactory/managed-repository.json": "{}\n",
       ".darkfactory/installer-policy.json": "{}\n",
+      ".darkfactory/release-conventions.md": "# Release\n",
       ".darkfactory/release-policy.json": "{}\n"
     }),
     { owner: "marius-patrik", repo: "example", ref: "abc123" },
@@ -52,7 +57,9 @@ test("checkRepositorySetup reports stale agents and missing github bootstrap", a
   assert.equal(report.bootstrapPaths[0]?.status, "missing");
   assert.ok(comment?.includes(REPOSITORY_SETUP_COMMENT_MARKER));
   assert.ok(comment?.includes("darkfactory-agent@1.2.3"));
+  assert.ok(comment?.includes("AGENTS.md"));
   assert.ok(comment?.includes(".agents/.global/VERSION"));
+  assert.ok(comment?.includes(".github/workflows/ci.yml"));
   assert.ok(comment?.includes(".github/workflows/dark-factory-bootstrap.yml"));
   assert.ok(comment?.includes(".github/workflows/dark-factory-autoupdate.yml"));
   assert.ok(comment?.includes(".github/workflows/dark-factory-release.yml"));
