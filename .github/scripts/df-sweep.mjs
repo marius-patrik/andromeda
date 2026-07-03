@@ -267,11 +267,15 @@ async function listOpenPullRequests(repository) {
 }
 
 function isWorkerPullRequest(pull) {
-  const author = pull.author?.login || "";
+  const provenance = `${pull.title || ""}\n${pull.body || ""}`;
   return (
-    pull.headRefName?.startsWith("df/") ||
-    /darkfactory/i.test(pull.body || "") ||
-    /bot$|\[bot\]$/i.test(author)
+    pull.headRefName?.startsWith("df/") &&
+    (
+      /DarkFactory Worker Summary/.test(provenance) ||
+      /<!--\s*dark-factory:/i.test(provenance) ||
+      /\bDarkFactory\b/i.test(provenance) ||
+      /\bDark Factory\b/i.test(provenance)
+    )
   );
 }
 
