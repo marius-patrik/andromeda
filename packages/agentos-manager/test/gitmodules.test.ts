@@ -23,15 +23,15 @@ describe("gitmodules", () => {
     expect(
       serializeGitmodules([
         {
-          name: "packages/agentos-harness",
-          path: "packages/agentos-harness",
-          url: "https://github.com/marius-patrik/agentos-harness.git",
+          name: "harnesses/andromeda-harness",
+          path: "harnesses/andromeda-harness",
+          url: "https://github.com/marius-patrik/andromeda-harness.git",
           branch: "main",
         },
       ]),
-    ).toBe(`[submodule "packages/agentos-harness"]
-\tpath = packages/agentos-harness
-\turl = https://github.com/marius-patrik/agentos-harness.git
+    ).toBe(`[submodule "harnesses/andromeda-harness"]
+\tpath = harnesses/andromeda-harness
+\turl = https://github.com/marius-patrik/andromeda-harness.git
 \tbranch = main
 `);
   });

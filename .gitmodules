@@ -1,10 +1,10 @@
-[submodule "packages/agentos-harness"]
-	path = packages/agentos-harness
-	url = https://github.com/marius-patrik/agentos-harness.git
+[submodule "harnesses/andromeda-harness"]
+	path = harnesses/andromeda-harness
+	url = https://github.com/marius-patrik/andromeda-harness.git
 	branch = main
-[submodule "agents/agi"]
-	path = agents/agi
-	url = https://github.com/marius-patrik/agi.git
+[submodule "agents/life-support"]
+	path = agents/life-support
+	url = https://github.com/marius-patrik/life-support.git
 	branch = main
 [submodule "agents/skyblock-agent"]
 	path = agents/skyblock-agent
@@ -38,9 +38,9 @@
 	path = apps/singularity
 	url = https://github.com/marius-patrik/singularity.git
 	branch = main
-[submodule "agents/rommie"]
-	path = agents/rommie
-	url = https://github.com/marius-patrik/rommie.git
+[submodule "agents/rommie-agent"]
+	path = agents/rommie-agent
+	url = https://github.com/marius-patrik/rommie-agent.git
 	branch = main
 [submodule "workspace"]
 	path = workspace

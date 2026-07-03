@@ -105,7 +105,11 @@ async function exists(file: string): Promise<boolean> {
 }
 
 async function findBinary(names: string[]): Promise<string | null> {
-  const pathDirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const pathValue =
+    process.platform === "win32"
+      ? [process.env.PATH, process.env.Path].filter((value): value is string => Boolean(value)).join(path.delimiter)
+      : (process.env.PATH ?? "");
+  const pathDirs = pathValue.split(path.delimiter).filter(Boolean);
   const extensions = process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];
   for (const name of names) {
     for (const dir of pathDirs) {

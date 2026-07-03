@@ -1,4 +1,6 @@
 node_modules/
 
 .agents/*
-!.agents/.gitkeep
+__pycache__/
+.pytest_cache/
+.venv/

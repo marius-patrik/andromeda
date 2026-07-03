@@ -30,11 +30,14 @@
 ## Core Concepts
 
 - Package: a git submodule or local package managed by `agents`.
-- Harness: a managed runtime package, such as Agentos Harness, launched by `agents`.
+- Harness: a managed runtime package, such as Andromeda Harness, launched by `agents`.
 - CLI adapter: the shared rooting and credential contract for a vendor CLI.
 - Shared state: the root `.agents` directory.
-- Core package: the CLI implementation and tests under `packages/agentos-manager`.
-- Managed checkout: a git-backed package under `packages/<name>`, agent under `agents/<name>`, app under `apps/<name>`, template under `templates/<name>`, or private workspace under `workspace`.
+- Core package: shared contracts and generated clients under `packages/agentos-core`.
+- Gateway package: OpenAI-format model gateway and registry routing under `packages/agentos-gateway`.
+- Inferer package: agent loop, runtime services, engine work, and deploy assets under `packages/agentos-inferer`.
+- Manager package: the CLI implementation and tests under `packages/agentos-manager`.
+- Managed checkout: a git-backed package under `packages/<name>`, harness under `harnesses/<name>`, agent under `agents/<name>`, app under `apps/<name>`, template under `templates/<name>`, or private workspace under `workspace`.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
 - Skill install: files installed under `.agents/skills/<name>`.
 - Plugin install: files installed under `.agents/plugins/<name>`.
@@ -60,14 +63,18 @@
 
 ```text
 packages/
+  agentos-core/
+  agentos-gateway/
+  agentos-inferer/
   agentos-manager/
     src/
     test/
-  agentos-harness/
+harnesses/
+  andromeda-harness/
 agents/
-  agi/
   dark-factory/
-  rommie/
+  life-support/
+  rommie-agent/
   skyblock-agent/
 apps/
   singularity/
@@ -105,7 +112,7 @@ Harnesses declare an `agent.package.json` manifest:
 ```json
 {
   "schemaVersion": 1,
-  "id": "agentos-harness",
+  "id": "andromeda-harness",
   "kind": "harness",
   "entry": "go run ./cmd/rommie",
   "workingDirectory": "services/cli",
@@ -146,4 +153,4 @@ CI runs on pushes and pull requests to `main`:
 4. Credit store schema and update commands.
 5. Per-CLI adapter contracts for consuming shared state.
 6. Harness package install, doctor, and run commands.
-7. Agent Harness bridge through `AGENTS_HOME`.
+7. Andromeda Harness bridge through `AGENTS_HOME`.

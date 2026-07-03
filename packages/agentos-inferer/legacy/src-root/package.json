@@ -1,0 +1,13 @@
+{
+  "name": "andromeda-runtime",
+  "version": "3.0.44",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "scripts": {
+    "validate": "echo \"andromeda runtime has no Bun workspace validation\""
+  },
+  "devDependencies": {
+    "playwright": "^1.60.0"
+  }
+}
