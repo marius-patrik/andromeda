@@ -18,6 +18,7 @@ on:
     types:
       - closed
 permissions:
+  actions: read
   contents: read
 
 jobs:
