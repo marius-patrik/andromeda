@@ -42,6 +42,8 @@ jobs:
         with:
           repository: marius-patrik/darkfactory-agent
           ref: dev
+          path: darkfactory-control
+          persist-credentials: false
 
       - name: Mint mp-agents installation token
         if: ${{ github.event_name != 'pull_request_target' }}
@@ -64,4 +66,4 @@ jobs:
         shell: bash
         run: |
           export GITHUB_EVENT_PAYLOAD="$(cat "$GITHUB_EVENT_PATH")"
-          node .github/scripts/df-sweep.mjs
+          node darkfactory-control/.github/scripts/df-sweep.mjs
