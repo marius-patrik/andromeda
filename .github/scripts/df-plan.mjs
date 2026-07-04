@@ -122,6 +122,7 @@ async function reconcileTargetRepository() {
   });
 
   for (const issue of staleMarkedIssues) {
+    await setIssueLabels(TARGET_REPO, issue.number, []);
     await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues/${issue.number}/comments`, {
       body: "DarkFactory L4 planning closed this issue because its `df-prd:` marker is no longer present in the root PRD."
     });
@@ -171,9 +172,17 @@ async function setIssueLabels(repository, issueNumber, labels) {
   const currentNames = new Set(
     (current.labels || []).map((label) => typeof label === "string" ? label : label.name).filter(Boolean)
   );
-  const classLabels = ["df:class:mechanical", "df:class:standard", "df:class:hard"];
-  const priorityLabels = ["P0", "P1", "P2"];
-  const remove = [...classLabels, ...priorityLabels].filter((label) => currentNames.has(label) && !labels.includes(label));
+  const reconciledLabels = [
+    "df:class:mechanical",
+    "df:class:standard",
+    "df:class:hard",
+    "df:prd-drift",
+    "roadmap",
+    "P0",
+    "P1",
+    "P2"
+  ];
+  const remove = reconciledLabels.filter((label) => currentNames.has(label) && !labels.includes(label));
   const add = labels.filter((label) => !currentNames.has(label));
 
   if (add.length) {

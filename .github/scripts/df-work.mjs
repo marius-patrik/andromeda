@@ -72,11 +72,11 @@ async function main() {
   let pullRequest = null;
 
   try {
-    await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:running"], ["df:ready", "df:blocked", "df:done"]);
     const repo = await getRepository(gh, TARGET_REPO);
     const workBaseBranch = await resolveWorkBaseBranch(TARGET_REPO, repo.default_branch);
     const mergePolicy = await preflightMergePolicy(TARGET_REPO, workBaseBranch, repo);
     ledger.actions.push({ action: "preflight-merge-policy", result: mergePolicy });
+    await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:running"], ["df:ready", "df:blocked", "df:done"]);
     await createIssueComment(
       TARGET_REPO,
       TARGET_ISSUE_NUMBER,
@@ -151,7 +151,7 @@ async function main() {
   } catch (error) {
     ledger.status = "blocked";
     ledger.error = sanitize(error.stack || error.message || String(error), TOKEN);
-    await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:blocked"], ["df:running"]);
+    await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:blocked"], ["df:ready", "df:running", "df:done"]);
     await createIssueComment(
       TARGET_REPO,
       TARGET_ISSUE_NUMBER,

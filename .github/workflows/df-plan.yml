@@ -31,11 +31,19 @@ jobs:
       }}
 
     steps:
-      - name: Checkout DarkFactory
+      - name: Checkout DarkFactory from this repository
+        if: ${{ github.repository == 'marius-patrik/darkfactory-agent' }}
+        uses: actions/checkout@v4
+        with:
+          path: darkfactory-control
+          persist-credentials: false
+
+      - name: Checkout released DarkFactory control
+        if: ${{ github.repository != 'marius-patrik/darkfactory-agent' }}
         uses: actions/checkout@v4
         with:
           repository: marius-patrik/darkfactory-agent
-          ref: dev
+          ref: ${{ vars.DARK_FACTORY_CONTROL_REF || 'main' }}
           path: darkfactory-control
           persist-credentials: false
 
