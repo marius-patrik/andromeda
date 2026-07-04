@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const repos = [
@@ -63,7 +63,7 @@ for (const repo of repos) {
   // exists, make sure it is a directory and not a file that would be clobbered
   // by managed sync.
   const projectOverlayPath = join(repo.path, ".agents", ".project");
-  if (existsSync(projectOverlayPath) && !existsSync(join(projectOverlayPath, "."))) {
+  if (existsSync(projectOverlayPath) && !statSync(projectOverlayPath).isDirectory()) {
     stale.push(".agents/.project exists but is not a directory");
   }
 
