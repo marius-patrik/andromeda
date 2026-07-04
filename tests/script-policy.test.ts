@@ -215,6 +215,14 @@ test("df-sweep marks blocked worker issues when follow-through cannot merge", as
   assert.match(source, /dark-factory:sweep-blocked/);
 });
 
+test("df-sweep dev-merge backstop preserves REST merged_at in normalized PRs", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /const mergedAt = pull\.merged_at \|\| null/);
+  assert.match(source, /mergedAt\s*\n\s*\};/);
+  assert.match(source, /if \(!normalized\.mergedAt \|\| normalized\.baseRefName !== "dev"/);
+});
+
 test("df-work cleanup remains a warning path after successful PR handoff", async () => {
   const source = await readFile(new URL("../.github/scripts/df-work.mjs", import.meta.url), "utf8");
   const successBeforeFinally = /ledger\.status = "success";[\s\S]+finally \{/.test(source);

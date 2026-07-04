@@ -415,6 +415,9 @@ async function listOpenPullRequests(repository) {
 }
 
 function normalizeRestPullRequest(pull) {
+  // Preserve the REST merged_at field so the dev-merge closure backstop can
+  // distinguish merged PRs from merely closed ones.
+  const mergedAt = pull.merged_at || null;
   return {
     number: pull.number,
     title: pull.title,
@@ -427,7 +430,7 @@ function normalizeRestPullRequest(pull) {
       owner: { login: pull.head?.repo?.owner?.login || "" }
     },
     baseRefName: pull.base?.ref || "",
-    mergedAt: pull.merged_at || null
+    mergedAt
   };
 }
 
