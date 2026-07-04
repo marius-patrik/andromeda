@@ -61,14 +61,16 @@ jobs:
         run: |
           // Pin to an immutable SHA on marius-patrik/darkfactory-agent main so
           // managed repositories cannot execute repo-local worker scripts.
-          const res = await fetch('https://api.github.com/repos/marius-patrik/darkfactory-agent/commits/main');
-          if (!res.ok) throw new Error(`Failed to resolve canonical control ref: ${res.status}`);
-          const sha = (await res.json()).sha;
-          if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/i.test(sha)) {
-            throw new Error('Could not resolve canonical DarkFactory control ref.');
-          }
-          const fs = require('node:fs');
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
+          (async () => {
+            const res = await fetch('https://api.github.com/repos/marius-patrik/darkfactory-agent/commits/main');
+            if (!res.ok) throw new Error(`Failed to resolve canonical control ref: ${res.status}`);
+            const sha = (await res.json()).sha;
+            if (typeof sha !== 'string' || !/^[0-9a-f]{40}$/i.test(sha)) {
+              throw new Error('Could not resolve canonical DarkFactory control ref.');
+            }
+            const fs = await import('node:fs');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
+          })();
 
       - name: Checkout DarkFactory control scripts
         uses: actions/checkout@v4
