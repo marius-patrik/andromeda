@@ -118,12 +118,17 @@ async function reconcileTargetRepository() {
     const body = prdIssueBody(item, blockedBy);
 
     if (!existing) {
+      // Create the issue without the df:ready label; add it in a separate call so
+      // GitHub emits a trusted `issues:labeled` event that the L3 worker trigger
+      // can react to.
+      const createLabels = labels.filter((label) => label !== "df:ready");
       const created = await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues`, {
         title: item.title,
         body,
-        labels
+        labels: createLabels
       });
-      ledger.actions.push({ action: "create-issue", marker: item.marker, issue: issueRef(created) });
+      await setIssueLabels(TARGET_REPO, created.number, labels);
+      ledger.actions.push({ action: "create-issue", marker: item.marker, issue: issueRef(created), labels });
       previousOpenIssueNumber = created.number;
       continue;
     }

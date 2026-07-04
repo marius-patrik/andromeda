@@ -92,8 +92,31 @@ jobs:
       # darkfactory-agent. PRD-edit triggers download the same pinned scripts via
       # the public raw API so the repository token can reconcile issues without
       # needing cross-repo checkout rights and without running repo-local code.
+      - name: Check canonical planner availability
+        id: canonical-check
+        shell: node {0}
+        run: |
+          // Managed repositories receive this workflow file before the canonical
+          // control branch may contain the matching planner scripts. Verify the
+          // pinned SHA actually has the files; otherwise skip the run safely.
+          (async () => {
+            const sha = '${{ steps.control-ref.outputs.sha }}';
+            const controlRoot = `https://raw.githubusercontent.com/marius-patrik/darkfactory-agent/${sha}`;
+            const files = ['.github/scripts/df-lib.mjs', '.github/scripts/df-plan.mjs'];
+            const fs = await import('node:fs');
+            for (const file of files) {
+              const res = await fetch(`${controlRoot}/${file}`, { method: 'HEAD' });
+              if (!res.ok) {
+                console.log(`Canonical ${file} is not available at ${sha}; skipping PRD-edit planning.`);
+                fs.appendFileSync(process.env.GITHUB_OUTPUT, 'available=false\n');
+                return;
+              }
+            }
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, 'available=true\n');
+          })();
+
       - name: Checkout DarkFactory control scripts
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && steps.canonical-check.outputs.available == 'true'
         uses: actions/checkout@v4
         with:
           repository: marius-patrik/darkfactory-agent
@@ -102,7 +125,7 @@ jobs:
           persist-credentials: false
 
       - name: Download canonical DarkFactory scripts
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.canonical-check.outputs.available == 'true'
         shell: node {0}
         run: |
           // PRD-edit triggers always run the pinned canonical scripts, never the
@@ -136,6 +159,7 @@ jobs:
           owner: marius-patrik
 
       - name: Run planner
+        if: steps.canonical-check.outputs.available == 'true'
         env:
           DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           DF_CONTROL_REPO: marius-patrik/darkfactory-agent
