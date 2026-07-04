@@ -43,9 +43,12 @@ export function repoName(repository) {
   return `${repository.owner}/${repository.repo}`;
 }
 
+export function isParkedRepo(repository) {
+  return PARKED_REPOS.has(repoName(repository).toLowerCase());
+}
+
 export function assertAllowedRepo(repository) {
-  const name = repoName(repository).toLowerCase();
-  if (PARKED_REPOS.has(name)) {
+  if (isParkedRepo(repository)) {
     throw new Error(`Refusing to touch parked repository: ${repoName(repository)}`);
   }
 }

@@ -5,6 +5,7 @@ import {
   checksSummary,
   createGithubClient,
   extractClosingIssueNumbers,
+  isParkedRepo,
   parseRepo,
   repoName,
   requiredEnv,
@@ -47,6 +48,11 @@ async function main() {
   };
 
   for (const repository of repos) {
+    if (isParkedRepo(repository)) {
+      ledger.actions.push({ repo: repoName(repository), action: "skip", reason: "parked" });
+      continue;
+    }
+
     if (excluded.has(repoName(repository).toLowerCase())) {
       ledger.actions.push({ repo: repoName(repository), action: "skip", reason: "excluded" });
       continue;

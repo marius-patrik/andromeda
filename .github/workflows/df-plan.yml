@@ -25,10 +25,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Validate trusted control ref
+        if: ${{ github.repository == 'marius-patrik/darkfactory-agent' }}
+        shell: bash
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            main|dev) ;;
+            *)
+              echo "::error::DarkFactory privileged planning can only run from main or dev."
+              exit 1
+              ;;
+          esac
+
       - name: Checkout DarkFactory from this repository
         if: ${{ github.repository == 'marius-patrik/darkfactory-agent' }}
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref_name }}
           path: darkfactory-control
           persist-credentials: false
 

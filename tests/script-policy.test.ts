@@ -10,6 +10,7 @@ const {
   checksAreGreen,
   cleanupTempRoot,
   extractClosingIssueNumbers,
+  isParkedRepo,
   parsePrdItems,
   prdIssueBody,
   taskClassFromLabels
@@ -93,6 +94,8 @@ test("extractClosingIssueNumbers deduplicates close references", () => {
 });
 
 test("parked repositories include the current owner exclusions", () => {
+  assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "skyblock-agent" }), true);
+  assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "fabrica" }), true);
   assert.throws(() => assertAllowedRepo({ owner: "marius-patrik", repo: "singularity" }), /parked/);
   assert.throws(() => assertAllowedRepo({ owner: "marius-patrik", repo: "life-support" }), /parked/);
 });
@@ -100,6 +103,7 @@ test("parked repositories include the current owner exclusions", () => {
 test("df-sweep dev-merge closure uses worker PR provenance instead of issue labels or comments", async () => {
   const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
 
+  assert.match(source, /reason: "parked"/);
   assert.match(source, /if \(!isWorkerPullRequest\(pull, repository\)\)/);
   assert.doesNotMatch(source, /issueWasOpenedByDarkFactoryWorker/);
   assert.match(source, /dark-factory:worker-pr\\s\+issue=/);
@@ -136,6 +140,19 @@ test("df-plan workflow avoids push-triggered write-token execution", async () =>
   assert.doesNotMatch(workflow, /^\s+push:\s*$/m);
   assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
   assert.match(workflow, /^\s+schedule:\s*$/m);
+  assert.match(workflow, /Validate trusted control ref/);
+  assert.match(workflow, /main\|dev/);
+});
+
+test("df-follow-through workflow validates trusted refs before privileged tokens", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-follow-through.yml", import.meta.url), "utf8");
+  const gate = workflow.indexOf("Validate trusted control ref");
+  const token = workflow.indexOf("Mint mp-agents installation token");
+
+  assert.notEqual(gate, -1);
+  assert.notEqual(token, -1);
+  assert.ok(gate < token);
+  assert.match(workflow, /main\|dev/);
 });
 
 test("df-work records auto-merge support during merge-policy preflight", async () => {

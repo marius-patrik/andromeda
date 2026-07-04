@@ -10,6 +10,7 @@ import {
   findPrdMarker,
   getOptionalFileContent,
   getRepository,
+  isParkedRepo,
   listIssues,
   parsePrdItems,
   parseRepo,
@@ -204,7 +205,7 @@ async function targetRepositories() {
     }
     return repositories
       .map((repo) => parseRepo(repo.full_name))
-      .filter((repo) => repo.owner === CONTROL_REPO.owner);
+      .filter((repo) => repo.owner === CONTROL_REPO.owner && !isParkedRepo(repo));
   } catch {
     return [CONTROL_REPO];
   }
