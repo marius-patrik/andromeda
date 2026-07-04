@@ -156,7 +156,7 @@ async function closeDevMergeIssuesFromEnv() {
   const payload = JSON.parse(process.env.GITHUB_EVENT_PAYLOAD || "{}");
   const pull = payload.pull_request;
   const repositoryPayload = payload.repository;
-  if (!pull?.merged || pull.base?.ref !== "dev" || !repositoryPayload?.full_name) {
+  if (!(pull?.merged || pull?.merged_at) || pull.base?.ref !== "dev" || !repositoryPayload?.full_name) {
     console.log("No merged dev pull request in event payload.");
     return;
   }
