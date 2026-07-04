@@ -231,8 +231,9 @@ test("df-work cleanup remains a warning path after successful PR handoff", async
   const finallyBlock = source.slice(source.indexOf("finally {"));
 
   assert.equal(successBeforeFinally, true);
-  assert.match(source, /if \(pullRequest\) \{/);
-  assert.match(source, /action: "post-pr-warning"/);
+  assert.doesNotMatch(source, /action: "post-pr-warning"/);
+  assert.match(source, /if \(pullRequest\)/);
+  assert.match(source, /ledger\.pull_request = pullRequest\.html_url/);
   assert.match(finallyBlock, /const cleanup = await cleanupTempRoot/);
   assert.match(finallyBlock, /ledger\.cleanup = cleanup/);
   assert.doesNotMatch(finallyBlock, /throw\s+cleanup|if\s*\(\s*!cleanup\.ok/);
@@ -468,4 +469,14 @@ test("df-orchestrate claims ready issues before dispatching workers", async () =
   assert.notEqual(claimIndex, -1);
   assert.notEqual(dispatchIndex, -1);
   assert.ok(claimIndex < dispatchIndex);
+});
+
+test("df-orchestrate restores df:ready when workflow dispatch fails", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-orchestrate.mjs", import.meta.url), "utf8");
+
+  const dispatchIndex = source.indexOf("/actions/workflows/df-work.yml/dispatches");
+  const restoreIndex = source.indexOf("replaceIssueLabels(repository, issueNumber, [\"df:ready\"], [\"df:running\"])");
+  assert.notEqual(dispatchIndex, -1);
+  assert.notEqual(restoreIndex, -1);
+  assert.ok(dispatchIndex < restoreIndex);
 });

@@ -94,13 +94,20 @@ async function dispatchWorker(repository, issueNumber) {
   // Claim the issue before dispatch so a subsequent orchestrator tick cannot
   // re-dispatch the same ready issue while the worker workflow is starting.
   await replaceIssueLabels(repository, issueNumber, ["df:running"], ["df:ready"]);
-  await gh.request("POST", `/repos/${repoName(CONTROL_REPO)}/actions/workflows/df-work.yml/dispatches`, {
-    ref: "main",
-    inputs: {
-      repo: repoName(repository),
-      issue_number: String(issueNumber)
-    }
-  });
+  try {
+    await gh.request("POST", `/repos/${repoName(CONTROL_REPO)}/actions/workflows/df-work.yml/dispatches`, {
+      ref: "main",
+      inputs: {
+        repo: repoName(repository),
+        issue_number: String(issueNumber)
+      }
+    });
+  } catch (error) {
+    // Restore df:ready so the next orchestrator tick can retry; do not leave
+    // the issue stranded in df:running when dispatch failed.
+    await replaceIssueLabels(repository, issueNumber, ["df:ready"], ["df:running"]);
+    throw error;
+  }
 }
 
 async function replaceIssueLabels(repository, issueNumber, add, remove) {
