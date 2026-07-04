@@ -8,11 +8,20 @@ export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 export const GITHUB_BOOTSTRAP_WORKFLOW_PATH = ".github/workflows/dark-factory-bootstrap.yml";
 export const DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH = ".github/workflows/dark-factory-autoupdate.yml";
 export const DARK_FACTORY_RELEASE_WORKFLOW_PATH = ".github/workflows/dark-factory-release.yml";
+export const DARK_FACTORY_PLAN_WORKFLOW_PATH = ".github/workflows/df-plan.yml";
+export const DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH = ".github/workflows/df-follow-through.yml";
+export const DARK_FACTORY_ORCHESTRATE_WORKFLOW_PATH = ".github/workflows/df-orchestrate.yml";
+export const DARK_FACTORY_WORKFLOW_PATH = ".github/workflows/df-work.yml";
 export const CODEX_REVIEW_WORKFLOW_PATH = ".github/workflows/codex-review.yml";
 export const CODEX_REVIEW_DOCKERFILE_PATH = ".github/codex-review.Dockerfile";
 export const CODEX_REVIEW_SCHEMA_PATH = ".github/codex-review.schema.json";
 export const CODEX_REVIEW_SCRIPT_PATH = ".github/scripts/run-codex-review.sh";
 export const DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH = ".github/scripts/dark-factory-release-check.mjs";
+export const DARK_FACTORY_SCRIPT_LIB_PATH = ".github/scripts/df-lib.mjs";
+export const DARK_FACTORY_PLAN_SCRIPT_PATH = ".github/scripts/df-plan.mjs";
+export const DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH = ".github/scripts/df-orchestrate.mjs";
+export const DARK_FACTORY_SWEEP_SCRIPT_PATH = ".github/scripts/df-sweep.mjs";
+export const DARK_FACTORY_WORK_SCRIPT_PATH = ".github/scripts/df-work.mjs";
 export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".darkfactory/managed-repository.json";
 export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".darkfactory/installer-policy.json";
 export const DARK_FACTORY_RELEASE_POLICY_PATH = ".darkfactory/release-policy.json";
@@ -32,6 +41,17 @@ export interface ManagedRepositoryRef {
 
 const MANAGED_COMMON_DIRS = [".agents/.global", ".github", ".darkfactory"] as const;
 const MANAGED_COMMON_FILES = [AGENTS_ENTRYPOINT_PATH] as const;
+const PACKAGE_MANAGED_FILES = [
+  DARK_FACTORY_PLAN_WORKFLOW_PATH,
+  DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
+  DARK_FACTORY_ORCHESTRATE_WORKFLOW_PATH,
+  DARK_FACTORY_WORKFLOW_PATH,
+  DARK_FACTORY_SCRIPT_LIB_PATH,
+  DARK_FACTORY_PLAN_SCRIPT_PATH,
+  DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH,
+  DARK_FACTORY_SWEEP_SCRIPT_PATH,
+  DARK_FACTORY_WORK_SCRIPT_PATH
+] as const;
 const DATA_REPO_PATH_SEGMENTS = ["data", "data-agentos"] as const;
 const WORKSPACE_PATH_SEGMENTS = ["workspaces", "darkfactory-workspace"] as const;
 
@@ -51,6 +71,14 @@ export function readManagedFiles(repository?: ManagedRepositoryRef, root = resol
     }
   }
 
+  for (const filePath of PACKAGE_MANAGED_FILES) {
+    if (files.has(filePath)) continue;
+    const file = readManagedFile(resolveProjectRoot(), filePath);
+    if (file) {
+      files.set(file.path, file);
+    }
+  }
+
   if (repository) {
     const overlayPrefix = `repositories/${repository.owner}/${repository.repo}/`;
     const overlayRoot = resolve(root, overlayPrefix, ".agents", ".project");
@@ -65,10 +93,19 @@ export function readManagedFiles(repository?: ManagedRepositoryRef, root = resol
     }
   }
 
+  const missingRequired = requiredManagedFilePaths(root).filter((filePath) => !files.has(filePath));
+  if (missingRequired.length > 0) {
+    throw new Error(`Managed file source is missing required payloads: ${missingRequired.join(", ")}`);
+  }
+
   return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function requiredManagedFilePaths(): string[] {
+export function requiredManagedFilePaths(_root = resolveManagedWorkspaceRoot()): string[] {
+  // Package-managed workflow/script payloads are required unconditionally.
+  // readManagedFiles() falls back to the package root when a workspace overlay
+  // does not provide them, and throws if neither source exists. This keeps CI
+  // from silently omitting generated payloads when a source generator is missing.
   return [
     AGENTS_ENTRYPOINT_PATH,
     AGENTS_GLOBAL_VERSION_PATH,
@@ -76,6 +113,7 @@ export function requiredManagedFilePaths(): string[] {
     GITHUB_BOOTSTRAP_WORKFLOW_PATH,
     DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH,
     DARK_FACTORY_RELEASE_WORKFLOW_PATH,
+    ...PACKAGE_MANAGED_FILES,
     CODEX_REVIEW_WORKFLOW_PATH,
     CODEX_REVIEW_DOCKERFILE_PATH,
     CODEX_REVIEW_SCHEMA_PATH,

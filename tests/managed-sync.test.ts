@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   ensureManagedRepositorySetup,
@@ -7,7 +10,20 @@ import {
   MANAGED_SETUP_BRANCH,
   type GitHubRequester
 } from "../src/managed-sync.js";
-import type { ManagedFile } from "../src/managed-files.js";
+import {
+  DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
+  DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH,
+  DARK_FACTORY_ORCHESTRATE_WORKFLOW_PATH,
+  DARK_FACTORY_PLAN_SCRIPT_PATH,
+  DARK_FACTORY_PLAN_WORKFLOW_PATH,
+  DARK_FACTORY_SCRIPT_LIB_PATH,
+  DARK_FACTORY_SWEEP_SCRIPT_PATH,
+  DARK_FACTORY_WORKFLOW_PATH,
+  DARK_FACTORY_WORK_SCRIPT_PATH,
+  readManagedFiles,
+  requiredManagedFilePaths,
+  type ManagedFile
+} from "../src/managed-files.js";
 
 test("managedSetupPullRequestBody lists changed files and documents workspace-owned project state", () => {
   const body = managedSetupPullRequestBody([
@@ -104,4 +120,38 @@ test("ensureManagedRepositorySetup creates a managed PR when files are missing",
         call.parameters.ref === `refs/heads/${MANAGED_SETUP_BRANCH}`
     )
   );
+});
+
+test("readManagedFiles supplies every required package-managed payload", async () => {
+  const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
+  const packagePaths = new Set([
+    DARK_FACTORY_PLAN_WORKFLOW_PATH,
+    DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
+    DARK_FACTORY_ORCHESTRATE_WORKFLOW_PATH,
+    DARK_FACTORY_WORKFLOW_PATH,
+    DARK_FACTORY_SCRIPT_LIB_PATH,
+    DARK_FACTORY_PLAN_SCRIPT_PATH,
+    DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH,
+    DARK_FACTORY_SWEEP_SCRIPT_PATH,
+    DARK_FACTORY_WORK_SCRIPT_PATH
+  ]);
+
+  try {
+    const requiredPaths = requiredManagedFilePaths(root);
+    for (const filePath of requiredPaths) {
+      if (packagePaths.has(filePath)) continue;
+      const fullPath = join(root, ...filePath.split("/"));
+      await mkdir(dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, `${filePath}\n`);
+    }
+
+    const managedFiles = readManagedFiles(undefined, root);
+    const managedPaths = new Set(managedFiles.map((file) => file.path));
+
+    for (const filePath of requiredPaths) {
+      assert.equal(managedPaths.has(filePath), true, filePath);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

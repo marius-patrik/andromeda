@@ -1,6 +1,6 @@
 {
   "name": "darkfactory-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -9,7 +9,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "npm run typecheck && npm test && npm run build",
+    "check": "npm run typecheck && npm test && npm run check:actions && npm run build",
+    "check:actions": "node scripts/check-github-actions.mjs",
     "dev": "tsx watch src/cli.ts serve",
     "install:url": "tsx src/cli.ts install-url",
     "sync:managed": "tsx src/cli.ts sync-managed",
@@ -23,6 +24,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "js-yaml": "^4.1.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

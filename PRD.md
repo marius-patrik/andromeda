@@ -53,10 +53,10 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 
 ## User controls (all on GitHub)
 
-- Edit `PRD.md` → L4 replans the backlog.
-- Label an issue `df:ready` (or let L4 auto-ready sequenced work) → L3 picks it up.
-- Comment `/df run`, `/df plan`, `/df audit`, `/df pause`, `/df release` on issues/PRs → corresponding loop runs scoped to that repo/issue.
-- `workflow_dispatch` for manual wave starts.
+- Edit `PRD.md` → L4 replans the backlog (PRD-edit triggers run in the edited repository with the repository token).
+- Label an issue `df:ready` (or let L4 auto-ready sequenced work) → the issue is queued for L3 dispatch.
+- Comment `/df plan`, `/df audit`, `/df pause`, `/df release` on issues/PRs → the request is scoped to that repo/issue where a control-repository bridge exists.
+- `workflow_dispatch` for manual wave starts; until the webhook server is deployed, `/df run` is represented by `df:ready` plus the control-repository orchestrator dispatching L3 workers across managed repositories via `workflow_dispatch`, so app/Codex secrets stay out of managed-repo workflows.
 - Merge/close/comment exactly as on any repo — the bot treats human actions as authoritative.
 
 ## Milestones
@@ -73,6 +73,14 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 - Replacing GitHub-native review UX; the bot augments, never bypasses, gates.
 - A separate web dashboard — GitHub Projects/issues are the dashboard.
 - Webhook server before Actions-based loops are proven.
+
+## Merge and follow-through policy
+
+- Worker dispatch is only allowed when the target repository supports GitHub auto-merge; the worker preflight blocks before cloning/running Codex if it is disabled.
+- On protected branches, the follow-through sweep arms GitHub auto-merge and lets the branch protection gate complete the merge.
+- On unprotected branches, or when auto-merge cannot be armed because no required checks exist, the sweep may directly merge a green worker PR after verifying that all required status checks (if any) are present and passing and a short settle window has passed.
+- Direct merge on a worker PR with no checks configured is only allowed when the target repository is explicitly listed in the DarkFactory no-check allowlist; otherwise the PR is skipped so a missing CI configuration cannot silently bypass the gate.
+- Direct merge is never used as a bypass: red or missing required checks block the merge, and the worker issue is labeled `df:blocked`.
 
 ## Operating rules for workers
 
