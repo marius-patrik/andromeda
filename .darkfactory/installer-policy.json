@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "installer": {
-    "required": false,
+    "required": true,
     "paths": ["install/install.sh", "install/install.ps1"],
     "postInstallChecks": ["version", "doctor"],
     "notes": "CLI repos should provide platform installers and smoke them in their release scripts. Library, app, and documentation repos may leave installers absent."

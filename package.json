@@ -12,6 +12,7 @@
     "ci": "bun run typecheck && bun test && bun run build",
     "dev": "bun run src/index.ts",
     "start": "bun run dist/index.js",
+    "smoke:release": "bun test tests/install.test.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

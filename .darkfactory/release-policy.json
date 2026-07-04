@@ -4,8 +4,8 @@
     "packageManager": "auto",
     "required": {
       "validate": true,
-      "build": false,
-      "smoke": false
+      "build": true,
+      "smoke": true
     },
     "scripts": {
       "validate": ["ci", "check", "test"],
