@@ -232,10 +232,32 @@ test("df-work workflow only runs issue triggers from trusted actors", async () =
   assert.match(workflow, /OWNER/);
   assert.match(workflow, /COLLABORATOR/);
   assert.doesNotMatch(workflow, /"MEMBER"/);
-  assert.match(workflow, /github\.repository == 'marius-patrik\/darkfactory-agent'/);
+  assert.match(workflow, /github\.repository_owner == 'marius-patrik'/);
   assert.match(workflow, /github\.event\.label\.name == 'df:ready'/);
   assert.match(workflow, /github\.event\.sender\.login == 'github-actions\[bot\]'/);
   assert.match(workflow, /df-prd:/);
+});
+
+test("df-work workflow restricts workflow_dispatch to the control repository", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-work.yml", import.meta.url), "utf8");
+
+  assert.match(workflow, /workflow_dispatch/);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/darkfactory-agent'/);
+});
+
+test("df-work workflow downloads canonical scripts for managed-repo triggers", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-work.yml", import.meta.url), "utf8");
+
+  assert.match(workflow, /raw\.githubusercontent\.com/);
+  assert.match(workflow, /darkfactory-control\/\.github\/scripts\/df-work\.mjs/);
+  assert.doesNotMatch(workflow, /actions\/checkout/);
+});
+
+test("df-work workflow uses repository token for managed-repo issue/comment triggers", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-work.yml", import.meta.url), "utf8");
+
+  assert.match(workflow, /if:\s*github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /steps\.app-token\.outputs\.token \|\| github\.token/);
 });
 
 test("df-sweep waits before treating empty check rollups as no-checks-configured", async () => {
@@ -261,4 +283,31 @@ test("df-sweep requires explicit allowlist before merging PRs with no checks", a
   assert.match(source, /DF_ALLOW_NO_CHECK_REPOS/);
   assert.match(source, /NO_CHECK_ALLOWLIST/);
   assert.match(source, /no-checks-not-allowed/);
+});
+
+test("df-orchestrate workflow validates trusted refs before privileged tokens", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-orchestrate.yml", import.meta.url), "utf8");
+  const gate = workflow.indexOf("Validate trusted control ref");
+  const checkout = workflow.indexOf("Checkout DarkFactory from this repository");
+  const token = workflow.indexOf("Mint mp-agents installation token");
+
+  assert.notEqual(gate, -1);
+  assert.notEqual(checkout, -1);
+  assert.notEqual(token, -1);
+  assert.ok(gate < token);
+  assert.ok(checkout < token);
+  assert.match(workflow, /GITHUB_REPOSITORY/);
+  assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
+  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
+});
+
+test("df-orchestrate script skips parked repositories and dispatches via workflow_dispatch", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-orchestrate.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /if \(isParkedRepo\(target\)\) continue/);
+  assert.match(source, /\/repos\/\$\{repoName\(CONTROL_REPO\)\}\/actions\/workflows\/df-work\.yml\/dispatches/);
+  assert.match(source, /\/df-prd:/);
+  assert.match(source, /df:running/);
+  assert.match(source, /df:blocked/);
+  assert.match(source, /df:done/);
 });

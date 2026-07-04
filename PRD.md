@@ -54,9 +54,9 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 ## User controls (all on GitHub)
 
 - Edit `PRD.md` → L4 replans the backlog (PRD-edit triggers run in the edited repository with the repository token).
-- Label an issue `df:ready` (or let L4 auto-ready sequenced work) → the issue is ready for L3 dispatch.
-- Comment `/df run`, `/df plan`, `/df audit`, `/df pause`, `/df release` on issues/PRs → corresponding loop runs scoped to that repo/issue (`/df run` is restricted to repository owners/collaborators; until a webhook server is deployed, `workflow_dispatch` is the other privileged worker path).
-- `workflow_dispatch` for manual wave starts; until the webhook server is deployed, worker dispatch for managed repositories runs from the DarkFactory control repository via `workflow_dispatch` so app/Codex secrets stay out of managed-repo workflows.
+- Label an issue `df:ready` (or let L4 auto-ready sequenced work) → the issue is queued for L3 dispatch.
+- Comment `/df run`, `/df plan`, `/df audit`, `/df pause`, `/df release` on issues/PRs → the request is scoped to that repo/issue (`/df run` is restricted to repository owners/collaborators).
+- `workflow_dispatch` for manual wave starts; until the webhook server is deployed, the control-repository orchestrator dispatches L3 workers for ready issues across managed repositories via `workflow_dispatch` so app/Codex secrets stay out of managed-repo workflows.
 - Merge/close/comment exactly as on any repo — the bot treats human actions as authoritative.
 
 ## Milestones

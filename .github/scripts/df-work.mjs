@@ -74,10 +74,15 @@ async function main() {
 
   // Ensure work labels exist before any preflight failure path tries to apply
   // `df:blocked` to the issue, so the blocker comment is always left reliably.
-  await ensureLabels(gh, CONTROL_REPO, WORK_LABELS);
-  if (repoName(CONTROL_REPO) !== repoName(TARGET_REPO)) {
-    await ensureLabels(gh, TARGET_REPO, WORK_LABELS);
+  // The control repo labels are best-effort: issue/comment triggers in managed
+  // repositories run with the repository token, which cannot write to the
+  // control repository.
+  try {
+    await ensureLabels(gh, CONTROL_REPO, WORK_LABELS);
+  } catch (error) {
+    console.warn(`Could not ensure labels in ${repoName(CONTROL_REPO)}: ${sanitize(error.message || String(error), TOKEN)}`);
   }
+  await ensureLabels(gh, TARGET_REPO, WORK_LABELS);
 
   let mergePolicy;
 
