@@ -222,7 +222,7 @@ test("df-sweep dev-merge backstop preserves REST merged_at in normalized PRs", a
   assert.match(source, /mergedAt\s*\n\s*\};/);
   assert.match(source, /if \(!normalized\.mergedAt \|\| normalized\.baseRefName !== "dev"/);
   assert.match(source, /GET.*\/repos\/\$\{repoName\(repository\)\}\/pulls\/\$\{pull\.number\}/);
-  assert.match(source, /pull\.merged !== true/);
+  assert.doesNotMatch(source, /pull\.merged !== true/);
 });
 
 test("df-work cleanup remains a warning path after successful PR handoff", async () => {
@@ -444,7 +444,7 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /permission-actions:\s+write/);
-  assert.match(workflow, /permission-workflows:\s+write/);
+  assert.doesNotMatch(workflow, /permission-workflows:\s+write/);
   assert.match(workflow, /permission-contents:\s+write/);
   assert.match(workflow, /permission-issues:\s+write/);
 });

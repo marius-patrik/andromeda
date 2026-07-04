@@ -151,7 +151,7 @@ test("RunnerManager setup writes state without tokens and start records a detach
 
     assert.equal(configured.directory, runnerDirectory(root, repository));
     assert.equal(started.pid, 4242);
-    assert.equal(state.runners["marius-patrik/dream"].runnerName, "df-dream");
+    assert.equal(state.runners["marius-patrik/dream"].runnerName, runnerNameFor(repository));
     assert.equal(state.runners["marius-patrik/dream"].labels[0], RUNNER_LABEL);
     assert.equal(stateText.includes("registration-secret"), false);
     assert.equal(stateText.includes("removal-secret"), false);

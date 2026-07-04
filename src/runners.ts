@@ -360,11 +360,11 @@ export function parseRepositoryRef(value: string): RepositoryRef {
 }
 
 export function runnerNameFor(repository: RepositoryRef): string {
-  return `df-${sanitizeName(repository.repo)}`;
+  return `df-${sanitizeName(repository.owner)}-${sanitizeName(repository.repo)}`;
 }
 
 export function runnerDirectory(root: string, repository: RepositoryRef): string {
-  return join(root, sanitizeName(repository.repo));
+  return join(root, sanitizeName(repository.owner), sanitizeName(repository.repo));
 }
 
 export async function readRunnerState(root: string): Promise<RunnerState> {

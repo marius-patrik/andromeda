@@ -299,7 +299,11 @@ async function setIssueLabels(repository, issueNumber, labels, options = {}) {
     await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/labels`, { labels: add });
   }
   for (const label of remove) {
-    await gh.request("DELETE", `/repos/${repoName(repository)}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`);
+    try {
+      await gh.request("DELETE", `/repos/${repoName(repository)}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`);
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
   }
   return { add, remove };
 }
