@@ -42,6 +42,8 @@ jobs:
         run: npm ci
 
       - name: Validate
+        env:
+          DARK_FACTORY_WORKSPACE_ROOT: ${{ github.workspace }}/data-agentos/managed-repository
         run: npm run check
 
       - name: Set up Docker Buildx
