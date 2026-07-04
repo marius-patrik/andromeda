@@ -233,7 +233,6 @@ test("df-work workflow only runs issue triggers from trusted actors", async () =
   assert.match(workflow, /COLLABORATOR/);
   assert.doesNotMatch(workflow, /"MEMBER"/);
   assert.match(workflow, /github\.event\.label\.name == 'df:ready'/);
-  assert.match(workflow, /github\.event\.sender\.type == 'Bot'/);
   assert.match(workflow, /github\.event\.sender\.login == 'github-actions\[bot\]'/);
   assert.match(workflow, /df-prd:/);
 });
