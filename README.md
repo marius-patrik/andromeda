@@ -80,3 +80,16 @@ runtime state:
 - `.agents/env` exports the paths every CLI should consume.
 
 See [PRD.md](PRD.md).
+
+## Skills contract
+
+The root `skills/` directory is obsolete and has been removed. Do not repopulate
+it; a top-level `skills/` source directory would collide with the shared-state
+contract.
+
+Skills belong in one of these places:
+
+- `.agents/skills/<name>/` — user-installed shared skills (`agents install skill ...`).
+- `.agents/plugins/<name>/` — installed plugins, which may bundle plugin-specific skills or hooks.
+- `.agents/.global/skills/<name>/` — project-level managed skills that are part of the DarkFactory baseline.
+- Package-owned skills inside the agent, app, or template submodule they ship with.

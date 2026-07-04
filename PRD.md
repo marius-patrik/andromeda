@@ -98,7 +98,6 @@ where they identify an existing repo, env var, or historical concept.
   plugins/
     plugin-rommie/
     dream/
-  skills/
 ```
 
 ## State Layout
@@ -120,6 +119,25 @@ where they identify an existing repo, env var, or historical concept.
 ```
 
 Every managed CLI must read `AGENTS_HOME`, `AGENTS_CLIS`, `AGENTS_SKILLS`, `AGENTS_PLUGINS`, `AGENTS_HOOKS`, `AGENTS_TEMPLATES`, `AGENTS_SECRETS`, `AGENTS_CREDITS`, and `AGENTS_DATA_REPOS` from `.agents/env` or equivalent environment exports. Package and harness execution also exports configured data repo env vars such as `AGENTOS_DATA_ROOT` and `DARK_FACTORY_WORKSPACE_ROOT`.
+
+## Skills contract
+
+The root `skills/` directory is obsolete. It previously appeared in the layout as
+a placeholder and must not be repopulated.
+
+Skills live in exactly one of these places:
+
+- **User-installed shared skills** — `.agents/skills/<name>`, installed by
+  `agents install skill <name> <source>` and shared across every managed CLI.
+- **Installed plugin assets** — `.agents/plugins/<name>/` (a plugin may bundle
+  plugin-specific skills, prompts, or hooks with its install).
+- **Project-level managed skills** — `.agents/.global/skills/<name>/`, part of
+  the DarkFactory baseline and tracked in this repo as managed files.
+- **Package-authored skills** — skills that ship with an agent, app, or template
+  live inside that package's own submodule or registered path.
+
+Do not add a top-level `skills/` source directory; doing so would collide with
+`.agents/skills` and break the shared-state contract.
 
 ## Harness Contract
 
