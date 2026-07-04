@@ -273,6 +273,8 @@ test("df-plan workflow reacts safely to PRD edits on main", async () => {
   assert.doesNotMatch(workflow, /raw\.githubusercontent\.com|commits\/main|method:\s*'HEAD'/);
   assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
   assert.match(workflow, /^\s+schedule:\s*$/m);
+  assert.match(workflow, /github\.event_name == 'schedule'.*github\.repository == 'marius-patrik\/darkfactory-agent'/);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch'.*github\.repository == 'marius-patrik\/darkfactory-agent'/);
   assert.doesNotMatch(workflow, /actions:\s+write/);
   assert.notEqual(gate, -1);
   assert.notEqual(checkout, -1);
