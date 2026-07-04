@@ -54,9 +54,9 @@ jobs:
           fi
 
           if node -e "const p=require('./package.json'); process.exit(p.scripts?.ci ? 0 : 1)"; then
-            npm run ci
+            bun run ci
           elif node -e "const p=require('./package.json'); process.exit(p.scripts?.check ? 0 : 1)"; then
-            npm run check
+            bun run check
           else
-            npm test
+            bun test
           fi
