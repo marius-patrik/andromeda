@@ -367,6 +367,9 @@ test("df-work workflow restricts privileged workers to the control repository", 
   assert.match(workflow, /github\.repository == 'marius-patrik\/darkfactory-agent'/);
   assert.doesNotMatch(workflow, /inputs\.repo == github\.repository/);
   assert.match(workflow, /if:\s*github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /concurrency:\s*$/m);
+  assert.match(workflow, /group:\s+df-work-\$\{\{ inputs\.repo \}\}-\$\{\{ inputs\.issue_number \}\}/);
+  assert.match(workflow, /cancel-in-progress:\s+false/);
 });
 
 test("df-work workflow uses the installed control worker payload", async () => {
@@ -452,4 +455,14 @@ test("df-orchestrate script skips parked repositories and dispatches via workflo
   assert.match(source, /df:running/);
   assert.match(source, /df:blocked/);
   assert.match(source, /df:done/);
+});
+
+test("df-orchestrate claims ready issues before dispatching workers", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-orchestrate.mjs", import.meta.url), "utf8");
+
+  const claimIndex = source.indexOf("replaceIssueLabels(repository, issueNumber, [\"df:running\"], [\"df:ready\"])");
+  const dispatchIndex = source.indexOf("/actions/workflows/df-work.yml/dispatches");
+  assert.notEqual(claimIndex, -1);
+  assert.notEqual(dispatchIndex, -1);
+  assert.ok(claimIndex < dispatchIndex);
 });

@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: df-work-${{ inputs.repo }}-${{ inputs.issue_number }}
+  cancel-in-progress: false
+
 jobs:
   df-work:
     name: Run DarkFactory worker

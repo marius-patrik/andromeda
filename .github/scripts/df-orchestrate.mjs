@@ -91,6 +91,9 @@ async function listReadyIssues(repository) {
 }
 
 async function dispatchWorker(repository, issueNumber) {
+  // Claim the issue before dispatch so a subsequent orchestrator tick cannot
+  // re-dispatch the same ready issue while the worker workflow is starting.
+  await replaceIssueLabels(repository, issueNumber, ["df:running"], ["df:ready"]);
   await gh.request("POST", `/repos/${repoName(CONTROL_REPO)}/actions/workflows/df-work.yml/dispatches`, {
     ref: "main",
     inputs: {
@@ -98,6 +101,19 @@ async function dispatchWorker(repository, issueNumber) {
       issue_number: String(issueNumber)
     }
   });
+}
+
+async function replaceIssueLabels(repository, issueNumber, add, remove) {
+  if (add.length) {
+    await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/labels`, { labels: add });
+  }
+  for (const label of remove) {
+    try {
+      await gh.request("DELETE", `/repos/${repoName(repository)}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`);
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+  }
 }
 
 async function writeLedger(ledger) {
