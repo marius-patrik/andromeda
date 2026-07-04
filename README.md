@@ -2,6 +2,22 @@
 
 `agents-manager` provides the `agents` CLI for local agents-mono operations. It manages package checkouts, shared `.agents` runtime state, provider CLI homes, harness execution, installs, data repositories, secrets, and credits.
 
+## Agents OS Distro Notes
+
+`agents` is the entry point for the `agents-os` container distribution. Inside
+the distro image, the CLI is exposed on `PATH` as `agents` and consumes the
+container environment contract defined in `docs/agents-os/DATA-CONTRACTS.md`:
+
+- `AGENTS_ROOT` may point to the read-only distro root (`/opt/agents-os`) while
+  `AGENTS_HOME` points to the mounted shared state (`/agents/state`).
+- `sharedStateFromEnv` honors an explicit `AGENTS_ROOT` and falls back to the
+  parent directory of `AGENTS_HOME` for host-native usage.
+- `AGENTS_DATA` and `AGENTS_WORKSPACE` override the default `data/` and
+  `os/agents-workspace` directories used by shared state.
+
+The distro image definition and local build/smoke commands live in
+`os/agents-os/`.
+
 ## Requirements
 
 - Bun 1.1 or newer

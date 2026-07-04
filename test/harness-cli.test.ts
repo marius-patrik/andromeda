@@ -6,6 +6,14 @@ import path from "node:path";
 const repoRoot = path.resolve(import.meta.dir, "..");
 const cliPath = path.join(repoRoot, "src", "cli.ts");
 
+function cleanEnv(): Record<string, string | undefined> {
+  const copy = { ...process.env };
+  for (const key of Object.keys(copy)) {
+    if (key.startsWith("AGENTS_")) delete copy[key];
+  }
+  return copy;
+}
+
 async function runAgents(
   cwd: string,
   args: string[],
@@ -13,7 +21,12 @@ async function runAgents(
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const proc = Bun.spawn([process.execPath, cliPath, ...args], {
     cwd,
-    env: { ...process.env, ...env },
+    env: {
+      ...cleanEnv(),
+      AGENTS_HOME: path.join(cwd, ".agents"),
+      AGENTS_ROOT: cwd,
+      ...env,
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
