@@ -207,7 +207,8 @@ test("df-work records auto-merge support during merge-policy preflight", async (
 
   assert.match(source, /const autoMergeSupported = repo\.allow_auto_merge === true/);
   assert.match(source, /autoMergeSupported/);
-  assert.match(source, /repository auto-merge is disabled/);
+  assert.match(source, /does not allow auto-merge/);
+  assert.match(source, /green-PR sweep will squash-merge directly after checks/);
 });
 
 test("df-sweep waits before treating empty check rollups as no-checks-configured", async () => {

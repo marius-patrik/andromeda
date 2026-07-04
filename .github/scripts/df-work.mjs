@@ -194,13 +194,17 @@ async function getIssue(repository, issueNumber) {
 async function preflightMergePolicy(repository, baseBranch, repo) {
   const protection = await getBranchProtection(repository, baseBranch);
   const autoMergeSupported = repo.allow_auto_merge === true;
-  // Auto-merge is only required when the protected branch policy needs it.
-  // For unprotected base branches the managed policy is a direct green-PR sweep.
-  if (protection.protected && !autoMergeSupported) {
+
+  // M1/M2 policy requires issue -> PR -> gate -> automerge. The follow-through
+  // sweep can fall back to a direct green-PR merge when auto-merge cannot be
+  // armed (e.g. unprotected branches), but the repository must support
+  // auto-merge as a prerequisite for worker dispatch.
+  if (!autoMergeSupported) {
     throw new Error(
-      `${repoName(repository)} requires branch-protection automerge on ${baseBranch}, but repository auto-merge is disabled.`
+      `${repoName(repository)} does not allow auto-merge. Enable it in repository settings before dispatching DarkFactory workers.`
     );
   }
+
   if (protection.protected) {
     return {
       useAutomerge: true,
@@ -208,12 +212,11 @@ async function preflightMergePolicy(repository, baseBranch, repo) {
       summary: `branch protection exists on \`${baseBranch}\`; GitHub automerge will be armed`
     };
   }
+
   return {
     useAutomerge: false,
     autoMergeSupported,
-    summary: autoMergeSupported
-      ? `no branch protection on \`${baseBranch}\`; green-PR sweep will squash-merge directly`
-      : `repository auto-merge is disabled, but no branch protection on \`${baseBranch}\` requires it; green-PR sweep will squash-merge directly`
+    summary: `no branch protection on \`${baseBranch}\`; green-PR sweep will squash-merge directly after checks`
   };
 }
 

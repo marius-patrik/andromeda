@@ -74,6 +74,13 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 - A separate web dashboard — GitHub Projects/issues are the dashboard.
 - Webhook server before Actions-based loops are proven.
 
+## Merge and follow-through policy
+
+- Worker dispatch is only allowed when the target repository supports GitHub auto-merge; the worker preflight blocks before cloning/running Codex if it is disabled.
+- On protected branches, the follow-through sweep arms GitHub auto-merge and lets the branch protection gate complete the merge.
+- On unprotected branches, or when auto-merge cannot be armed because no required checks exist, the sweep may directly merge a green worker PR after verifying that all required status checks (if any) are present and passing and a short settle window has passed.
+- Direct merge is never used as a bypass: red or missing required checks block the merge, and the worker issue is labeled `df:blocked`.
+
 ## Operating rules for workers
 
 - Issue = contract: acceptance criteria in the issue body are the definition of done; validation must pass before PR.
