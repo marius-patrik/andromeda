@@ -14,9 +14,6 @@ on:
         required: false
         type: string
         default: marius-patrik/agents-harness
-  pull_request:
-    types:
-      - closed
 permissions:
   contents: read
 
@@ -68,50 +65,6 @@ jobs:
           DF_FOLLOW_THROUGH_MODE: sweep
           DF_SWEEP_REPOS: ${{ github.event_name == 'workflow_dispatch' && inputs.repos || '' }}
           DF_SWEEP_EXCLUDE_REPOS: ${{ github.event_name == 'workflow_dispatch' && inputs.exclude_repos || 'marius-patrik/agents-harness' }}
-          DF_TRIGGER: ${{ github.event_name }}
-          DF_DATA_REPO: marius-patrik/darkfactory-data
-        shell: bash
-        run: |
-          export GITHUB_EVENT_PAYLOAD="$(cat "$GITHUB_EVENT_PATH")"
-          node darkfactory-control/.github/scripts/df-sweep.mjs
-
-  dev-merge-closure:
-    name: Dev merge issue closure
-    runs-on: ubuntu-latest
-    if: >-
-      ${{
-        github.event_name == 'pull_request' &&
-        github.event.pull_request.merged_at != null &&
-        github.event.pull_request.base.ref == 'dev' &&
-        github.event.pull_request.head.repo.full_name == github.repository
-      }}
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: read
-
-    steps:
-      - name: Checkout released DarkFactory control
-        uses: actions/checkout@v4
-        with:
-          repository: marius-patrik/darkfactory-agent
-          ref: ${{ vars.DARK_FACTORY_CONTROL_REF || 'main' }}
-          path: darkfactory-control
-          persist-credentials: false
-
-      - name: Mint mp-agents installation token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
-          private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
-          owner: marius-patrik
-
-      - name: Run dev merge closure
-        env:
-          DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token }}
-          DF_CONTROL_REPO: ${{ github.repository }}
-          DF_FOLLOW_THROUGH_MODE: dev-merge
           DF_TRIGGER: ${{ github.event_name }}
           DF_DATA_REPO: marius-patrik/darkfactory-data
         shell: bash
