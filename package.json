@@ -8,7 +8,9 @@
   },
   "scripts": {
     "check": "bunx tsc --noEmit",
-    "test": "bun test os/agents-manager/test/gitmodules.test.ts os/agents-manager/test/adapters.test.ts os/agents-manager/test/packages.test.ts os/agents-manager/test/data-repos.test.ts os/agents-manager/test/harness-cli.test.ts os/agents-manager/test/secrets.test.ts",
+    "test": "bun test os/agents-manager/test/gitmodules.test.ts os/agents-manager/test/adapters.test.ts os/agents-manager/test/packages.test.ts os/agents-manager/test/data-repos.test.ts os/agents-manager/test/harness-cli.test.ts os/agents-manager/test/secrets.test.ts os/agents-manager/test/state.test.ts",
+    "image:build": "docker build -f os/agents-os/Dockerfile -t agents-os:dev --build-arg AGENTS_OS_CHANNEL=dev .",
+    "image:smoke": "bun os/agents-os/bin/smoke.ts",
     "ci": "bun run check && bun run test"
   },
   "devDependencies": {

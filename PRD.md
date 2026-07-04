@@ -40,6 +40,7 @@
 - Inferer package: agent loop, runtime services, engine work, and deploy assets under `os/inference-engine`.
 - Manager package: the CLI implementation and tests under `os/agents-manager`.
 - Managed checkout: a git-backed package under `<category>/<name>`. Agents, apps, harnesses, templates, data repositories, and workspace repositories are organized under explicit category folders.
+- Distro image: a releaseable container image (`agents-os`) that packages the agents CLI, Bun/Node/Python/Go runtimes, and the shared-state mount contract.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
 - Skill install: files installed under `.agents/skills/<name>`.
 - Plugin install: files installed under `.agents/plugins/<name>`.
@@ -61,6 +62,8 @@
 - `agents installs` lists shared installs.
 - `agents credits` locates or prints the shared credit store.
 - `agents doctor` validates package checkouts and shared state.
+- `bun run image:build` builds the local `agents-os` container image.
+- `bun run image:smoke` runs a self-contained smoke test of the image.
 
 ## Workspace Layout
 

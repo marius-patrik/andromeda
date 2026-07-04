@@ -51,6 +51,18 @@ agents doctor
 - `agents credits` shows the shared credit store.
 - `agents doctor` checks package registration and shared state.
 
+## Agents OS Container Distribution
+
+The `agents-os` image packages the agents CLI and runtime toolchains into a
+local Docker container. See `docs/agents-os/ARCHITECTURE.md` and
+`docs/agents-os/DATA-CONTRACTS.md` for the full design contract.
+
+Local image commands:
+
+- `bun run image:build` — build the `agents-os:dev` image.
+- `bun run image:smoke` — run a self-contained smoke test in a throwaway
+  container.
+
 ## Shared State
 
 All managed CLIs must use the root `.agents` directory as the single source of
