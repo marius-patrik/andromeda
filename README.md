@@ -23,6 +23,11 @@ After creating a repository from this template, replace:
 
 Keep `.agents/.global/` when you want the shared agent operating rules. Replace only `.agents/.project/` for the new repository's facts, commands, decisions, status, and handoff.
 
+## Managed files
+
+- `.agents/.global/` – reusable agent operating rules. Keep these files intact.
+- `.agents/.project/` – project-specific facts, commands, decisions, status, and handoff. Replace these after creating a new repository from this template.
+
 ## Requirements
 
 - Bun 1.3.14 or newer.
@@ -45,3 +50,16 @@ bun run ci
 ```
 
 The build output is written to `dist/`.
+
+## Validation
+
+The CI script runs typechecking, tests, and the build:
+
+```powershell
+bun run ci
+```
+
+## Release notes
+
+- `v0.1.0` – Initial CLI template scaffold with argument parsing, tests, build, and CI.
+- This README refresh adds a managed-files note and release-notes section after the template rename and merge.
