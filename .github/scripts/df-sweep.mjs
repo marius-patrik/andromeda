@@ -19,6 +19,9 @@ const DATA_REPO = process.env.DF_DATA_REPO ?? DEFAULT_DATA_REPO;
 const MODE = process.env.DF_FOLLOW_THROUGH_MODE ?? "sweep";
 const TRIGGER = process.env.DF_TRIGGER ?? "unknown";
 const DEFAULT_EXCLUDED_REPOS = "marius-patrik/agents-harness";
+const NO_CHECK_ALLOWLIST = new Set(
+  repoList(process.env.DF_ALLOW_NO_CHECK_REPOS || "").map((repo) => repoName(repo).toLowerCase())
+);
 const EMPTY_CHECK_SETTLE_MS = 10 * 60 * 1000;
 const gh = createGithubClient(TOKEN, "darkfactory-sweep");
 
@@ -88,6 +91,17 @@ async function considerPullRequest(repository, pull) {
   }
 
   const requiredContexts = await getRequiredStatusCheckContexts(gh, repository, pull.baseRefName);
+  const hasReportedChecks = Array.isArray(pull.statusCheckRollup) && pull.statusCheckRollup.length > 0;
+  if (!hasReportedChecks && requiredContexts.length === 0 && !NO_CHECK_ALLOWLIST.has(repoName(repository).toLowerCase())) {
+    return {
+      repo: repoName(repository),
+      pr: ref,
+      action: "skip",
+      reason: "no-checks-not-allowed",
+      note: "Add the repository to DF_ALLOW_NO_CHECK_REPOS to permit direct merge with no checks."
+    };
+  }
+
   if (!checksAreGreen(pull.statusCheckRollup, requiredContexts)) {
     return {
       repo: repoName(repository),

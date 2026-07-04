@@ -79,6 +79,7 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 - Worker dispatch is only allowed when the target repository supports GitHub auto-merge; the worker preflight blocks before cloning/running Codex if it is disabled.
 - On protected branches, the follow-through sweep arms GitHub auto-merge and lets the branch protection gate complete the merge.
 - On unprotected branches, or when auto-merge cannot be armed because no required checks exist, the sweep may directly merge a green worker PR after verifying that all required status checks (if any) are present and passing and a short settle window has passed.
+- Direct merge on a worker PR with no checks configured is only allowed when the target repository is explicitly listed in the DarkFactory no-check allowlist; otherwise the PR is skipped so a missing CI configuration cannot silently bypass the gate.
 - Direct merge is never used as a bypass: red or missing required checks block the merge, and the worker issue is labeled `df:blocked`.
 
 ## Operating rules for workers

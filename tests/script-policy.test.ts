@@ -237,3 +237,11 @@ test("df-sweep verifies branch protection before merging empty check rollups", a
   assert.match(source, /required-checks-missing/);
   assert.match(source, /checksAreGreen\(pull\.statusCheckRollup, requiredContexts\)/);
 });
+
+test("df-sweep requires explicit allowlist before merging PRs with no checks", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /DF_ALLOW_NO_CHECK_REPOS/);
+  assert.match(source, /NO_CHECK_ALLOWLIST/);
+  assert.match(source, /no-checks-not-allowed/);
+});
