@@ -51,6 +51,7 @@ where they identify an existing repo, env var, or historical concept.
 - Inferer package: agent loop, runtime services, engine work, and deploy assets under `os/inference-engine`.
 - Manager package: the CLI implementation and tests under `os/agents-manager`.
 - Managed checkout: a git-backed package under `<category>/<name>`. Agents, apps, harnesses, templates, data repositories, and workspace repositories are organized under explicit category folders.
+- Distro image: a releaseable container image (`agents-os`) that packages the agents CLI, Bun/Node/Python/Go runtimes, and the shared-state mount contract.
 - Global workspace: the system-wide writable working set at `os/agents-workspace`, paired with `agentos-data` as its durable data companion.
 - Per-agent workspace pattern: every agent gets a data repo (`data/<agent-name>-data`) and a workspace repo (`workspaces/<agent-name>-workspace`), mirroring the reference pair `darkfactory-data` + `darkfactory-workspace`.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
@@ -74,6 +75,8 @@ where they identify an existing repo, env var, or historical concept.
 - `agents installs` lists shared installs.
 - `agents credits` locates or prints the shared credit store.
 - `agents doctor` validates package checkouts and shared state.
+- `bun run image:build` builds the local `agents-os` container image.
+- `bun run image:smoke` runs a self-contained smoke test of the image.
 
 ## Workspace Layout
 
