@@ -89,8 +89,7 @@ export function reconcileLabelDiff(currentLabels, desiredLabels, reconciledLabel
 export function isDarkFactoryWorkerPullRequest(pull, repository) {
   const provenance = `${pull.title || ""}\n${pull.body || ""}`;
   const sameRepositoryHead = pull.headRepository?.owner?.login === repository.owner && pull.headRepository?.name === repository.repo;
-  const marker = provenance.match(/<!--\s*dark-factory:worker-pr\s+issue=(\d+)\s*-->/i);
-  const markerIssue = marker ? Number(marker[1]) : 0;
+  const markerIssue = darkFactoryWorkerIssueNumber(pull);
   const branchMatchesIssue = Number.isInteger(markerIssue) && markerIssue > 0 && pull.headRefName?.startsWith(`df/${markerIssue}-`);
   const bodyClosesIssue = extractClosingIssueNumbers(pull.body || "", repoName(repository)).includes(markerIssue);
   const allowedAuthor = WORKER_PULL_REQUEST_AUTHORS.has(pull.author?.login || "");
@@ -98,10 +97,16 @@ export function isDarkFactoryWorkerPullRequest(pull, repository) {
   return (
     sameRepositoryHead &&
     allowedAuthor &&
-    Boolean(marker) &&
+    markerIssue > 0 &&
     branchMatchesIssue &&
     bodyClosesIssue
   );
+}
+
+export function darkFactoryWorkerIssueNumber(pull) {
+  const provenance = `${pull.title || ""}\n${pull.body || ""}`;
+  const marker = provenance.match(/<!--\s*dark-factory:worker-pr\s+issue=(\d+)\s*-->/i);
+  return marker ? Number(marker[1]) : 0;
 }
 
 export async function cleanupTempRoot(tempRoot, warn = console.warn) {

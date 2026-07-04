@@ -4,6 +4,7 @@ import {
   checksAreGreen,
   checksSummary,
   createGithubClient,
+  darkFactoryWorkerIssueNumber,
   extractClosingIssueNumbers,
   getRequiredStatusCheckContexts,
   isDarkFactoryWorkerPullRequest as isWorkerPullRequest,
@@ -94,29 +95,43 @@ async function considerPullRequest(repository, pull) {
   const requiredContexts = await getRequiredStatusCheckContexts(gh, repository, pull.baseRefName);
   const hasReportedChecks = Array.isArray(pull.statusCheckRollup) && pull.statusCheckRollup.length > 0;
   if (!hasReportedChecks && requiredContexts.length === 0 && !NO_CHECK_ALLOWLIST.has(repoName(repository).toLowerCase())) {
+    const issueUpdate = await markWorkerIssueBlocked(repository, pull, "no-checks-not-allowed", [
+      "No checks were reported and this repository is not in `DF_ALLOW_NO_CHECK_REPOS`."
+    ]);
     return {
       repo: repoName(repository),
       pr: ref,
       action: "skip",
       reason: "no-checks-not-allowed",
+      issue_update: issueUpdate,
       note: "Add the repository to DF_ALLOW_NO_CHECK_REPOS to permit direct merge with no checks."
     };
   }
 
   if (!checksAreGreen(pull.statusCheckRollup, requiredContexts)) {
+    const reason = requiredContexts.length && !pull.statusCheckRollup?.length
+      ? "required-checks-missing"
+      : "checks-not-green";
+    const issueUpdate = await markWorkerIssueBlocked(repository, pull, reason, [
+      `Required checks: ${requiredContexts.length ? requiredContexts.join(", ") : "(none configured)"}`,
+      `Reported checks: ${checksSummary(pull.statusCheckRollup).join(", ") || "(none)"}`
+    ]);
     return {
       repo: repoName(repository),
       pr: ref,
       action: "skip",
-      reason: requiredContexts.length && !pull.statusCheckRollup?.length
-        ? "required-checks-missing"
-        : "checks-not-green",
+      reason,
+      issue_update: issueUpdate,
       required_checks: requiredContexts,
       checks: checksSummary(pull.statusCheckRollup)
     };
   }
   if (pull.mergeable !== "MERGEABLE") {
-    return { repo: repoName(repository), pr: ref, action: "skip", reason: `mergeable-${pull.mergeable}` };
+    const reason = `mergeable-${pull.mergeable}`;
+    const issueUpdate = await markWorkerIssueBlocked(repository, pull, reason, [
+      `GitHub mergeability is \`${pull.mergeable || "unknown"}\`.`
+    ]);
+    return { repo: repoName(repository), pr: ref, action: "skip", reason, issue_update: issueUpdate };
   }
 
   const protectedBranch = await branchIsProtected(repository, pull.baseRefName);
@@ -134,6 +149,9 @@ async function considerPullRequest(repository, pull) {
     }
 
     if (!canDirectMergeAfterAutomergeFailure(enabled.reason)) {
+      const issueUpdate = await markWorkerIssueBlocked(repository, pull, "protected-branch-automerge-failed", [
+        `Auto-merge failed: ${enabled.reason || "unknown error"}`
+      ]);
       return {
         repo: repoName(repository),
         pr: ref,
@@ -141,6 +159,7 @@ async function considerPullRequest(repository, pull) {
         action: "skip",
         reason: "protected-branch-automerge-failed",
         automerge_error: enabled.reason,
+        issue_update: issueUpdate,
         checks: checksSummary(pull.statusCheckRollup)
       };
     }
@@ -188,6 +207,47 @@ async function mergePullRequest(repository, pull) {
   });
   await closeIssuesIfDevMerge(repository, pull);
   return merged;
+}
+
+async function markWorkerIssueBlocked(repository, pull, reason, details = []) {
+  const issueNumber = darkFactoryWorkerIssueNumber(pull);
+  if (!issueNumber) return { status: "skipped", reason: "missing-worker-marker" };
+
+  await replaceIssueLabels(repository, issueNumber, ["df:blocked"], ["df:ready", "df:running", "df:done"]);
+
+  const marker = `<!-- dark-factory:sweep-blocked pr=${pull.number} -->`;
+  if (!(await hasSweepBlockedComment(repository, issueNumber, marker))) {
+    await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/comments`, {
+      body: [
+        marker,
+        "DarkFactory follow-through blocked this worker PR.",
+        "",
+        `PR: ${pull.url || `#${pull.number}`}`,
+        `Reason: ${reason}`,
+        ...details.map((detail) => `- ${detail}`)
+      ].join("\n")
+    });
+  }
+
+  return { status: "blocked", issue: `#${issueNumber}`, reason };
+}
+
+async function hasSweepBlockedComment(repository, issueNumber, marker) {
+  const comments = await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}/comments?per_page=100`);
+  return Array.isArray(comments) && comments.some((comment) => String(comment.body || "").includes(marker));
+}
+
+async function replaceIssueLabels(repository, issueNumber, add, remove) {
+  if (add.length) {
+    await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/labels`, { labels: add });
+  }
+  for (const label of remove) {
+    try {
+      await gh.request("DELETE", `/repos/${repoName(repository)}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`);
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+  }
 }
 
 async function closeDevMergeIssuesFromEnv() {

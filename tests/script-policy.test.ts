@@ -11,6 +11,7 @@ const {
   cleanupTempRoot,
   extractClosingIssueNumbers,
   getRequiredStatusCheckContexts,
+  darkFactoryWorkerIssueNumber,
   isDarkFactoryWorkerPullRequest,
   isParkedRepo,
   parsePrdItems,
@@ -173,6 +174,16 @@ test("df-sweep recognizes worker PRs from managed and app-token paths", () => {
   assert.equal(isDarkFactoryWorkerPullRequest({ ...workerPull, author: { login: "marius-patrik" } }, repository), false);
   assert.equal(isDarkFactoryWorkerPullRequest({ ...workerPull, headRefName: "feature/23-add-worker" }, repository), false);
   assert.equal(isDarkFactoryWorkerPullRequest({ ...workerPull, body: "<!-- dark-factory:worker-pr issue=23 -->" }, repository), false);
+  assert.equal(darkFactoryWorkerIssueNumber(workerPull), 23);
+});
+
+test("df-sweep marks blocked worker issues when follow-through cannot merge", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /markWorkerIssueBlocked\(repository, pull, "no-checks-not-allowed"/);
+  assert.match(source, /markWorkerIssueBlocked\(repository, pull, reason/);
+  assert.match(source, /replaceIssueLabels\(repository, issueNumber, \["df:blocked"\], \["df:ready", "df:running", "df:done"\]\)/);
+  assert.match(source, /dark-factory:sweep-blocked/);
 });
 
 test("df-work cleanup remains a warning path after successful PR handoff", async () => {
