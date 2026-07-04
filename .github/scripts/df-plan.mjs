@@ -39,6 +39,10 @@ async function main() {
   const targets = PLAN_ALL ? await targetRepositories() : [TARGET_REPO];
   for (const target of targets) {
     TARGET_REPO = target;
+    if (isParkedRepo(TARGET_REPO)) {
+      console.log(`DarkFactory planning skipped parked repository ${repoName(TARGET_REPO)}.`);
+      continue;
+    }
     await reconcileTargetRepository();
   }
 }

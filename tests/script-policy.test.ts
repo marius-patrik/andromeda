@@ -134,13 +134,16 @@ test("df-plan reopens PRD-tracked issues when the PRD item still exists", async 
   assert.match(source, /tracked `PRD\.md` file/);
 });
 
-test("df-plan workflow avoids push-triggered write-token execution", async () => {
+test("df-plan workflow reacts safely to PRD edits on main", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-plan.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");
-  const checkout = workflow.indexOf("Checkout DarkFactory from this repository");
+  const checkout = workflow.indexOf("Checkout current repository");
   const token = workflow.indexOf("Mint mp-agents installation token");
 
-  assert.doesNotMatch(workflow, /^\s+push:\s*$/m);
+  assert.match(workflow, /^\s+push:\s*$/m);
+  assert.match(workflow, /^\s+branches:\s*$/m);
+  assert.match(workflow, /^\s+-\s+main\s*$/m);
+  assert.match(workflow, /PRD\.md/);
   assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
   assert.match(workflow, /^\s+schedule:\s*$/m);
   assert.notEqual(gate, -1);
@@ -148,10 +151,10 @@ test("df-plan workflow avoids push-triggered write-token execution", async () =>
   assert.notEqual(token, -1);
   assert.ok(gate < token);
   assert.ok(checkout < token);
-  assert.match(workflow, /GITHUB_REPOSITORY/);
+  assert.match(workflow, /GITHUB_REPOSITORY_OWNER/);
   assert.match(workflow, /GITHUB_REF_NAME.*main/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
-  assert.doesNotMatch(workflow, /\bdev\b|github\.ref_name|DARK_FACTORY_CONTROL_REF/);
+  assert.doesNotMatch(workflow, /\bdev\b|DARK_FACTORY_CONTROL_REF/);
 });
 
 test("df-follow-through workflow validates trusted refs before privileged tokens", async () => {

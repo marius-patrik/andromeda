@@ -1,6 +1,12 @@
 name: DarkFactory Plan
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'PRD.md'
+      - '**/PRD.md'
   schedule:
     - cron: "17 */6 * * *"
   workflow_dispatch:
@@ -15,23 +21,26 @@ on:
         type: string
 
 permissions:
-  actions: read
-  contents: write
-  issues: write
+  contents: read
 
 jobs:
   df-plan:
     name: Reconcile PRD backlog
     runs-on: ubuntu-latest
+    if: >-
+      ${{
+        github.event_name == 'push' ||
+        github.repository == 'marius-patrik/darkfactory-agent'
+      }}
 
     steps:
       - name: Validate trusted control ref
         shell: bash
         run: |
           # Privileged planning mints an installation token, so it only runs
-          # from the canonical control repository's protected default branch.
-          if [[ "${GITHUB_REPOSITORY}" != "marius-patrik/darkfactory-agent" ]]; then
-            echo "::error::DarkFactory privileged planning can only run from marius-patrik/darkfactory-agent."
+          # from a trusted default branch in an allowed owner.
+          if [[ "${GITHUB_REPOSITORY_OWNER}" != "marius-patrik" ]]; then
+            echo "::error::DarkFactory privileged planning can only run in the marius-patrik owner."
             exit 1
           fi
 
@@ -40,13 +49,14 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout DarkFactory from this repository
+      - name: Checkout current repository
         uses: actions/checkout@v4
         with:
-          # Pin control scripts to the exact trusted event commit before any
-          # installation token is minted.
+          # Pin to the exact trusted event commit before any installation token
+          # is minted. Managed repositories run their synced copy of the control
+          # scripts, so PRD edits on main reconcile immediately without needing
+          # cross-repo checkout.
           ref: ${{ github.sha }}
-          path: darkfactory-control
           persist-credentials: false
 
       - name: Mint mp-agents installation token
@@ -62,8 +72,8 @@ jobs:
           DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token }}
           DF_CONTROL_REPO: ${{ github.repository }}
           DF_TARGET_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.repo || github.repository }}
-          DF_TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
+          DF_TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || (github.event_name == 'push' && github.sha || '') }}
           DF_PLAN_ALL: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
           DF_TRIGGER: ${{ github.event_name }}
           DF_DATA_REPO: marius-patrik/darkfactory-data
-        run: node darkfactory-control/.github/scripts/df-plan.mjs
+        run: node .github/scripts/df-plan.mjs
