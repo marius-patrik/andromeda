@@ -91,20 +91,11 @@ jobs:
       pull-requests: read
 
     steps:
-      - name: Checkout DarkFactory from this repository
-        if: ${{ github.repository == 'marius-patrik/darkfactory-agent' }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.ref }}
-          path: darkfactory-control
-          persist-credentials: false
-
       - name: Checkout released DarkFactory control
-        if: ${{ github.repository != 'marius-patrik/darkfactory-agent' }}
         uses: actions/checkout@v4
         with:
           repository: marius-patrik/darkfactory-agent
-          ref: ${{ vars.DARK_FACTORY_CONTROL_REF || 'main' }}
+          ref: main
           path: darkfactory-control
           persist-credentials: false
 
