@@ -1,6 +1,6 @@
 {
   "name": "@marius-patrik/agents-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Bun TypeScript CLI for managing agents-mono packages and shared local agent state.",
   "type": "module",
   "bin": {
