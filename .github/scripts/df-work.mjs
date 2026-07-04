@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   DEFAULT_DATA_REPO,
   WORK_LABELS,
@@ -20,6 +21,7 @@ import {
   writeRunLedger
 } from "./df-lib.mjs";
 
+const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TOKEN = requiredEnv("DARK_FACTORY_TOKEN");
 const CODEX_AUTH_JSON = process.env.CODEX_AUTH_JSON ?? "";
 const CONTROL_REPO = parseRepo(requiredEnv("DF_CONTROL_REPO"));
@@ -326,7 +328,8 @@ async function writeTaskBrief(worktree, issue, defaultBranch, taskRouting) {
 }
 
 function buildWorkerImage() {
-  runCommand("docker", ["build", "-f", ".github/codex-review.Dockerfile", "-t", WORKER_IMAGE, "."], process.cwd());
+  const dockerfile = path.join(CONTROL_ROOT, ".github", "codex-review.Dockerfile");
+  runCommand("docker", ["build", "-f", dockerfile, "-t", WORKER_IMAGE, CONTROL_ROOT], process.cwd());
 }
 
 function runCodexWorker(worktree, codexHome, codeEffort) {
