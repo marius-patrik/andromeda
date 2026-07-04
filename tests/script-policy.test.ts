@@ -218,7 +218,7 @@ test("df-work workflow only runs issue_comment triggers from trusted actors", as
   assert.match(workflow, /author_association/);
   assert.match(workflow, /OWNER/);
   assert.match(workflow, /COLLABORATOR/);
-  assert.match(workflow, /MEMBER/);
+  assert.doesNotMatch(workflow, /"MEMBER"/);
 });
 
 test("df-sweep waits before treating empty check rollups as no-checks-configured", async () => {

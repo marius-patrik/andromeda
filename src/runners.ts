@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -535,7 +535,7 @@ function assertWithinRoot(root: string, target: string): void {
   const resolvedRoot = resolve(root).toLowerCase();
   const resolvedTarget = resolve(target).toLowerCase();
 
-  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}\\`)) {
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${sep}`)) {
     throw new Error(`refusing to remove runner directory outside root: ${target}`);
   }
 }
