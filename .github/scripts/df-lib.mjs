@@ -73,6 +73,17 @@ export function taskClassFromLabels(labels) {
   return { taskClass: "standard", effort: "medium" };
 }
 
+export function reconcileLabelDiff(currentLabels, desiredLabels, reconciledLabels) {
+  const current = new Set((currentLabels || []).filter(Boolean));
+  const desired = new Set((desiredLabels || []).filter(Boolean));
+  const reconciled = new Set((reconciledLabels || []).filter(Boolean));
+
+  return {
+    add: [...desired].filter((label) => !current.has(label)),
+    remove: [...reconciled].filter((label) => current.has(label) && !desired.has(label))
+  };
+}
+
 export async function cleanupTempRoot(tempRoot, warn = console.warn) {
   if (!tempRoot) return { ok: true, warning: "" };
 

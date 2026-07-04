@@ -16,6 +16,7 @@ import {
   parsePrdItems,
   parseRepo,
   prdIssueBody,
+  reconcileLabelDiff,
   repoName,
   requiredEnv,
   slug,
@@ -252,6 +253,10 @@ async function setIssueLabels(repository, issueNumber, labels) {
     (current.labels || []).map((label) => typeof label === "string" ? label : label.name).filter(Boolean)
   );
   const reconciledLabels = [
+    "df:ready",
+    "df:running",
+    "df:blocked",
+    "df:done",
     "df:class:mechanical",
     "df:class:standard",
     "df:class:hard",
@@ -261,8 +266,7 @@ async function setIssueLabels(repository, issueNumber, labels) {
     "P1",
     "P2"
   ];
-  const remove = reconciledLabels.filter((label) => currentNames.has(label) && !labels.includes(label));
-  const add = labels.filter((label) => !currentNames.has(label));
+  const { add, remove } = reconcileLabelDiff([...currentNames], labels, reconciledLabels);
 
   if (add.length) {
     await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/labels`, { labels: add });

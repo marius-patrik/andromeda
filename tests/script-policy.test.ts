@@ -14,6 +14,7 @@ const {
   isParkedRepo,
   parsePrdItems,
   prdIssueBody,
+  reconcileLabelDiff,
   taskClassFromLabels
 } = dfLib;
 
@@ -75,6 +76,28 @@ test("prdIssueBody records deterministic Blocked-by sequencing", () => {
 
   assert.match(body, /Blocked-by: #10/);
   assert.match(body, /df-prd:milestones-m2/);
+});
+
+test("label reconciliation removes stale df:ready when PRD sequencing blocks an issue", () => {
+  const diff = reconcileLabelDiff(
+    ["P1", "roadmap", "df:class:standard", "df:ready"],
+    ["P1", "roadmap", "df:class:standard"],
+    [
+      "df:ready",
+      "df:running",
+      "df:blocked",
+      "df:done",
+      "df:class:mechanical",
+      "df:class:standard",
+      "df:class:hard",
+      "roadmap",
+      "P0",
+      "P1",
+      "P2"
+    ]
+  );
+
+  assert.deepEqual(diff, { add: [], remove: ["df:ready"] });
 });
 
 test("cleanupTempRoot reports cleanup failures without throwing", async () => {
