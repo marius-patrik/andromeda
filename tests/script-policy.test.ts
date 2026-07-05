@@ -611,6 +611,8 @@ test("df-work workflow uses the app token for control-dispatched workers", async
   assert.match(source, /const TOKEN = requiredEnv\("DARK_FACTORY_TOKEN"\)/);
   assert.match(source, /const TARGET_BASE_REF = process\.env\.DF_TARGET_BASE_REF/);
   assert.match(source, /resolveWorkBaseBranch\(TARGET_REPO, repo\.default_branch, TARGET_BASE_REF\)/);
+  assert.match(source, /\/git\/ref\/heads\/\$\{encodeRefPath\(branch\)\}/);
+  assert.match(source, /split\("\/"\)\.map\(encodeURIComponent\)\.join\("\/"\)/);
   assert.match(source, /runGit\(\["push", "origin", `HEAD:refs\/heads\/\$\{branch\}`\], worktree\)/);
   assert.match(source, /function runGit\(args, cwd\) \{\s+return runGitWithAuth\(args, cwd\);/);
   assert.match(source, /function runGitWithAuth\(args, cwd\) \{\s+return runCommand\("git", \["-c", authHeader\(\), \.\.\.args\], cwd\);/);

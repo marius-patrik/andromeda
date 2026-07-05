@@ -230,7 +230,7 @@ async function resolveWorkBaseBranch(repository, defaultBranch, requestedBranch 
 }
 
 async function ensureBranchExists(repository, branch) {
-  await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(branch)}`);
+  await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeRefPath(branch)}`);
 }
 
 async function replaceIssueLabels(repository, issueNumber, add, remove) {
@@ -415,6 +415,10 @@ function runGitWithAuth(args, cwd) {
 
 function authHeader() {
   return `http.https://github.com/.extraheader=AUTHORIZATION: basic ${GIT_BASIC_AUTH}`;
+}
+
+function encodeRefPath(ref) {
+  return String(ref || "").split("/").map(encodeURIComponent).join("/");
 }
 
 function runCommand(command, args, cwd) {
