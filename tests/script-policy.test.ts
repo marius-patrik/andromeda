@@ -485,6 +485,7 @@ test("df-fix workflow validates trusted refs before privileged tokens", async ()
   assert.match(workflow, /permission-issues:\s+write/);
   assert.match(workflow, /permission-pull-requests:\s+write/);
   assert.doesNotMatch(workflow, /permission-workflows:\s+write/);
+  assert.doesNotMatch(workflow, /CODEX_AUTH_JSON/);
   assert.match(workflow, /path:\s+darkfactory-control/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /darkfactory-control\/\.github\/scripts\/df-fix\.mjs/);
