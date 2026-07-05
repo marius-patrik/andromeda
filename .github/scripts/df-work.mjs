@@ -38,7 +38,7 @@ const GIT_BASIC_AUTH = Buffer.from(`x-access-token:${TOKEN}`).toString("base64")
 const gh = createGithubClient(TOKEN, "darkfactory-worker");
 
 main().catch((error) => {
-  console.error(sanitize(error.stack || error.message || String(error), TOKEN));
+  console.error(sanitize(error.stack || error.message || String(error), TOKEN, CODEX_AUTH_JSON));
   process.exitCode = 1;
 });
 
@@ -83,7 +83,7 @@ async function main() {
   try {
     await ensureLabels(gh, CONTROL_REPO, WORK_LABELS);
   } catch (error) {
-    console.warn(`Could not ensure labels in ${repoName(CONTROL_REPO)}: ${sanitize(error.message || String(error), TOKEN)}`);
+    console.warn(`Could not ensure labels in ${repoName(CONTROL_REPO)}: ${sanitize(error.message || String(error), TOKEN, CODEX_AUTH_JSON)}`);
   }
   await ensureLabels(gh, TARGET_REPO, WORK_LABELS);
 
@@ -189,7 +189,7 @@ async function main() {
     } catch (automergeError) {
       automerge = {
         enabled: false,
-        reason: sanitize(automergeError.message || String(automergeError), TOKEN)
+        reason: sanitize(automergeError.message || String(automergeError), TOKEN, CODEX_AUTH_JSON)
       };
     }
 
@@ -211,7 +211,7 @@ async function main() {
     ledger.actions.push({ action: "open-pr", url: pullRequest.html_url, automerge });
   } catch (error) {
     ledger.status = "blocked";
-    ledger.error = sanitize(error.stack || error.message || String(error), TOKEN);
+    ledger.error = sanitize(error.stack || error.message || String(error), TOKEN, CODEX_AUTH_JSON);
     if (pullRequest) {
       ledger.pull_request = pullRequest.html_url;
     }
@@ -231,11 +231,11 @@ async function main() {
         ].join("\n")
       );
     } catch (updateError) {
-      console.warn(`DarkFactory failed to mark issue blocked: ${sanitize(updateError.stack || updateError.message || String(updateError), TOKEN)}`);
+      console.warn(`DarkFactory failed to mark issue blocked: ${sanitize(updateError.stack || updateError.message || String(updateError), TOKEN, CODEX_AUTH_JSON)}`);
     }
     throw error;
   } finally {
-    const cleanup = await cleanupTempRoot(tempRoot, (warning) => console.warn(sanitize(warning, TOKEN)));
+    const cleanup = await cleanupTempRoot(tempRoot, (warning) => console.warn(sanitize(warning, TOKEN, CODEX_AUTH_JSON)));
     ledger.cleanup = cleanup;
     await writeLedger(ledger);
   }
@@ -452,7 +452,7 @@ async function enableAutoMerge(pullRequestId) {
     );
     return { enabled: true, reason: "" };
   } catch (error) {
-    return { enabled: false, reason: sanitize(error.message || String(error), TOKEN) };
+    return { enabled: false, reason: sanitize(error.message || String(error), TOKEN, CODEX_AUTH_JSON) };
   }
 }
 
@@ -484,7 +484,7 @@ function runCommand(command, args, cwd) {
     env: process.env
   });
   if (result.status !== 0) {
-    throw new Error(`${command} failed with exit ${result.status}\n${sanitize(result.stdout || "", TOKEN)}\n${sanitize(result.stderr || "", TOKEN)}`.trim());
+    throw new Error(`${command} failed with exit ${result.status}\n${sanitize(result.stdout || "", TOKEN, CODEX_AUTH_JSON)}\n${sanitize(result.stderr || "", TOKEN, CODEX_AUTH_JSON)}`.trim());
   }
   return result.stdout || "";
 }
@@ -516,6 +516,6 @@ async function writeLedger(ledger) {
     ledger.ledger = await writeRunLedger(gh, DATA_REPO, "df-work", repoName(TARGET_REPO), ledger);
     console.log(`DarkFactory ledger written to ${ledger.ledger.repository}/${ledger.ledger.path}`);
   } catch (error) {
-    console.warn(sanitize(`DarkFactory ledger warning: ${error.message || String(error)}`, TOKEN));
+    console.warn(sanitize(`DarkFactory ledger warning: ${error.message || String(error)}`, TOKEN, CODEX_AUTH_JSON));
   }
 }

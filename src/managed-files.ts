@@ -26,6 +26,7 @@ export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".darkfactory/managed-repository
 export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".darkfactory/installer-policy.json";
 export const DARK_FACTORY_RELEASE_POLICY_PATH = ".darkfactory/release-policy.json";
 export const DARK_FACTORY_BRANCHING_POLICY_PATH = ".darkfactory/branching-policy.md";
+export const DARK_FACTORY_ENFORCEMENT_RULES_PATH = ".darkfactory/enforcement-rules.json";
 export const DARK_FACTORY_LABELS_PATH = ".darkfactory/labels.json";
 export const DARK_FACTORY_RELEASE_CONVENTIONS_PATH = ".darkfactory/release-conventions.md";
 
@@ -120,6 +121,7 @@ export function requiredManagedFilePaths(_root = resolveManagedWorkspaceRoot()):
     CODEX_REVIEW_SCRIPT_PATH,
     DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH,
     DARK_FACTORY_BRANCHING_POLICY_PATH,
+    DARK_FACTORY_ENFORCEMENT_RULES_PATH,
     DARK_FACTORY_LABELS_PATH,
     DARK_FACTORY_MANAGED_CONFIG_PATH,
     DARK_FACTORY_INSTALLER_POLICY_PATH,

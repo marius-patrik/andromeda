@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "description": "DarkFactory action and merge gates. Rules are loaded by df-work, df-orchestrate, and df-follow-through before dispatch or merge actions.",
+  "rules": [
+    {
+      "id": "never-merge-red",
+      "enabled": true,
+      "gates": ["merge"],
+      "description": "Worker PRs may merge only when all required checks are reported and successful."
+    },
+    {
+      "id": "no-force-push",
+      "enabled": true,
+      "gates": ["dispatch"],
+      "description": "DarkFactory creates fresh worker branches and never force-pushes them."
+    },
+    {
+      "id": "no-admin-bypass",
+      "enabled": true,
+      "gates": ["merge"],
+      "description": "DarkFactory must not use admin bypass or direct protected-branch bypass to merge PRs."
+    },
+    {
+      "id": "secrets-never-logged",
+      "enabled": true,
+      "gates": ["dispatch", "merge"],
+      "description": "Known runtime secrets must be redacted from errors, logs, comments, and ledgers."
+    },
+    {
+      "id": "parked-repos-untouched",
+      "enabled": true,
+      "gates": ["dispatch", "merge"],
+      "description": "Repositories parked in the managed lifecycle registry are skipped."
+    },
+    {
+      "id": "work-PRs-target-dev",
+      "enabled": true,
+      "gates": ["dispatch", "merge"],
+      "description": "Worker branches target dev where the repository model provides it; repositories without dev may use their default branch.",
+      "config": {
+        "targetBranches": ["dev"],
+        "allowDefaultBranchFallback": true
+      }
+    }
+  ]
+}

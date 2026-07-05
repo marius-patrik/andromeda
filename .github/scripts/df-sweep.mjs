@@ -8,9 +8,12 @@ import {
   extractClosingIssueNumbers,
   getRepository,
   getRequiredStatusCheckContexts,
+  enforcementFailureReason,
+  evaluateEnforcementRules,
   isDarkFactoryWorkerPullRequest as isWorkerPullRequest,
   isParkedRepo,
   listActiveManagedRepos,
+  loadEnforcementRules,
   managedRepoLifecycleState,
   normalizedRepoName,
   parseRepo,
@@ -216,6 +219,33 @@ export async function considerPullRequest(repository, pull) {
       `Fresh GitHub mergeability is \`${mergeGate.mergeable || "unknown"}\`.`
     ]);
     return { repo: repoName(repository), pr: ref, action: "skip", reason, issue_update: issueUpdate };
+  }
+
+  const repo = await getRepositoryForEnforcement(repository, pull.baseRefName);
+  const rules = await loadEnforcementRules(gh, repository);
+  const enforcementDecision = evaluateEnforcementRules(rules, {
+    gate: "merge",
+    repositoryName: repoName(repository),
+    repositoryParked: isParkedRepo(repository),
+    baseBranch: pull.baseRefName,
+    defaultBranch: repo.default_branch,
+    checksGreen: checksAreGreen(mergeGate.statusCheckRollup),
+    checksSummary: checksSummary(mergeGate.statusCheckRollup),
+    adminBypass: false,
+    secretsInLogs: false
+  });
+  if (!enforcementDecision.passed) {
+    const issueUpdate = await markWorkerIssueBlocked(repository, pull, "enforcement-rules-blocked", [
+      enforcementFailureReason(enforcementDecision)
+    ]);
+    return {
+      repo: repoName(repository),
+      pr: ref,
+      action: "skip",
+      reason: "enforcement-rules-blocked",
+      enforcement: enforcementDecision,
+      issue_update: issueUpdate
+    };
   }
 
   const protectedBranch = await branchIsProtected(repository, pull.baseRefName);
@@ -643,6 +673,14 @@ async function branchIsProtected(repository, branch) {
     if (error.status === 404) return false;
     if (error.status === 403) return false;
     throw error;
+  }
+}
+
+async function getRepositoryForEnforcement(repository, fallbackDefaultBranch) {
+  try {
+    return await getRepository(gh, repository);
+  } catch (error) {
+    return { default_branch: fallbackDefaultBranch };
   }
 }
 

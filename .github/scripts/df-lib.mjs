@@ -10,7 +10,24 @@ export const PARKED_REPOS = new Set([
   "marius-patrik/life-support"
 ]);
 export const MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
+export const ENFORCEMENT_RULES_PATH = ".darkfactory/enforcement-rules.json";
 export const MANAGED_REPO_STATES = new Set(["active", "parked", "archived", "completed", "removed"]);
+export const DEFAULT_ENFORCEMENT_RULES = {
+  schemaVersion: 1,
+  rules: [
+    { id: "never-merge-red", enabled: true, gates: ["merge"] },
+    { id: "no-force-push", enabled: true, gates: ["dispatch"] },
+    { id: "no-admin-bypass", enabled: true, gates: ["merge"] },
+    { id: "secrets-never-logged", enabled: true, gates: ["dispatch", "merge"] },
+    { id: "parked-repos-untouched", enabled: true, gates: ["dispatch", "merge"] },
+    {
+      id: "work-PRs-target-dev",
+      enabled: true,
+      gates: ["dispatch", "merge"],
+      config: { targetBranches: ["dev"], allowDefaultBranchFallback: true }
+    }
+  ]
+};
 
 export const WORK_LABELS = [
   { name: "df:ready", color: "0E8A16", description: "DarkFactory work loop may pick up this issue" },
@@ -86,6 +103,161 @@ export async function readManagedRepoRegistry(root = process.cwd()) {
     ? registry.repositories
     : {};
   return { ...registry, repositories };
+}
+
+export async function readEnforcementRules(root = process.cwd()) {
+  return normalizeEnforcementRules(
+    await readLocalJson(path.join(root, ENFORCEMENT_RULES_PATH), DEFAULT_ENFORCEMENT_RULES)
+  );
+}
+
+export async function loadEnforcementRules(gh, repository, options = {}) {
+  if (options.rules) return normalizeEnforcementRules(options.rules);
+  if (gh && repository) {
+    try {
+      const content = await getOptionalFileContent(gh, repository, ENFORCEMENT_RULES_PATH, options.ref);
+      if (content) return normalizeEnforcementRules(JSON.parse(content));
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(`Invalid ${ENFORCEMENT_RULES_PATH} in ${repoName(repository)}: ${error.message}`);
+      }
+      return await readEnforcementRules(options.root ?? process.cwd());
+    }
+  }
+  return await readEnforcementRules(options.root ?? process.cwd());
+}
+
+export function normalizeEnforcementRules(config) {
+  const rules = Array.isArray(config?.rules) ? config.rules : DEFAULT_ENFORCEMENT_RULES.rules;
+  return {
+    schemaVersion: Number(config?.schemaVersion) || 1,
+    rules: rules
+      .filter((rule) => rule && typeof rule.id === "string" && rule.id.trim())
+      .map((rule) => ({
+        ...rule,
+        id: rule.id.trim(),
+        enabled: rule.enabled !== false,
+        gates: Array.isArray(rule.gates) ? rule.gates.filter(Boolean) : [],
+        config: rule.config && typeof rule.config === "object" ? rule.config : {}
+      }))
+  };
+}
+
+export function enabledRule(rulesConfig, ruleId, gate) {
+  const rules = Array.isArray(rulesConfig?.rules) ? rulesConfig.rules : [];
+  return rules.find((rule) => {
+    return rule.id === ruleId && rule.enabled !== false && (!gate || rule.gates.length === 0 || rule.gates.includes(gate));
+  }) ?? null;
+}
+
+export function evaluateEnforcementRules(rulesConfig, context) {
+  const gate = context.gate;
+  const failures = [];
+  const fail = (rule, reason) => {
+    if (rule) failures.push({ rule: rule.id, reason });
+  };
+  for (const rule of (Array.isArray(rulesConfig?.rules) ? rulesConfig.rules : [])) {
+    if (rule.enabled === false) continue;
+    if (rule.gates.length && !rule.gates.includes(gate)) continue;
+    if (rule.assert) evaluateRuleAssertion(rule, context, fail);
+  }
+
+  failIfParked(enabledRule(rulesConfig, "parked-repos-untouched", gate), context, fail);
+  failIfWrongWorkBase(enabledRule(rulesConfig, "work-PRs-target-dev", gate), context, fail);
+  failIfRed(enabledRule(rulesConfig, "never-merge-red", gate), context, fail);
+  failIfAdminBypass(enabledRule(rulesConfig, "no-admin-bypass", gate), context, fail);
+  failIfForcePush(enabledRule(rulesConfig, "no-force-push", gate), context, fail);
+  failIfSecretLeak(enabledRule(rulesConfig, "secrets-never-logged", gate), context, fail);
+
+  return {
+    passed: failures.length === 0,
+    failures
+  };
+}
+
+function evaluateRuleAssertion(rule, context, fail) {
+  const checks = Array.isArray(rule.assert?.all) ? rule.assert.all : [rule.assert].filter(Boolean);
+  for (const check of checks) {
+    if (!assertionPasses(check, context)) {
+      fail(rule, check.message || `assertion failed for ${check.field || "unknown field"}`);
+    }
+  }
+}
+
+function assertionPasses(check, context) {
+  const actual = valueAtPath(context, check.field);
+  if (Object.hasOwn(check, "equals")) return actual === check.equals;
+  if (Object.hasOwn(check, "notEquals")) return actual !== check.notEquals;
+  if (Array.isArray(check.in)) return check.in.includes(actual);
+  if (Array.isArray(check.notIn)) return !check.notIn.includes(actual);
+  if (Object.hasOwn(check, "truthy")) return Boolean(actual) === Boolean(check.truthy);
+  if (typeof check.matches === "string") {
+    try {
+      return new RegExp(check.matches).test(String(actual ?? ""));
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function valueAtPath(context, field) {
+  if (typeof field !== "string" || !field) return undefined;
+  return field.split(".").reduce((value, part) => value?.[part], context);
+}
+
+export function enforcementFailureReason(decision) {
+  return decision.failures.map((failure) => `${failure.rule}: ${failure.reason}`).join("; ");
+}
+
+function failIfParked(rule, context, fail) {
+  if (!rule) return;
+  if (context.repositoryParked === true) {
+    fail(rule, `repository ${context.repositoryName || ""} is parked`);
+  }
+  if (context.lifecycleState && context.lifecycleState !== "active") {
+    fail(rule, `managed lifecycle state is '${context.lifecycleState}'`);
+  }
+}
+
+function failIfWrongWorkBase(rule, context, fail) {
+  if (!rule) return;
+  const base = context.baseBranch || context.pull?.baseRefName || "";
+  if (!base) return;
+  const targetBranches = Array.isArray(rule.config.targetBranches) && rule.config.targetBranches.length
+    ? rule.config.targetBranches
+    : ["dev"];
+  if (targetBranches.includes(base)) return;
+  if (rule.config.allowDefaultBranchFallback !== false && context.defaultBranch && base === context.defaultBranch) return;
+  fail(rule, `worker base branch '${base}' is not one of ${targetBranches.join(", ")}`);
+}
+
+function failIfRed(rule, context, fail) {
+  if (!rule || context.gate !== "merge") return;
+  if (context.checksGreen !== true) {
+    fail(rule, context.checksSummary ? `checks are not green (${context.checksSummary})` : "checks are not green");
+  }
+}
+
+function failIfAdminBypass(rule, context, fail) {
+  if (!rule || context.gate !== "merge") return;
+  if (context.adminBypass === true) {
+    fail(rule, "admin bypass was requested");
+  }
+}
+
+function failIfForcePush(rule, context, fail) {
+  if (!rule || context.gate !== "dispatch") return;
+  if (context.forcePush === true) {
+    fail(rule, "force push was requested");
+  }
+}
+
+function failIfSecretLeak(rule, context, fail) {
+  if (!rule) return;
+  if (context.secretsInLogs === true) {
+    fail(rule, "a known secret was found in loggable output");
+  }
 }
 
 export function managedRepoLifecycleState(repository, registry) {
@@ -394,9 +566,36 @@ export async function getBranchProtection(gh, repository, branch) {
   }
 }
 
-export async function preflightMergePolicy(gh, repository, baseBranch, repo) {
+export async function preflightMergePolicy(gh, repository, baseBranch, repo, options = {}) {
   const branchProtection = await getBranchProtection(gh, repository, baseBranch);
   const autoMergeSupported = repo.allow_auto_merge === true;
+  const rules = await loadEnforcementRules(gh, repository, options);
+  const lifecycleState = options.lifecycleState ?? (options.registry ? managedRepoLifecycleState(repository, options.registry) : "");
+  const rulesDecision = evaluateEnforcementRules(rules, {
+    gate: "dispatch",
+    repositoryName: repoName(repository),
+    repositoryParked: isParkedRepo(repository),
+    lifecycleState,
+    baseBranch,
+    defaultBranch: repo.default_branch,
+    forcePush: false,
+    secretsInLogs: false
+  });
+
+  if (!rulesDecision.passed) {
+    return {
+      blocked: true,
+      reason: [
+        `DarkFactory enforcement rules blocked dispatch for ${repoName(repository)} on \`${baseBranch}\`.`,
+        enforcementFailureReason(rulesDecision)
+      ].join(" "),
+      useAutomerge: false,
+      autoMergeSupported,
+      branchProtection,
+      enforcement: rulesDecision,
+      summary: `enforcement rules blocked worker dispatch for \`${baseBranch}\``
+    };
+  }
 
   if (!branchProtection.configured) {
     return {
@@ -594,7 +793,7 @@ export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
     return requiredContexts.length === 0;
   }
 
-  return statusCheckRollup.every((check) => {
+  const allReportedChecksAreGreen = statusCheckRollup.every((check) => {
     if (check.__typename === "CheckRun") {
       return check.status === "COMPLETED" && check.conclusion === "SUCCESS";
     }
@@ -602,6 +801,15 @@ export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
       return check.state === "SUCCESS";
     }
     return false;
+  });
+  if (!allReportedChecksAreGreen) return false;
+
+  return requiredContexts.every((requiredContext) => {
+    return statusCheckRollup.some((check) => {
+      if (check.__typename === "CheckRun") return check.name === requiredContext;
+      if (check.__typename === "StatusContext") return check.context === requiredContext;
+      return false;
+    });
   });
 }
 

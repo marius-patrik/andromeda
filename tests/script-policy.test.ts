@@ -14,6 +14,7 @@ const {
   checksAreGreen,
   cleanupTempRoot,
   extractClosingIssueNumbers,
+  evaluateEnforcementRules,
   getBranchProtection,
   getRequiredStatusCheckContexts,
   darkFactoryWorkerIssueNumber,
@@ -26,6 +27,7 @@ const {
   preflightMergePolicy,
   prdIssueBody,
   reconcileLabelDiff,
+  readEnforcementRules,
   repoName,
   taskClassFromLabels
 } = dfLib;
@@ -91,6 +93,77 @@ test("task class labels map to Codex reasoning effort", () => {
     taskClass: "standard",
     effort: "medium"
   });
+});
+
+test("enforcement rules load built-in merge and dispatch gates", async () => {
+  const rules = await readEnforcementRules();
+  const ids = rules.rules.map((rule: { id: string }) => rule.id);
+
+  assert.ok(ids.includes("never-merge-red"));
+  assert.ok(ids.includes("no-force-push"));
+  assert.ok(ids.includes("no-admin-bypass"));
+  assert.ok(ids.includes("secrets-never-logged"));
+  assert.ok(ids.includes("parked-repos-untouched"));
+  assert.ok(ids.includes("work-PRs-target-dev"));
+});
+
+test("enforcement rules block parked repos, red merges, and non-dev worker bases", () => {
+  const rules = {
+    schemaVersion: 1,
+    rules: [
+      { id: "parked-repos-untouched", enabled: true, gates: ["dispatch"] },
+      { id: "never-merge-red", enabled: true, gates: ["merge"] },
+      {
+        id: "work-PRs-target-dev",
+        enabled: true,
+        gates: ["merge"],
+        config: { targetBranches: ["dev"], allowDefaultBranchFallback: false }
+      }
+    ]
+  };
+
+  assert.equal(evaluateEnforcementRules(rules, {
+    gate: "dispatch",
+    repositoryParked: true,
+    lifecycleState: "parked"
+  }).passed, false);
+
+  const mergeDecision = evaluateEnforcementRules(rules, {
+    gate: "merge",
+    baseBranch: "main",
+    defaultBranch: "main",
+    checksGreen: false,
+    checksSummary: "validate:COMPLETED/FAILURE"
+  });
+  assert.equal(mergeDecision.passed, false);
+  assert.deepEqual(mergeDecision.failures.map((failure: { rule: string }) => failure.rule), [
+    "work-PRs-target-dev",
+    "never-merge-red"
+  ]);
+});
+
+test("enforcement rules support declarative extension assertions", () => {
+  const decision = evaluateEnforcementRules({
+    schemaVersion: 1,
+    rules: [
+      {
+        id: "custom-base-prefix",
+        enabled: true,
+        gates: ["merge"],
+        assert: {
+          field: "baseBranch",
+          matches: "^release/",
+          message: "base branch must be a release branch"
+        }
+      }
+    ]
+  }, {
+    gate: "merge",
+    baseBranch: "dev"
+  });
+
+  assert.equal(decision.passed, false);
+  assert.equal(decision.failures[0].rule, "custom-base-prefix");
 });
 
 test("prdIssueBody records deterministic Blocked-by sequencing", () => {
@@ -198,7 +271,7 @@ test("checksAreGreen rejects pending or failing checks without requiring fixed c
       [{ __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" }],
       ["ci"]
     ),
-    true
+    false
   );
   assert.equal(checksAreGreen([{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }]), false);
   assert.equal(checksAreGreen([{ __typename: "StatusContext", state: "FAILURE" }]), false);
