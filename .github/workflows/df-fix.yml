@@ -39,13 +39,9 @@ jobs:
             exit 1
           fi
 
-          if [[ "${GITHUB_EVENT_NAME}" == "schedule" && "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
-            echo "::error::Scheduled DarkFactory fix cycle can only run from refs/heads/main."
+          if [[ "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
+            echo "::error::DarkFactory fix cycle can only run from refs/heads/main. Manual runs must use --ref main."
             exit 1
-          fi
-
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
-            echo "::notice::Manual df-fix dispatch selected ${GITHUB_REF}; executing trusted refs/heads/main instead."
           fi
 
       - name: Checkout installed DarkFactory fix cycle

@@ -490,8 +490,8 @@ test("df-fix workflow validates trusted refs before privileged tokens", async ()
   assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
   assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'/);
   assert.match(workflow, /GITHUB_REPOSITORY/);
-  assert.match(workflow, /GITHUB_EVENT_NAME.*schedule.*GITHUB_REF.*refs\/heads\/main/);
-  assert.match(workflow, /Manual df-fix dispatch selected/);
+  assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
+  assert.match(workflow, /Manual runs must use --ref main/);
   assert.match(workflow, /actions:\s+write/);
   assert.match(workflow, /permission-contents:\s+write/);
   assert.match(workflow, /permission-issues:\s+write/);
