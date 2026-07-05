@@ -1,4 +1,5 @@
 import { readFile, rm } from "node:fs/promises";
+import path from "node:path";
 
 export const API_ROOT = "https://api.github.com";
 export const DEFAULT_DATA_REPO = "marius-patrik/darkfactory-data";
@@ -8,6 +9,8 @@ export const PARKED_REPOS = new Set([
   "marius-patrik/singularity",
   "marius-patrik/life-support"
 ]);
+export const MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
+export const MANAGED_REPO_STATES = new Set(["active", "parked", "archived", "completed", "removed"]);
 
 export const WORK_LABELS = [
   { name: "df:ready", color: "0E8A16", description: "DarkFactory work loop may pick up this issue" },
@@ -57,14 +60,113 @@ export function repoName(repository) {
   return `${repository.owner}/${repository.repo}`;
 }
 
+export function normalizedRepoName(repository) {
+  return repoName(repository).toLowerCase();
+}
+
 export function isParkedRepo(repository) {
-  return PARKED_REPOS.has(repoName(repository).toLowerCase());
+  return PARKED_REPOS.has(normalizedRepoName(repository));
 }
 
 export function assertAllowedRepo(repository) {
   if (isParkedRepo(repository)) {
     throw new Error(`Refusing to touch parked repository: ${repoName(repository)}`);
   }
+}
+
+export async function readManagedRepoRegistry(root = process.cwd()) {
+  const registry = await readLocalJson(path.join(root, MANAGED_REPOS_PATH), { schemaVersion: 1, repositories: {} });
+  const repositories = registry?.repositories && typeof registry.repositories === "object"
+    ? registry.repositories
+    : {};
+  return { ...registry, repositories };
+}
+
+export function managedRepoLifecycleState(repository, registry) {
+  const repositories = registry?.repositories && typeof registry.repositories === "object"
+    ? registry.repositories
+    : {};
+  const entry = repositories[normalizedRepoName(repository)] ?? repositories[repoName(repository)];
+  const state = typeof entry === "string" ? entry : entry?.state;
+  if (!state) return "removed";
+  if (!MANAGED_REPO_STATES.has(state)) {
+    throw new Error(`Invalid DarkFactory managed repository state '${state}' for ${repoName(repository)}.`);
+  }
+  return state;
+}
+
+export function isActiveManagedRepo(repository, registry) {
+  return managedRepoLifecycleState(repository, registry) === "active";
+}
+
+export function normalizeInstallationRepository(repository) {
+  if (repository?.full_name) {
+    return {
+      repository: parseRepo(repository.full_name),
+      archived: repository.archived === true,
+      disabled: repository.disabled === true
+    };
+  }
+
+  if (repository?.owner?.login && repository?.name) {
+    return {
+      repository: { owner: repository.owner.login, repo: repository.name },
+      archived: repository.archived === true,
+      disabled: repository.disabled === true
+    };
+  }
+
+  return null;
+}
+
+export async function listInstallationRepositories(gh) {
+  const repositories = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const data = await gh.request("GET", `/installation/repositories?per_page=100&page=${page}`);
+    if (!Array.isArray(data.repositories) || data.repositories.length === 0) break;
+    repositories.push(...data.repositories);
+    if (data.repositories.length < 100) break;
+  }
+  return repositories;
+}
+
+export async function listActiveManagedRepos(gh, controlRepo, options = {}) {
+  const registry = options.registry ?? await readManagedRepoRegistry(options.root ?? process.cwd());
+  const installationRepositories = options.repositories ?? await listInstallationRepositories(gh);
+  const warn = options.warn ?? console.warn;
+  const active = [];
+
+  for (const installationRepository of installationRepositories) {
+    const normalized = normalizeInstallationRepository(installationRepository);
+    if (!normalized) continue;
+    const { repository, archived, disabled } = normalized;
+    if (repository.owner !== controlRepo.owner) continue;
+
+    const state = managedRepoLifecycleState(repository, registry);
+    if (archived || disabled) {
+      warn(`DarkFactory skipped ${repoName(repository)} because GitHub reports archived=${archived} disabled=${disabled}.`);
+      continue;
+    }
+    if (state !== "active") {
+      warn(`DarkFactory skipped ${repoName(repository)} because managed lifecycle state is '${state}'.`);
+      continue;
+    }
+    active.push(repository);
+  }
+
+  active.sort((a, b) => normalizedRepoName(a).localeCompare(normalizedRepoName(b)));
+  return active;
+}
+
+export function isRepositoryReadOnlyError(error) {
+  if (error?.status !== 403) return false;
+  return /\b(archived|disabled|read-?only|read only)\b/i.test(error.message || "");
+}
+
+export function warnReadOnlyRepository(repository, error, action = "write", warn = console.warn) {
+  if (!isRepositoryReadOnlyError(error)) return false;
+  warn(`DarkFactory skipped ${action} for ${repoName(repository)} because the repository is archived, disabled, or read-only: ${error.message || String(error)}`);
+  return true;
 }
 
 export function slug(value) {
@@ -229,7 +331,7 @@ export async function getRequiredStatusCheckContexts(gh, repository, branch) {
     return [];
   } catch (error) {
     if (error.status === 404) return [];
-    if (error.status === 403 && /enable this feature/i.test(error.message || "")) return [];
+    if (error.status === 403) return [];
     throw error;
   }
 }
@@ -376,7 +478,7 @@ export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
 
   const allGreen = statusCheckRollup.every((check) => {
     if (check.__typename === "CheckRun") {
-      return check.status === "COMPLETED" && ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(check.conclusion);
+      return check.status === "COMPLETED" && check.conclusion === "SUCCESS";
     }
     if (check.__typename === "StatusContext") {
       return check.state === "SUCCESS";
