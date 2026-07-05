@@ -31,6 +31,7 @@ const {
 const {
   assertFixPatchPathPolicy,
   classifyFixCandidate,
+  codexWorkerHostEnv,
   deniedFixPatchPaths,
   getMergeBranchProtectionState,
   mergeGateTrustFailure,
@@ -509,6 +510,29 @@ test("df-fix script uses active managed repos and fresh merge gates", async () =
   assert.doesNotMatch(source, /--admin/);
   assert.doesNotMatch(source, /danger-full-access/);
   assert.doesNotMatch(source, /path\.join\(worktree, "\.darkfactory"/);
+});
+
+test("df-fix codex worker is network-allowlisted and drops privileged token env", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-fix.mjs", import.meta.url), "utf8");
+  const scopedEnv = codexWorkerHostEnv({
+    PATH: "/usr/bin",
+    CODEX_AUTH_JSON: "codex-secret",
+    DARK_FACTORY_TOKEN: "app-token",
+    GH_TOKEN: "gh-token",
+    GITHUB_TOKEN: "github-token",
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: "oidc-token",
+    NORMAL_SETTING: "kept"
+  });
+
+  assert.deepEqual(scopedEnv, { PATH: "/usr/bin", NORMAL_SETTING: "kept" });
+  assert.match(source, /createCodexNetworkBoundary/);
+  assert.match(source, /DF_CODEX_EGRESS_HOSTS \?\? "api\.openai\.com"/);
+  assert.match(source, /DOCKER-USER/);
+  assert.match(source, /"--network"/);
+  assert.match(source, /"--add-host"/);
+  assert.match(source, /"--dport", "443"/);
+  assert.match(source, /"DROP"/);
+  assert.match(source, /codexWorkerHostEnv\(\)/);
 });
 
 test("df-fix rejects generated patches that touch privileged paths before push", async () => {

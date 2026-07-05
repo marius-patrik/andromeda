@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lookup } from "node:dns/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -32,6 +33,18 @@ const DEFAULT_MAX_ROUNDS = 3;
 const WORKER_IMAGE = process.env.DF_WORKER_IMAGE ?? "darkfactory-codex-worker";
 const CODEX_MODEL = process.env.DF_CODEX_MODEL ?? "gpt-5.5";
 const CODEX_EFFORT = process.env.DF_CODEX_EFFORT ?? "high";
+const CODEX_EGRESS_HOSTS = (process.env.DF_CODEX_EGRESS_HOSTS ?? "api.openai.com")
+  .split(/[\s,]+/)
+  .map((host) => host.trim().toLowerCase())
+  .filter(Boolean);
+const SENSITIVE_CODEX_WORKER_ENV = new Set([
+  "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+  "CODEX_AUTH_JSON",
+  "DARK_FACTORY_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "DARK_FACTORY_PRIVATE_KEY"
+]);
 const EMPTY_CHECK_SETTLE_MS = 10 * 60 * 1000;
 let workerImageBuilt = false;
 
@@ -333,7 +346,12 @@ async function fixPullRequest(gh, repository, pull, classification, codeAuthJson
     await writeCodexAuth(codexHome, codeAuthJson);
     const briefInfo = await writeFixBrief(gh, repository, pull, promptWorkspace, classification, token);
     buildWorkerImage(token);
-    runCodexWorker(promptWorkspace, codexHome, CODEX_EFFORT, token, targetSnapshot);
+    const networkBoundary = await createCodexNetworkBoundary(token);
+    try {
+      runCodexWorker(promptWorkspace, codexHome, CODEX_EFFORT, token, targetSnapshot, networkBoundary);
+    } finally {
+      networkBoundary.cleanup();
+    }
 
     const summary = await readOptional(path.join(promptWorkspace, ".darkfactory", "df-worker-summary.md"));
     const patch = await readOptional(path.join(promptWorkspace, ".darkfactory", "df-fix.patch"));
@@ -1011,7 +1029,93 @@ function buildWorkerImage(token) {
   workerImageBuilt = true;
 }
 
-function runCodexWorker(worktree, codexHome, effort, token, targetSnapshot = "") {
+async function createCodexNetworkBoundary(token) {
+  if (!CODEX_EGRESS_HOSTS.length) {
+    throw new Error("df-fix refused to run Codex without at least one allowed OpenAI egress host.");
+  }
+
+  const networkName = `df-codex-${process.pid}-${Date.now()}`;
+  const cleanupRules = [];
+  const cleanupWarnings = [];
+  const hostEntries = [];
+  const commandEnv = codexWorkerHostEnv();
+
+  const cleanup = () => {
+    for (const rule of [...cleanupRules].reverse()) {
+      try {
+        runCommand("sudo", ["iptables", "-D", ...rule], process.cwd(), token, { env: commandEnv });
+      } catch (error) {
+        cleanupWarnings.push(error.message || String(error));
+      }
+    }
+    try {
+      runCommand("docker", ["network", "rm", networkName], process.cwd(), token, { env: commandEnv });
+    } catch (error) {
+      cleanupWarnings.push(error.message || String(error));
+    }
+    if (cleanupWarnings.length) {
+      console.warn(sanitize(`Codex egress cleanup warnings: ${cleanupWarnings.join("; ")}`, token));
+    }
+  };
+
+  try {
+    runCommand("docker", ["network", "create", networkName], process.cwd(), token, { env: commandEnv });
+    const subnet = runCommand(
+      "docker",
+      ["network", "inspect", "--format", "{{range .IPAM.Config}}{{.Subnet}}{{end}}", networkName],
+      process.cwd(),
+      token,
+      { env: commandEnv }
+    ).trim();
+    if (!subnet) throw new Error(`Docker network ${networkName} did not report an IPv4 subnet.`);
+
+    const allowedHostIps = await resolveAllowedEgressIps(CODEX_EGRESS_HOSTS);
+    if (!allowedHostIps.length) {
+      throw new Error(`Could not resolve allowed Codex egress hosts: ${CODEX_EGRESS_HOSTS.join(", ")}`);
+    }
+
+    const dropRule = ["DOCKER-USER", "-s", subnet, "-j", "DROP"];
+    runCommand("sudo", ["iptables", "-I", ...dropRule], process.cwd(), token, { env: commandEnv });
+    cleanupRules.push(dropRule);
+
+    for (const { host, ip } of [...allowedHostIps].reverse()) {
+      const allowRule = ["DOCKER-USER", "-s", subnet, "-d", ip, "-p", "tcp", "--dport", "443", "-j", "RETURN"];
+      runCommand("sudo", ["iptables", "-I", ...allowRule], process.cwd(), token, { env: commandEnv });
+      cleanupRules.push(allowRule);
+    }
+
+    const firstIpByHost = new Map();
+    for (const { host, ip } of allowedHostIps) {
+      if (!firstIpByHost.has(host)) firstIpByHost.set(host, ip);
+    }
+    for (const [host, ip] of firstIpByHost) {
+      hostEntries.push(`${host}:${ip}`);
+    }
+
+    return { networkName, hostEntries, cleanup };
+  } catch (error) {
+    cleanup();
+    throw new Error(`df-fix could not establish Codex egress allowlist: ${sanitize(error.message || String(error), token)}`);
+  }
+}
+
+async function resolveAllowedEgressIps(hosts) {
+  const results = [];
+  for (const host of hosts) {
+    if (!/^[a-z0-9.-]+$/.test(host)) throw new Error(`invalid egress host: ${host}`);
+    const addresses = await lookup(host, { family: 4, all: true });
+    for (const address of addresses) {
+      if (address?.address) results.push({ host, ip: address.address });
+    }
+  }
+  return [...new Map(results.map((item) => [`${item.host}:${item.ip}`, item])).values()];
+}
+
+function runCodexWorker(worktree, codexHome, effort, token, targetSnapshot = "", networkBoundary = null) {
+  if (!networkBoundary?.networkName) {
+    throw new Error("df-fix refused to run Codex without an egress-restricted Docker network.");
+  }
+
   const script = [
     "set -euo pipefail",
     "git config --global --add safe.directory /workspace",
@@ -1024,6 +1128,9 @@ function runCodexWorker(worktree, codexHome, effort, token, targetSnapshot = "")
     [
       "run",
       "--rm",
+      "--network",
+      networkBoundary.networkName,
+      ...networkBoundary.hostEntries.flatMap((entry) => ["--add-host", entry]),
       "--entrypoint",
       "bash",
       "-e",
@@ -1044,8 +1151,19 @@ function runCodexWorker(worktree, codexHome, effort, token, targetSnapshot = "")
       script
     ],
     process.cwd(),
-    token
+    token,
+    { env: codexWorkerHostEnv() }
   );
+}
+
+export function codexWorkerHostEnv(env = process.env) {
+  const scoped = { ...env };
+  for (const key of Object.keys(scoped)) {
+    if (SENSITIVE_CODEX_WORKER_ENV.has(key) || /(?:^|_)(?:TOKEN|SECRET|PRIVATE_KEY)(?:_|$)/.test(key)) {
+      delete scoped[key];
+    }
+  }
+  return scoped;
 }
 
 async function readOptional(filePath) {
@@ -1066,12 +1184,12 @@ function runGitWithAuth(args, cwd, token) {
   return runCommand("git", ["-c", `http.https://github.com/.extraheader=AUTHORIZATION: basic ${basicAuth}`, ...args], cwd, token);
 }
 
-function runCommand(command, args, cwd, token) {
+function runCommand(command, args, cwd, token, options = {}) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024,
-    env: process.env
+    env: options.env ?? process.env
   });
   if (result.status !== 0) {
     throw new Error(`${command} failed with exit ${result.status}\n${sanitize(result.stdout || "", token)}\n${sanitize(result.stderr || "", token)}`.trim());
