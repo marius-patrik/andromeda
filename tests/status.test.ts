@@ -14,14 +14,20 @@ import {
   type RepositoryRef
 } from "../src/status.js";
 
-function createRequester(handlers: Record<string, (parameters: Record<string, unknown>) => unknown>): GitHubRequester {
+function createRequester(
+  handlers: Record<string, (parameters: Record<string, unknown>) => { data: unknown; headers?: Record<string, string> } | unknown>
+): GitHubRequester {
   return {
     async request(route, parameters) {
       const handler = handlers[route];
       if (!handler) {
         throw new Error(`Unexpected route: ${route}`);
       }
-      return { data: handler(parameters) };
+      const result = handler(parameters);
+      if (result && typeof result === "object" && "data" in result) {
+        return result as { data: unknown; headers?: Record<string, string> };
+      }
+      return { data: result };
     }
   };
 }
@@ -143,6 +149,50 @@ test("fetchRepoLoopState excludes pull requests from issue counts", async () => 
   assert.equal(state.ready, 1);
   assert.equal(state.running, 0);
   assert.equal(state.askOwner, 0);
+});
+
+test("fetchRepoLoopState skips malformed issue records instead of failing", async () => {
+  const repo: RepositoryRef = { owner: "marius-patrik", repo: "dream" };
+  const github = createRequester({
+    "GET /repos/{owner}/{repo}/issues": (parameters) => {
+      if (parameters.labels === "df:ready") {
+        return [
+          { number: 1, title: "valid", html_url: "https://example/1" },
+          "not-an-object",
+          { number: 2, title: "missing-url" },
+          { title: "missing-number", html_url: "https://example/4" }
+        ];
+      }
+      return [];
+    }
+  });
+
+  const state = await fetchRepoLoopState(github, repo);
+
+  assert.equal(state.ready, 1);
+});
+
+test("fetchRepoLoopState follows Link headers to paginate issue lists", async () => {
+  const repo: RepositoryRef = { owner: "marius-patrik", repo: "dream" };
+  const github = createRequester({
+    "GET /repos/{owner}/{repo}/issues": (parameters) => {
+      const page = Number(parameters.page);
+      if (page === 1) {
+        return {
+          data: [{ number: 1, title: "page-1", html_url: "https://example/1" }],
+          headers: { link: '<https://api.github.com/repos/marius-patrik/dream/issues?page=2>; rel="next"' }
+        };
+      }
+      return {
+        data: [{ number: 2, title: "page-2", html_url: "https://example/2" }],
+        headers: {}
+      };
+    }
+  });
+
+  const state = await fetchRepoLoopState(github, repo);
+
+  assert.equal(state.ready, 2);
 });
 
 test("fetchRecentRuns returns latest plan, orchestrate, and in-flight work runs", async () => {

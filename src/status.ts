@@ -3,7 +3,7 @@ export const CONTROL_REPO = "agent-darkfactory";
 export const DATA_REPO = "data-agentos";
 
 export interface GitHubRequester {
-  request(route: string, parameters: Record<string, unknown>): Promise<{ data: unknown }>;
+  request(route: string, parameters: Record<string, unknown>): Promise<{ data: unknown; headers?: Record<string, string> }>;
 }
 
 export interface RepositoryRef {
@@ -194,29 +194,36 @@ async function listIssuesWithLabel(
       throw new Error(`GitHub returned an invalid issues list for ${repo.owner}/${repo.repo}`);
     }
 
-    const batch = response.data
-      .filter((item) => !isRecord(item) || !isRecord(item.pull_request))
-      .map((item) => {
-        if (
-          !isRecord(item) ||
-          typeof item.number !== "number" ||
-          typeof item.title !== "string" ||
-          typeof item.html_url !== "string"
-        ) {
-          throw new Error(`GitHub returned an invalid issue record in ${repo.owner}/${repo.repo}`);
-        }
-
-        return { number: item.number, title: item.title, html_url: item.html_url };
-      });
+    const batch: Array<{ number: number; title: string; html_url: string }> = [];
+    for (const item of response.data) {
+      if (!isRecord(item)) continue;
+      if (isRecord(item.pull_request)) continue;
+      if (
+        typeof item.number !== "number" ||
+        typeof item.title !== "string" ||
+        typeof item.html_url !== "string"
+      ) {
+        continue;
+      }
+      batch.push({ number: item.number, title: item.title, html_url: item.html_url });
+    }
 
     issues.push(...batch);
 
-    if (response.data.length < 100) {
+    if (!hasNextPage(response.headers)) {
       break;
     }
   }
 
   return issues;
+}
+
+function hasNextPage(headers: Record<string, string> | undefined): boolean {
+  const link = headers?.link ?? headers?.Link;
+  if (typeof link !== "string") {
+    return false;
+  }
+  return link.includes('rel="next"');
 }
 
 export async function fetchRecentRuns(
