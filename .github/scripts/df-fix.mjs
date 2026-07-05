@@ -814,17 +814,15 @@ export async function mergeGreenPullRequest(gh, repository, pull, requiredContex
         checks: checksSummary(mergeGate.statusCheckRollup)
       };
     }
-    if (!/pull request is in clean status/i.test(enabled.reason || "")) {
-      return {
-        repo: repoName(repository),
-        pr: ref,
-        url: pull.url,
-        action: "skip",
-        reason: "protected-branch-automerge-failed",
-        automerge_error: enabled.reason,
-        checks: checksSummary(mergeGate.statusCheckRollup)
-      };
-    }
+    return {
+      repo: repoName(repository),
+      pr: ref,
+      url: pull.url,
+      action: "skip",
+      reason: "protected-branch-automerge-failed",
+      automerge_error: enabled.reason,
+      checks: checksSummary(mergeGate.statusCheckRollup)
+    };
   }
 
   const merged = await gh.request("PUT", `/repos/${repoName(repository)}/pulls/${pull.number}/merge`, {

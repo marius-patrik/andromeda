@@ -586,6 +586,34 @@ test("df-fix merge gate fails closed when branch protection is unreadable", asyn
   assert.equal(result.reason, "branch-protection-unreadable");
 });
 
+test("df-fix protected branch skips instead of direct-merging after automerge failure", async () => {
+  const repository = { owner: "marius-patrik", repo: "active" };
+  const originalPull = workerPull({ number: 42, checkConclusion: "SUCCESS" });
+  const freshPull = {
+    ...originalPull,
+    mergeable: "MERGEABLE",
+    url: "https://github.com/marius-patrik/active/pull/42",
+    statusCheckRollup: { contexts: { nodes: originalPull.statusCheckRollup } }
+  };
+  const gh = {
+    graphql: async (query: string) => {
+      if (query.includes("EnableAutoMerge")) {
+        throw new Error("Pull request is in clean status");
+      }
+      return { repository: { pullRequest: freshPull } };
+    },
+    request: async (method: string, pathName: string) => {
+      if (method === "GET" && pathName.endsWith("/branches/dev/protection")) return {};
+      throw new Error(`unexpected protected-branch merge request: ${method} ${pathName}`);
+    }
+  };
+
+  const result = await mergeGreenPullRequest(gh, repository, originalPull, ["ci"], new Set(), "token");
+  assert.equal(result.action, "skip");
+  assert.equal(result.reason, "protected-branch-automerge-failed");
+  assert.match(result.automerge_error, /clean status/);
+});
+
 test("df-work merge-policy preflight uses direct sweep when branch protection is absent or unreadable", async () => {
   const repository = { owner: "marius-patrik", repo: "example" };
   const unreadablePolicy = await preflightMergePolicy(
