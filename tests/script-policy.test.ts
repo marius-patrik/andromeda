@@ -4,6 +4,8 @@ import test from "node:test";
 
 // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
 const dfLib: any = await import("../.github/scripts/df-lib.mjs");
+// @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+const dfFix: any = await import("../.github/scripts/df-fix.mjs");
 
 const {
   assertAllowedRepo,
@@ -22,8 +24,14 @@ const {
   preflightMergePolicy,
   prdIssueBody,
   reconcileLabelDiff,
+  repoName,
   taskClassFromLabels
 } = dfLib;
+
+const {
+  classifyFixCandidate,
+  parseFixRound
+} = dfFix;
 
 test("parsePrdItems creates stable df-prd markers from PRD milestones and loops", () => {
   const items = parsePrdItems([
@@ -450,6 +458,45 @@ test("df-follow-through workflow validates trusted refs before privileged tokens
   assert.doesNotMatch(workflow, /github\.ref_name|DARK_FACTORY_CONTROL_REF/);
 });
 
+test("df-fix workflow validates trusted refs before privileged tokens", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-fix.yml", import.meta.url), "utf8");
+  const gate = workflow.indexOf("Validate trusted control ref");
+  const checkout = workflow.indexOf("Checkout installed DarkFactory fix cycle");
+  const token = workflow.indexOf("Mint mp-agents installation token");
+
+  assert.notEqual(gate, -1);
+  assert.notEqual(checkout, -1);
+  assert.notEqual(token, -1);
+  assert.ok(gate < token);
+  assert.ok(checkout < token);
+  assert.match(workflow, /^\s+schedule:\s*$/m);
+  assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'/);
+  assert.match(workflow, /GITHUB_REPOSITORY/);
+  assert.match(workflow, /GITHUB_REF_NAME.*main/);
+  assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
+  assert.match(workflow, /permission-contents:\s+write/);
+  assert.match(workflow, /permission-issues:\s+write/);
+  assert.match(workflow, /permission-pull-requests:\s+write/);
+  assert.match(workflow, /permission-workflows:\s+write/);
+  assert.match(workflow, /path:\s+darkfactory-control/);
+  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /darkfactory-control\/\.github\/scripts\/df-fix\.mjs/);
+});
+
+test("df-fix script uses active managed repos and fresh merge gates", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-fix.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /listActiveManagedRepos\(gh, controlRepo, \{ root: CONTROL_ROOT \}\)/);
+  assert.match(source, /isDarkFactoryWorkerPullRequest/);
+  assert.match(source, /df:fix-round:/);
+  assert.match(source, /df:ask-owner/);
+  assert.match(source, /const mergeGate = await getPullRequestMergeGate/);
+  assert.match(source, /checksAreGreen\(mergeGate\.statusCheckRollup, requiredContexts\)/);
+  assert.match(source, /merge_method: "squash"/);
+  assert.doesNotMatch(source, /--admin/);
+});
+
 test("df-work merge-policy preflight uses direct sweep when branch protection is absent or unreadable", async () => {
   const repository = { owner: "marius-patrik", repo: "example" };
   const unreadablePolicy = await preflightMergePolicy(
@@ -534,6 +581,63 @@ test("df-work workflow uses the app token for control-dispatched workers", async
   assert.match(source, /function runGitWithAuth\(args, cwd\) \{\s+return runCommand\("git", \["-c", authHeader\(\), \.\.\.args\], cwd\);/);
 });
 
+test("df-fix selects only red worker PRs from active repositories", async () => {
+  const activeRepository = { owner: "marius-patrik", repo: "active" };
+  const parkedRepository = { owner: "marius-patrik", repo: "skyblock-agent" };
+  const candidates = [
+    { repository: activeRepository, pull: workerPull({ number: 10, checkConclusion: "FAILURE" }) },
+    { repository: activeRepository, pull: workerPull({ number: 11, checkConclusion: "SUCCESS" }) },
+    { repository: activeRepository, pull: { ...workerPull({ number: 12, checkConclusion: "FAILURE" }), author: { login: "marius-patrik" } } },
+    { repository: parkedRepository, pull: workerPull({ number: 13, checkConclusion: "FAILURE" }) }
+  ];
+
+  const fixable = candidates
+    .map(({ repository, pull }) => ({ repository, result: classifyFixCandidate(pull, repository, ["ci"], { maxRounds: 3 }) }))
+    .filter(({ result }) => result.action === "fix")
+    .map(({ repository, result }) => `${repoName(repository)}:${result.pr}`);
+
+  assert.deepEqual(fixable, ["marius-patrik/active:marius-patrik/active#10"]);
+});
+
+test("df-fix round cap escalates instead of looping forever", () => {
+  const repository = { owner: "marius-patrik", repo: "active" };
+  const roundTwo = classifyFixCandidate(
+    workerPull({ number: 20, checkConclusion: "FAILURE", labels: [{ name: "df:fix-round:2" }] }),
+    repository,
+    ["ci"],
+    { maxRounds: 3 }
+  );
+  const roundThree = classifyFixCandidate(
+    workerPull({ number: 21, checkConclusion: "FAILURE", labels: [{ name: "df:fix-round:3" }] }),
+    repository,
+    ["ci"],
+    { maxRounds: 3 }
+  );
+
+  assert.equal(parseFixRound([{ name: "df:fix-round:2" }], "<!-- df:fix-round:1 -->"), 2);
+  assert.equal(roundTwo.action, "fix");
+  assert.equal(roundTwo.round, 3);
+  assert.equal(roundThree.action, "escalate");
+  assert.equal(roundThree.reason, "max-rounds");
+});
+
+test("df-fix classifies all-green PRs for merge and red PRs for fixing", () => {
+  const repository = { owner: "marius-patrik", repo: "active" };
+  const green = classifyFixCandidate(workerPull({ number: 30, checkConclusion: "SUCCESS" }), repository, ["ci"]);
+  const red = classifyFixCandidate(workerPull({ number: 31, checkConclusion: "FAILURE" }), repository, ["ci"]);
+  const pending = classifyFixCandidate(
+    workerPull({ number: 32, checkStatus: "IN_PROGRESS", checkConclusion: null }),
+    repository,
+    ["ci"]
+  );
+
+  assert.equal(green.action, "merge");
+  assert.equal(red.action, "fix");
+  assert.notEqual(red.action, "merge");
+  assert.equal(pending.action, "skip");
+  assert.equal(pending.reason, "checks-pending");
+});
+
 test("df-sweep waits before treating empty check rollups as no-checks-configured", async () => {
   const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
 
@@ -611,7 +715,7 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /permission-actions:\s+write/);
-  assert.doesNotMatch(workflow, /permission-workflows:\s+write/);
+  assert.match(workflow, /permission-workflows:\s+write/);
   assert.match(workflow, /permission-contents:\s+write/);
   assert.match(workflow, /permission-issues:\s+write/);
 });
@@ -647,3 +751,33 @@ test("df-orchestrate restores df:ready when workflow dispatch fails", async () =
   assert.notEqual(restoreIndex, -1);
   assert.ok(dispatchIndex < restoreIndex);
 });
+
+function workerPull(options: {
+  number: number;
+  checkConclusion: string | null;
+  checkStatus?: string;
+  labels?: Array<{ name: string }>;
+}) {
+  return {
+    id: `PR_${options.number}`,
+    number: options.number,
+    title: `Worker PR ${options.number}`,
+    body: `<!-- dark-factory:worker-pr issue=${options.number} -->\n\nCloses #${options.number}`,
+    author: { login: "mp-agents[bot]" },
+    headRefName: `df/${options.number}-worker`,
+    headRepository: { owner: { login: "marius-patrik" }, name: "active" },
+    baseRefName: "dev",
+    isDraft: false,
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    labels: options.labels || [],
+    statusCheckRollup: [
+      {
+        __typename: "CheckRun",
+        name: "ci",
+        status: options.checkStatus || "COMPLETED",
+        conclusion: options.checkConclusion
+      }
+    ]
+  };
+}
