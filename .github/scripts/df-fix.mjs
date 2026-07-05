@@ -359,11 +359,11 @@ export async function fixPullRequestByRedispatch(gh, controlRepo, repository, pu
 }
 
 async function getIssue(gh, repository, issueNumber) {
-  return await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
+  return responseData(await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`));
 }
 
 async function listIssueComments(gh, repository, issueNumber) {
-  const comments = await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}/comments?per_page=100`);
+  const comments = responseData(await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}/comments?per_page=100`));
   return Array.isArray(comments) ? comments : [];
 }
 
@@ -381,7 +381,7 @@ async function getFailingCheckDetails(gh, repository, pull, token) {
 
   let checks;
   try {
-    checks = await gh.request("GET", `/repos/${repoName(repository)}/commits/${pull.headRefOid}/check-runs?per_page=100`);
+    checks = responseData(await gh.request("GET", `/repos/${repoName(repository)}/commits/${pull.headRefOid}/check-runs?per_page=100`));
   } catch (error) {
     return `Could not read check runs: ${sanitize(error.message || String(error), token)}\nReported checks: ${summary}`;
   }
@@ -608,11 +608,11 @@ export async function mergeGreenPullRequest(gh, repository, pull, requiredContex
     const stillGreen = checksAreGreen(mergeGate.statusCheckRollup, requiredContexts);
     if (stillTrusted && stillGreen && mergeGate.mergeable === "MERGEABLE") {
       try {
-        const merged = await gh.request("PUT", `/repos/${repoName(repository)}/pulls/${pull.number}/merge`, {
+        const merged = responseData(await gh.request("PUT", `/repos/${repoName(repository)}/pulls/${pull.number}/merge`, {
           commit_title: mergeGate.title,
           merge_method: "squash",
           sha: mergeGate.headRefOid
-        });
+        }));
         await closeIssuesIfDevMerge(gh, repository, mergeGate);
         return {
           repo: repoName(repository),
@@ -639,11 +639,11 @@ export async function mergeGreenPullRequest(gh, repository, pull, requiredContex
     };
   }
 
-  const merged = await gh.request("PUT", `/repos/${repoName(repository)}/pulls/${pull.number}/merge`, {
+  const merged = responseData(await gh.request("PUT", `/repos/${repoName(repository)}/pulls/${pull.number}/merge`, {
     commit_title: mergeGate.title,
     merge_method: "squash",
     sha: mergeGate.headRefOid
-  });
+  }));
   await closeIssuesIfDevMerge(gh, repository, mergeGate);
   return {
     repo: repoName(repository),
@@ -772,6 +772,11 @@ function repoList(value) {
 
 function encodeRefPath(ref) {
   return String(ref || "").split("/").map(encodeURIComponent).join("/");
+}
+
+function responseData(response) {
+  if (response && typeof response === "object" && "data" in response) return response.data;
+  return response;
 }
 
 function truncate(value, maxLength) {

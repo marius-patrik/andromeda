@@ -732,19 +732,21 @@ test("df-fix posts a trusted revision request, closes the red PR, deletes the br
     request: async (method: string, pathName: string, body?: any) => {
       calls.push({ method, pathName, body });
       if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/10") {
-        return { number: 10, body: "Issue body", labels: [] };
+        return { data: { number: 10, body: "Issue body", labels: [] } };
       }
       if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/10/comments?per_page=100") {
-        return [
-          {
-            body: [
-              "<!-- darkfactory-codex-review -->",
-              "### Blocking Findings",
-              "- fix the trust boundary"
-            ].join("\n"),
-            updated_at: "2026-07-05T00:00:00Z"
-          }
-        ];
+        return {
+          data: [
+            {
+              body: [
+                "<!-- darkfactory-codex-review -->",
+                "### Blocking Findings",
+                "- fix the trust boundary"
+              ].join("\n"),
+              updated_at: "2026-07-05T00:00:00Z"
+            }
+          ]
+        };
       }
       if (method === "POST" && pathName === "/repos/marius-patrik/active/labels") return {};
       if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/10/labels") return {};
@@ -806,9 +808,9 @@ test("df-fix round cap adds df:ask-owner and does not redispatch", async () => {
     request: async (method: string, pathName: string, body?: any) => {
       calls.push({ method, pathName, body });
       if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/20") {
-        return { number: 20, body: "", labels: [{ name: "df:fix-round:3" }] };
+        return { data: { number: 20, body: "", labels: [{ name: "df:fix-round:3" }] } };
       }
-      if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/20/comments?per_page=100") return [];
+      if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/20/comments?per_page=100") return { data: [] };
       if (method === "POST" && pathName === "/repos/marius-patrik/active/labels") return {};
       if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/20/labels") return {};
       if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/20/comments") return {};
