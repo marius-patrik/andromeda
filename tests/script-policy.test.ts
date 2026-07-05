@@ -615,6 +615,25 @@ test("df-work blocks target auto-merge setup failures before clone or Codex", as
   assert.match(source, /not a code implementation failure/);
 });
 
+test("df-work uses a deterministic provider failover matrix with per-provider concurrency", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-work.yml", import.meta.url), "utf8");
+  const source = await readFile(new URL("../.github/scripts/df-work.mjs", import.meta.url), "utf8");
+
+  assert.match(workflow, /DF_WORKER_PROVIDER_ORDER: \$\{\{ vars\.DF_WORKER_PROVIDER_ORDER \|\| 'codex' \}\}/);
+  assert.match(workflow, /DF_WORKER_PROVIDER_LIMITS: \$\{\{ vars\.DF_WORKER_PROVIDER_LIMITS \|\| 'codex=1' \}\}/);
+  assert.match(workflow, /KIMI_AUTH_JSON: \$\{\{ secrets\.KIMI_AUTH_JSON \}\}/);
+  assert.match(workflow, /AGY_AUTH_JSON: \$\{\{ secrets\.AGY_AUTH_JSON \}\}/);
+  assert.match(source, /const PROVIDERS = parseWorkerProviders\(process\.env\)/);
+  assert.match(source, /uniqueList\(env\.DF_WORKER_PROVIDER_ORDER \|\| env\.DF_PROVIDER_ORDER \|\| "codex"\)/);
+  assert.match(source, /parseProviderConcurrency/);
+  assert.match(source, /provider-locks\/\$\{provider\.id\}\/\$\{slot\}\.json/);
+  assert.match(source, /runWorkerWithProviderFailover/);
+  assert.match(source, /isProviderQuotaError/);
+  assert.match(source, /status = "quota-exhausted"/);
+  assert.match(source, /ledger\.provider = providerResult\.provider\.id/);
+  assert.match(source, /provider_attempts/);
+});
+
 test("df-work workflow does not expose privileged worker triggers in managed repositories", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-work.yml", import.meta.url), "utf8");
 

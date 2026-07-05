@@ -79,10 +79,23 @@ jobs:
         env:
           DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token }}
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          KIMI_AUTH_JSON: ${{ secrets.KIMI_AUTH_JSON }}
+          AGY_AUTH_JSON: ${{ secrets.AGY_AUTH_JSON }}
           DF_CONTROL_REPO: marius-patrik/agent-darkfactory
           DF_TARGET_REPO: ${{ inputs.repo }}
           DF_TARGET_ISSUE_NUMBER: ${{ inputs.issue_number }}
           DF_TARGET_BASE_REF: ${{ inputs.base_ref }}
           DF_TRIGGER: ${{ github.event_name }}
           DF_DATA_REPO: marius-patrik/darkfactory-data
+          DF_WORKER_PROVIDER_ORDER: ${{ vars.DF_WORKER_PROVIDER_ORDER || 'codex' }}
+          DF_WORKER_PROVIDER_LIMITS: ${{ vars.DF_WORKER_PROVIDER_LIMITS || 'codex=1' }}
+          DF_PROVIDER_LOCK_TTL_MINUTES: ${{ vars.DF_PROVIDER_LOCK_TTL_MINUTES || '720' }}
+          DF_PROVIDER_CODEX_MODEL: ${{ vars.DF_PROVIDER_CODEX_MODEL }}
+          DF_PROVIDER_CODEX_CONCURRENCY: ${{ vars.DF_PROVIDER_CODEX_CONCURRENCY }}
+          DF_PROVIDER_KIMI_MODEL: ${{ vars.DF_PROVIDER_KIMI_MODEL }}
+          DF_PROVIDER_KIMI_COMMAND: ${{ vars.DF_PROVIDER_KIMI_COMMAND }}
+          DF_PROVIDER_KIMI_CONCURRENCY: ${{ vars.DF_PROVIDER_KIMI_CONCURRENCY }}
+          DF_PROVIDER_AGY_MODEL: ${{ vars.DF_PROVIDER_AGY_MODEL }}
+          DF_PROVIDER_AGY_COMMAND: ${{ vars.DF_PROVIDER_AGY_COMMAND }}
+          DF_PROVIDER_AGY_CONCURRENCY: ${{ vars.DF_PROVIDER_AGY_CONCURRENCY }}
         run: node darkfactory-control/.github/scripts/df-work.mjs

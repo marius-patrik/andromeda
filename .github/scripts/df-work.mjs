@@ -24,7 +24,6 @@ import {
 
 const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TOKEN = requiredEnv("DARK_FACTORY_TOKEN");
-const CODEX_AUTH_JSON = process.env.CODEX_AUTH_JSON ?? "";
 const CONTROL_REPO = parseRepo(requiredEnv("DF_CONTROL_REPO"));
 const TARGET_REPO = parseRepo(requiredEnv("DF_TARGET_REPO"));
 const TARGET_ISSUE_NUMBER = Number(requiredEnv("DF_TARGET_ISSUE_NUMBER"));
@@ -33,13 +32,17 @@ const TRIGGER = process.env.DF_TRIGGER ?? "unknown";
 const WORKER_IMAGE = process.env.DF_WORKER_IMAGE ?? "darkfactory-codex-worker";
 const CODEX_MODEL = process.env.DF_CODEX_MODEL ?? "gpt-5.5";
 const DATA_REPO = process.env.DF_DATA_REPO ?? DEFAULT_DATA_REPO;
+const PROVIDERS = parseWorkerProviders(process.env);
+const PROVIDER_LOCK_TTL_MS = parseProviderLockTtl(process.env.DF_PROVIDER_LOCK_TTL_MINUTES);
 const GIT_BASIC_AUTH = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
 const gh = createGithubClient(TOKEN, "darkfactory-worker");
 
-main().catch((error) => {
-  console.error(sanitize(error.stack || error.message || String(error), TOKEN));
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(sanitize(error.stack || error.message || String(error), TOKEN));
+    process.exitCode = 1;
+  });
+}
 
 async function main() {
   if (!Number.isInteger(TARGET_ISSUE_NUMBER) || TARGET_ISSUE_NUMBER <= 0) {
@@ -61,12 +64,19 @@ async function main() {
     actions: [],
     token_usage: {
       codex_calls: 0,
-      model: CODEX_MODEL,
+      model: null,
       model_reasoning_effort: codeEffort,
       input_tokens: null,
       output_tokens: null,
       note: "codex exec token counters are not exposed to this script yet"
-    }
+    },
+    provider_matrix: PROVIDERS.map((provider) => ({
+      id: provider.id,
+      model: provider.model,
+      image: provider.image,
+      concurrency: provider.concurrency
+    })),
+    provider_attempts: []
   };
   let tempRoot = "";
   let pullRequest = null;
@@ -115,10 +125,6 @@ async function main() {
       ].join("\n")
     );
 
-    if (!CODEX_AUTH_JSON.trim()) {
-      throw new Error("CODEX_AUTH_JSON is not configured for the worker.");
-    }
-
     tempRoot = await mkdtemp(path.join(tmpdir(), "df-work-"));
     const worktree = path.join(tempRoot, "repo");
     const codexHome = path.join(tempRoot, "codex-home");
@@ -127,12 +133,11 @@ async function main() {
     await ensureNoRemoteBranch(TARGET_REPO, branch);
     runGit(["checkout", "-b", branch], worktree);
 
-    await writeCodexAuth(codexHome);
     const briefInfo = await writeTaskBrief(worktree, issue, workBaseBranch, taskRouting);
     ledger.token_usage.input_brief_characters = briefInfo.characters;
-    buildWorkerImage();
-    ledger.token_usage.codex_calls += 1;
-    runCodexWorker(worktree, codexHome, codeEffort);
+    const providerResult = await runWorkerWithProviderFailover(worktree, codexHome, codeEffort, target, ledger);
+    ledger.provider = providerResult.provider.id;
+    ledger.token_usage.model = providerResult.provider.model;
 
     const summary = await readWorkerSummary(worktree);
     await removeWorkerScratch(worktree);
@@ -293,9 +298,9 @@ async function ensureNoRemoteBranch(repository, branch) {
   }
 }
 
-async function writeCodexAuth(codexHome) {
+async function writeCodexAuth(codexHome, provider) {
   await mkdir(codexHome, { recursive: true });
-  await writeFile(path.join(codexHome, "auth.json"), CODEX_AUTH_JSON, { mode: 0o600 });
+  await writeFile(path.join(codexHome, "auth.json"), provider.authJson, { mode: 0o600 });
 }
 
 async function writeTaskBrief(worktree, issue, defaultBranch, taskRouting) {
@@ -347,17 +352,87 @@ async function writeTaskBrief(worktree, issue, defaultBranch, taskRouting) {
   return { characters: brief.length };
 }
 
-function buildWorkerImage() {
-  const dockerfile = path.join(CONTROL_ROOT, ".github", "codex-review.Dockerfile");
-  runCommand("docker", ["build", "-f", dockerfile, "-t", WORKER_IMAGE, CONTROL_ROOT], process.cwd());
+async function runWorkerWithProviderFailover(worktree, codexHome, codeEffort, target, ledger) {
+  if (PROVIDERS.length === 0) {
+    throw new Error("No worker providers are configured.");
+  }
+
+  const exhausted = [];
+  for (const provider of PROVIDERS) {
+    const attempt = {
+      provider: provider.id,
+      model: provider.model,
+      image: provider.image,
+      concurrency: provider.concurrency,
+      status: "started"
+    };
+    ledger.provider_attempts.push(attempt);
+
+    if (!provider.authJson.trim()) {
+      attempt.status = "unavailable";
+      attempt.reason = `${provider.authEnv} is not configured for provider ${provider.id}.`;
+      exhausted.push(`${provider.id}: ${attempt.reason}`);
+      continue;
+    }
+
+    let lease = null;
+    try {
+      lease = await acquireProviderLease(provider, target);
+      if (!lease.acquired) {
+        attempt.status = "concurrency-full";
+        attempt.reason = `No ${provider.id} provider concurrency slot is available.`;
+        exhausted.push(`${provider.id}: ${attempt.reason}`);
+        continue;
+      }
+      attempt.lease = lease.path;
+
+      await prepareWorktreeForProviderAttempt(worktree);
+      await writeCodexAuth(codexHome, provider);
+      buildWorkerImage(provider);
+      ledger.token_usage.codex_calls += 1;
+      runCodexWorker(provider, worktree, codexHome, codeEffort);
+      attempt.status = "success";
+      ledger.actions.push({ action: "run-worker-provider", provider: provider.id, result: "success" });
+      return { provider };
+    } catch (error) {
+      const message = sanitize(error.stack || error.message || String(error), TOKEN);
+      attempt.error = message;
+      if (isProviderQuotaError(message)) {
+        attempt.status = "quota-exhausted";
+        exhausted.push(`${provider.id}: ${firstLine(message)}`);
+        ledger.actions.push({ action: "run-worker-provider", provider: provider.id, result: "quota-exhausted" });
+        continue;
+      }
+      attempt.status = "failed";
+      ledger.actions.push({ action: "run-worker-provider", provider: provider.id, result: "failed" });
+      throw error;
+    } finally {
+      if (lease?.acquired) {
+        await releaseProviderLease(lease);
+      }
+    }
+  }
+
+  throw new Error(`All configured worker providers were unavailable, at concurrency limit, or quota exhausted: ${exhausted.join("; ")}`);
 }
 
-function runCodexWorker(worktree, codexHome, codeEffort) {
+async function prepareWorktreeForProviderAttempt(worktree) {
+  runGit(["reset", "--hard"], worktree);
+  runGit(["clean", "-fd", "-e", ".darkfactory/"], worktree);
+  await rm(path.join(worktree, ".darkfactory", "df-worker-summary.md"), { force: true });
+}
+
+function buildWorkerImage(provider) {
+  const dockerfile = path.join(CONTROL_ROOT, ".github", "codex-review.Dockerfile");
+  runCommand("docker", ["build", "-f", dockerfile, "-t", provider.image, CONTROL_ROOT], process.cwd());
+}
+
+function runCodexWorker(provider, worktree, codexHome, codeEffort) {
   const script = [
     "set -euo pipefail",
     "git config --global --add safe.directory /workspace",
     "cd /workspace",
-    "codex exec --cd /workspace --model \"${CODEX_MODEL}\" -c \"model_reasoning_effort=\\\"${CODEX_EFFORT}\\\"\" --sandbox danger-full-access --output-last-message .darkfactory/df-worker-summary.md - < .darkfactory/df-task-brief.md"
+    "eval \"${DF_PROVIDER_COMMAND}\""
   ].join("\n");
 
   runCommand(
@@ -372,14 +447,18 @@ function runCodexWorker(worktree, codexHome, codeEffort) {
       "-e",
       "HOME=/codex-home",
       "-e",
-      `CODEX_MODEL=${CODEX_MODEL}`,
+      `DF_PROVIDER=${provider.id}`,
       "-e",
-      `CODEX_EFFORT=${codeEffort}`,
+      `DF_PROVIDER_MODEL=${provider.model}`,
+      "-e",
+      `DF_PROVIDER_EFFORT=${codeEffort}`,
+      "-e",
+      `DF_PROVIDER_COMMAND=${provider.command}`,
       "-v",
       `${worktree}:/workspace`,
       "-v",
       `${codexHome}:/codex-home`,
-      WORKER_IMAGE,
+      provider.image,
       "-lc",
       script
     ],
@@ -482,6 +561,173 @@ function extractAcceptanceCriteria(body) {
 function truncate(value, maxLength) {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength)}\n\n[truncated from ${value.length} characters]`;
+}
+
+function parseWorkerProviders(env) {
+  const order = uniqueList(env.DF_WORKER_PROVIDER_ORDER || env.DF_PROVIDER_ORDER || "codex");
+  const limits = parseProviderLimits(env.DF_WORKER_PROVIDER_LIMITS || env.DF_PROVIDER_LIMITS || "");
+  return order.map((id) => {
+    const key = providerEnvKey(id);
+    const authEnv = env[`DF_PROVIDER_${key}_AUTH_ENV`]?.trim() || (id === "codex" ? "CODEX_AUTH_JSON" : `${key}_AUTH_JSON`);
+    return {
+      id,
+      envKey: key,
+      authEnv,
+      authJson: env[authEnv] || "",
+      command: env[`DF_PROVIDER_${key}_COMMAND`]?.trim() || defaultProviderCommand(),
+      concurrency: parseProviderConcurrency(
+        env[`DF_PROVIDER_${key}_CONCURRENCY`] ?? env[`DF_WORKER_PROVIDER_${key}_CONCURRENCY`] ?? limits.get(id)
+      ),
+      image: env[`DF_PROVIDER_${key}_IMAGE`]?.trim() || WORKER_IMAGE,
+      model: env[`DF_PROVIDER_${key}_MODEL`]?.trim() || (id === "codex" ? CODEX_MODEL : env.DF_CODEX_MODEL || CODEX_MODEL)
+    };
+  });
+}
+
+function uniqueList(value) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of String(value || "").split(",")) {
+    const id = raw.trim().toLowerCase();
+    if (!id) continue;
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(id)) {
+      throw new Error(`Invalid worker provider id: ${raw}`);
+    }
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+function providerEnvKey(id) {
+  return id.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+}
+
+function parseProviderLimits(value) {
+  const limits = new Map();
+  for (const raw of String(value || "").split(",")) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    const [rawId, rawLimit] = entry.split("=", 2);
+    const id = rawId?.trim().toLowerCase();
+    if (!id || !rawLimit) {
+      throw new Error(`Invalid provider concurrency entry: ${entry}`);
+    }
+    limits.set(id, rawLimit.trim());
+  }
+  return limits;
+}
+
+function parseProviderConcurrency(value) {
+  const parsed = Number(value ?? 1);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 50) {
+    throw new Error(`Invalid worker provider concurrency: ${value}`);
+  }
+  return parsed;
+}
+
+function defaultProviderCommand() {
+  return [
+    "codex exec --cd /workspace",
+    "--model \"${DF_PROVIDER_MODEL}\"",
+    "-c \"model_reasoning_effort=\\\"${DF_PROVIDER_EFFORT}\\\"\"",
+    "--sandbox danger-full-access",
+    "--output-last-message .darkfactory/df-worker-summary.md",
+    "- < .darkfactory/df-task-brief.md"
+  ].join(" ");
+}
+
+async function acquireProviderLease(provider, target) {
+  for (let slot = 1; slot <= provider.concurrency; slot += 1) {
+    const pathName = `provider-locks/${provider.id}/${slot}.json`;
+    const lease = {
+      provider: provider.id,
+      slot,
+      target,
+      run_id: process.env.GITHUB_RUN_ID || null,
+      run_attempt: process.env.GITHUB_RUN_ATTEMPT || null,
+      created_at: new Date().toISOString()
+    };
+    try {
+      const response = await gh.request("PUT", `/repos/${repoName(parseRepo(DATA_REPO))}/contents/${encodePath(pathName)}`, {
+        message: `df-work: acquire ${provider.id} provider slot ${slot}`,
+        content: Buffer.from(JSON.stringify(lease, null, 2)).toString("base64")
+      });
+      return {
+        acquired: true,
+        repository: DATA_REPO,
+        path: pathName,
+        sha: response?.content?.sha || response?.data?.content?.sha || null
+      };
+    } catch (error) {
+      if (error.status === 409 || error.status === 422) {
+        const stale = await deleteStaleProviderLease(pathName);
+        if (stale) {
+          slot -= 1;
+        }
+        continue;
+      }
+      throw error;
+    }
+  }
+  return { acquired: false };
+}
+
+async function deleteStaleProviderLease(pathName) {
+  try {
+    const existing = await gh.request("GET", `/repos/${repoName(parseRepo(DATA_REPO))}/contents/${encodePath(pathName)}`);
+    const content = Buffer.from(existing.content || existing.data?.content || "", "base64").toString("utf8");
+    const parsed = JSON.parse(content);
+    const createdAt = Date.parse(parsed.created_at || "");
+    const sha = existing.sha || existing.data?.sha;
+    if (!sha || !Number.isFinite(createdAt) || Date.now() - createdAt < PROVIDER_LOCK_TTL_MS) {
+      return false;
+    }
+    await gh.request("DELETE", `/repos/${repoName(parseRepo(DATA_REPO))}/contents/${encodePath(pathName)}`, {
+      message: `df-work: release stale provider slot ${pathName}`,
+      sha
+    });
+    return true;
+  } catch (error) {
+    if (error.status === 404) return false;
+    throw error;
+  }
+}
+
+async function releaseProviderLease(lease) {
+  if (!lease.sha) return;
+  try {
+    await gh.request("DELETE", `/repos/${repoName(parseRepo(lease.repository))}/contents/${encodePath(lease.path)}`, {
+      message: `df-work: release provider slot ${lease.path}`,
+      sha: lease.sha
+    });
+  } catch (error) {
+    if (error.status !== 404 && error.status !== 409) {
+      console.warn(sanitize(`DarkFactory provider lease warning: ${error.message || String(error)}`, TOKEN));
+    }
+  }
+}
+
+function encodePath(value) {
+  return String(value || "").split("/").map(encodeURIComponent).join("/");
+}
+
+function isProviderQuotaError(value) {
+  return /\b(429|too many requests|rate limit|rate-limit|quota|billing-cycle|billing cycle|usage limit|agy limit|codex limit|insufficient quota)\b/i.test(value);
+}
+
+function parseProviderLockTtl(value) {
+  const parsed = Number(value ?? 720);
+  if (!Number.isInteger(parsed) || parsed < 30) {
+    throw new Error(`Invalid provider lock TTL minutes: ${value}`);
+  }
+  return parsed * 60 * 1000;
+}
+
+function firstLine(value) {
+  return String(value || "").split(/\r?\n/, 1)[0];
 }
 
 async function writeLedger(ledger) {
