@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
 export const CONTROL_OWNER = "marius-patrik";
 export const CONTROL_REPO = "agent-darkfactory";
 export const DATA_REPO = "darkfactory-data";
@@ -63,22 +60,18 @@ export interface StatusReport {
 }
 
 export interface StatusOptions {
-  controlRoot?: string;
   controlOwner?: string;
   controlRepo?: string;
   dataRepo?: string;
 }
 
-export function readManagedRepos(options: StatusOptions = {}): ManagedRepo[] {
-  const root = options.controlRoot ?? process.cwd();
-  const path = join(root, ".darkfactory", "managed-repos.json");
-  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+const MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
 
+export function parseManagedReposJson(raw: unknown, owner: string): ManagedRepo[] {
   if (!isRecord(raw) || !isRecord(raw.repositories)) {
     throw new Error("invalid managed-repos.json: missing repositories object");
   }
 
-  const owner = options.controlOwner ?? CONTROL_OWNER;
   const repos: ManagedRepo[] = [];
 
   for (const [fullName, entry] of Object.entries(raw.repositories)) {
@@ -99,6 +92,26 @@ export function readManagedRepos(options: StatusOptions = {}): ManagedRepo[] {
   return repos;
 }
 
+export async function fetchManagedRepos(
+  github: GitHubRequester,
+  controlRepo: RepositoryRef,
+  owner: string
+): Promise<ManagedRepo[]> {
+  const response = await github.request("GET /repos/{owner}/{repo}/contents/{path}", {
+    owner: controlRepo.owner,
+    repo: controlRepo.repo,
+    path: MANAGED_REPOS_PATH
+  });
+
+  const content = decodeContentResponse(response.data);
+  if (content === null) {
+    throw new Error(`GitHub returned an invalid managed-repos.json content response`);
+  }
+
+  const raw = JSON.parse(content) as unknown;
+  return parseManagedReposJson(raw, owner);
+}
+
 export async function buildStatusReport(
   github: GitHubRequester,
   options: StatusOptions = {}
@@ -107,7 +120,7 @@ export async function buildStatusReport(
   const controlRepo = options.controlRepo ?? CONTROL_REPO;
   const dataRepo = options.dataRepo ?? DATA_REPO;
 
-  const managedRepos = readManagedRepos(options);
+  const managedRepos = await fetchManagedRepos(github, { owner, repo: controlRepo }, owner);
   const [loopState, recentRuns, latestLedger, blocked] = await Promise.all([
     fetchLoopStateForRepos(github, managedRepos),
     fetchRecentRuns(github, { owner, repo: controlRepo }),
@@ -198,7 +211,7 @@ async function listIssuesWithLabel(
 
     issues.push(...batch);
 
-    if (batch.length < 100) {
+    if (response.data.length < 100) {
       break;
     }
   }

@@ -1,17 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 import {
   buildStatusReport,
   fetchBlockedIssues,
   fetchLatestLedger,
+  fetchManagedRepos,
   fetchRecentRuns,
   fetchRepoLoopState,
   formatStatusReport,
-  readManagedRepos,
+  parseManagedReposJson,
   type GitHubRequester,
   type RepositoryRef
 } from "../src/status.js";
@@ -55,34 +53,54 @@ function workflowRunsResponse(runs: Array<Partial<{ id: number; name: string; st
   };
 }
 
-test("readManagedRepos loads active repositories for the control owner", async () => {
-  const root = await mkdtemp(join(tmpdir(), "df-status-"));
+function encodedJsonFile(content: unknown): { type: "file"; encoding: "base64"; content: string } {
+  return {
+    type: "file",
+    encoding: "base64",
+    content: Buffer.from(JSON.stringify(content), "utf8").toString("base64")
+  };
+}
 
-  try {
-    await mkdir(join(root, ".darkfactory"), { recursive: true });
-    await writeFile(
-      join(root, ".darkfactory", "managed-repos.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        repositories: {
-          "marius-patrik/agent-darkfactory": { state: "active" },
-          "marius-patrik/dream": { state: "active" },
-          "marius-patrik/skyblock-agent": { state: "parked" },
-          "other-owner/project": { state: "active" },
-          "marius-patrik/citizen": { state: "archived" }
-        }
+function managedReposContent(repositories: Record<string, unknown>): { type: "file"; encoding: "base64"; content: string } {
+  return encodedJsonFile({ schemaVersion: 1, repositories });
+}
+
+test("parseManagedReposJson filters active repositories for the control owner", () => {
+  const repos = parseManagedReposJson(
+    {
+      schemaVersion: 1,
+      repositories: {
+        "marius-patrik/agent-darkfactory": { state: "active" },
+        "marius-patrik/dream": { state: "active" },
+        "marius-patrik/skyblock-agent": { state: "parked" },
+        "other-owner/project": { state: "active" },
+        "marius-patrik/citizen": { state: "archived" }
+      }
+    },
+    "marius-patrik"
+  );
+
+  assert.deepEqual(repos, [
+    { owner: "marius-patrik", repo: "agent-darkfactory", state: "active" },
+    { owner: "marius-patrik", repo: "dream", state: "active" }
+  ]);
+});
+
+test("fetchManagedRepos reads managed repositories from the control repo via GitHub API", async () => {
+  const github = createRequester({
+    "GET /repos/{owner}/{repo}/contents/{path}": () =>
+      managedReposContent({
+        "marius-patrik/agent-darkfactory": { state: "active" },
+        "marius-patrik/dream": { state: "active" }
       })
-    );
+  });
 
-    const repos = readManagedRepos({ controlRoot: root, controlOwner: "marius-patrik" });
+  const repos = await fetchManagedRepos(github, { owner: "marius-patrik", repo: "agent-darkfactory" }, "marius-patrik");
 
-    assert.deepEqual(repos, [
-      { owner: "marius-patrik", repo: "agent-darkfactory", state: "active" },
-      { owner: "marius-patrik", repo: "dream", state: "active" }
-    ]);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  assert.deepEqual(repos, [
+    { owner: "marius-patrik", repo: "agent-darkfactory", state: "active" },
+    { owner: "marius-patrik", repo: "dream", state: "active" }
+  ]);
 });
 
 test("fetchRepoLoopState counts issues by DarkFactory loop labels", async () => {
@@ -227,94 +245,57 @@ test("fetchBlockedIssues aggregates ask-owner issues across managed repos", asyn
   ]);
 });
 
-test("formatStatusReport renders a human-readable summary", async () => {
-  const root = await mkdtemp(join(tmpdir(), "df-status-"));
-
-  try {
-    await mkdir(join(root, ".darkfactory"), { recursive: true });
-    await writeFile(
-      join(root, ".darkfactory", "managed-repos.json"),
-      JSON.stringify({
-        repositories: {
-          "marius-patrik/dream": { state: "active" }
-        }
-      })
-    );
-
-    const github = createRequester({
-      "GET /repos/{owner}/{repo}/issues": () => [],
-      "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs": (parameters) => {
-        const workflowId = String(parameters.workflow_id);
-        if (workflowId === "df-plan.yml") {
-          return workflowRunsResponse([{ id: 1, name: "plan", status: "completed", conclusion: "success" }]);
-        }
-        if (workflowId === "df-orchestrate.yml") {
-          return workflowRunsResponse([{ id: 2, name: "orchestrate", status: "completed", conclusion: "success" }]);
-        }
-        return workflowRunsResponse([]);
-      },
-      "GET /repos/{owner}/{repo}/contents/{path}": (parameters) => {
-        const path = String(parameters.path);
-        if (path === "runs/marius-patrik/agent-darkfactory") {
-          return [{ name: "2026-07-05T08-00-00Z-df-orchestrate.json", type: "file" }];
-        }
-        if (path === "runs/marius-patrik/agent-darkfactory/2026-07-05T08-00-00Z-df-orchestrate.json") {
-          return {
-            type: "file",
-            encoding: "base64",
-            content: Buffer.from(
-              JSON.stringify({ created_at: "2026-07-05T08:00:00Z", dispatched: [{ repo: "marius-patrik/dream", issue: 1 }] }),
-              "utf8"
-            ).toString("base64")
-          };
-        }
-        throw new Error(`unexpected path: ${path}`);
+function createStatusRequester(): GitHubRequester {
+  return createRequester({
+    "GET /repos/{owner}/{repo}/contents/{path}": (parameters) => {
+      const path = String(parameters.path);
+      if (path === ".darkfactory/managed-repos.json") {
+        return managedReposContent({ "marius-patrik/dream": { state: "active" } });
       }
-    });
+      if (path === "runs/marius-patrik/agent-darkfactory") {
+        return [{ name: "2026-07-05T08-00-00Z-df-orchestrate.json", type: "file" }];
+      }
+      if (path === "runs/marius-patrik/agent-darkfactory/2026-07-05T08-00-00Z-df-orchestrate.json") {
+        return encodedJsonFile({
+          created_at: "2026-07-05T08:00:00Z",
+          dispatched: [{ repo: "marius-patrik/dream", issue: 1 }]
+        });
+      }
+      throw new Error(`unexpected path: ${path}`);
+    },
+    "GET /repos/{owner}/{repo}/issues": () => [],
+    "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs": (parameters) => {
+      const workflowId = String(parameters.workflow_id);
+      if (workflowId === "df-plan.yml") {
+        return workflowRunsResponse([{ id: 1, name: "plan", status: "completed", conclusion: "success" }]);
+      }
+      if (workflowId === "df-orchestrate.yml") {
+        return workflowRunsResponse([{ id: 2, name: "orchestrate", status: "completed", conclusion: "success" }]);
+      }
+      return workflowRunsResponse([]);
+    }
+  });
+}
 
-    const report = await buildStatusReport(github, { controlRoot: root });
-    const formatted = formatStatusReport(report);
+test("formatStatusReport renders a human-readable summary", async () => {
+  const report = await buildStatusReport(createStatusRequester());
+  const formatted = formatStatusReport(report);
 
-    assert.match(formatted, /DarkFactory orchestration status/);
-    assert.match(formatted, /marius-patrik\/dream/);
-    assert.match(formatted, /df-plan:/);
-    assert.match(formatted, /df-orchestrate:/);
-    assert.match(formatted, /Latest ledger: 1 dispatched at 2026-07-05T08:00:00Z/);
-    assert.match(formatted, /Blocked: none/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  assert.match(formatted, /DarkFactory orchestration status/);
+  assert.match(formatted, /marius-patrik\/dream/);
+  assert.match(formatted, /df-plan:/);
+  assert.match(formatted, /df-orchestrate:/);
+  assert.match(formatted, /Latest ledger: 1 dispatched at 2026-07-05T08:00:00Z/);
+  assert.match(formatted, /Blocked: none/);
 });
 
 test("buildStatusReport produces serializable JSON output", async () => {
-  const root = await mkdtemp(join(tmpdir(), "df-status-"));
+  const report = await buildStatusReport(createStatusRequester());
+  const json = JSON.parse(JSON.stringify(report));
 
-  try {
-    await mkdir(join(root, ".darkfactory"), { recursive: true });
-    await writeFile(
-      join(root, ".darkfactory", "managed-repos.json"),
-      JSON.stringify({
-        repositories: {
-          "marius-patrik/dream": { state: "active" }
-        }
-      })
-    );
-
-    const github = createRequester({
-      "GET /repos/{owner}/{repo}/issues": () => [],
-      "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs": () => workflowRunsResponse([]),
-      "GET /repos/{owner}/{repo}/contents/{path}": () => []
-    });
-
-    const report = await buildStatusReport(github, { controlRoot: root });
-    const json = JSON.parse(JSON.stringify(report));
-
-    assert.ok(Array.isArray(json.managedRepos));
-    assert.ok(Array.isArray(json.loopState));
-    assert.ok(typeof json.recentRuns === "object");
-    assert.ok(typeof json.latestLedger === "object" || json.latestLedger === null);
-    assert.ok(Array.isArray(json.blocked));
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  assert.ok(Array.isArray(json.managedRepos));
+  assert.ok(Array.isArray(json.loopState));
+  assert.ok(typeof json.recentRuns === "object");
+  assert.ok(typeof json.latestLedger === "object" || json.latestLedger === null);
+  assert.ok(Array.isArray(json.blocked));
 });
