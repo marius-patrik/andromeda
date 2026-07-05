@@ -143,10 +143,25 @@ test("cleanupTempRoot reports cleanup failures without throwing", async () => {
   assert.match(result.warning, /cleanup warning/i);
 });
 
-test("cleanupTempRoot ignores expected temp cleanup races", () => {
-  assert.equal(isIgnorableCleanupError({ code: "EACCES" }), true);
+test("cleanupTempRoot ignores only ENOENT cleanup races", () => {
   assert.equal(isIgnorableCleanupError({ code: "ENOENT" }), true);
+  assert.equal(isIgnorableCleanupError({ code: "EACCES" }), false);
   assert.equal(isIgnorableCleanupError({ code: "EPERM" }), false);
+});
+
+test("cleanupTempRoot reports EACCES cleanup failures without throwing", async (t) => {
+  const warnings: string[] = [];
+  const eaccesError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+  const rmMock = t.mock.fn(async () => { throw eaccesError; });
+  t.mock.module("node:fs/promises", { namedExports: { rm: rmMock, readFile: async () => "" } });
+
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { cleanupTempRoot: cleanupTempRootUnderTest } = await import("../.github/scripts/df-lib.mjs?mock=eacces");
+  const result = await cleanupTempRootUnderTest("/some/temp/root", (warning: string) => warnings.push(warning));
+
+  assert.equal(result.ok, false);
+  assert.equal(warnings.length, 1);
+  assert.match(result.warning, /permission denied/);
 });
 
 test("checksAreGreen respects required checks and rejects pending or failing checks", () => {
