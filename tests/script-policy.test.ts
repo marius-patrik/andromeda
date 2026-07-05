@@ -671,6 +671,34 @@ test("df-work workflow uses the app token for control-dispatched workers", async
   assert.match(source, /function runGitWithAuth\(args, cwd\) \{\s+return runCommand\("git", \["-c", authHeader\(\), \.\.\.args\], cwd\);/);
 });
 
+test("df-work supports deterministic provider failover with per-provider locks", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-work.yml", import.meta.url), "utf8");
+  const source = await readFile(new URL("../.github/scripts/df-work.mjs", import.meta.url), "utf8");
+
+  assert.match(workflow, /provider_order:/);
+  assert.match(workflow, /DF_WORKER_PROVIDERS: \$\{\{ inputs\.provider_order \|\| vars\.DF_WORKER_PROVIDERS \|\| 'codex' \}\}/);
+  assert.match(workflow, /DF_PROVIDER_CODEX_CONCURRENCY/);
+  assert.match(workflow, /DF_PROVIDER_KIMI_AUTH_JSON/);
+  assert.match(workflow, /DF_PROVIDER_AGY_AUTH_JSON/);
+  assert.match(source, /function workerProviders\(\)/);
+  assert.match(source, /function providerOrder\(\)/);
+  assert.match(source, /const unique = \[\.\.\.new Set\(names\)\]/);
+  assert.match(source, /runWorkerWithProviderFailover\(worktree, tempRoot, providers, codeEffort, ledger\)/);
+  assert.match(source, /ledger\.provider_order = providers\.map\(providerLedgerConfig\)/);
+  assert.match(source, /ledger\.provider = workerRun\.provider\.name/);
+  assert.match(source, /ledger\.providers\.push\(attempt\)/);
+  assert.match(source, /isProviderQuotaError\(message\)/);
+  assert.match(source, /attempt\.status = "quota-exhausted"/);
+  assert.match(source, /attempt\.status = "failed";\s+throw error;/);
+  assert.match(source, /refs\/heads\/df-lock\/\$\{providerSlug\}\/slot-\$\{slot\}/);
+  assert.match(source, /slot < provider\.concurrency/);
+  assert.match(source, /createProviderLockCommit\(dataRepo, head, provider\)/);
+  assert.match(source, /deleteStaleProviderLock\(dataRepo, ref\)/);
+  assert.match(source, /created_at: \$\{new Date\(\)\.toISOString\(\)\}/);
+  assert.match(source, /releaseProviderLock\(lock\)/);
+  assert.match(source, /Provider: \\`\$\{ledger\.provider\}\\`/);
+});
+
 test("df-fix selects only red worker PRs from active repositories", async () => {
   const activeRepository = { owner: "marius-patrik", repo: "active" };
   const parkedRepository = { owner: "marius-patrik", repo: "skyblock-agent" };

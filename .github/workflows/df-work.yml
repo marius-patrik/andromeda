@@ -15,6 +15,10 @@ on:
         description: Target repository base branch for regenerated work.
         required: false
         type: string
+      provider_order:
+        description: Optional comma-separated worker provider order.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -85,4 +89,15 @@ jobs:
           DF_TARGET_BASE_REF: ${{ inputs.base_ref }}
           DF_TRIGGER: ${{ github.event_name }}
           DF_DATA_REPO: marius-patrik/darkfactory-data
+          DF_WORKER_PROVIDERS: ${{ inputs.provider_order || vars.DF_WORKER_PROVIDERS || 'codex' }}
+          DF_PROVIDER_DEFAULT_CONCURRENCY: ${{ vars.DF_PROVIDER_DEFAULT_CONCURRENCY || '1' }}
+          DF_PROVIDER_CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          DF_PROVIDER_CODEX_MODEL: ${{ vars.DF_PROVIDER_CODEX_MODEL || 'gpt-5.5' }}
+          DF_PROVIDER_CODEX_CONCURRENCY: ${{ vars.DF_PROVIDER_CODEX_CONCURRENCY || '1' }}
+          DF_PROVIDER_KIMI_AUTH_JSON: ${{ secrets.KIMI_AUTH_JSON }}
+          DF_PROVIDER_KIMI_MODEL: ${{ vars.DF_PROVIDER_KIMI_MODEL || 'kimi' }}
+          DF_PROVIDER_KIMI_CONCURRENCY: ${{ vars.DF_PROVIDER_KIMI_CONCURRENCY || '1' }}
+          DF_PROVIDER_AGY_AUTH_JSON: ${{ secrets.AGY_AUTH_JSON }}
+          DF_PROVIDER_AGY_MODEL: ${{ vars.DF_PROVIDER_AGY_MODEL || 'agy' }}
+          DF_PROVIDER_AGY_CONCURRENCY: ${{ vars.DF_PROVIDER_AGY_CONCURRENCY || '1' }}
         run: node darkfactory-control/.github/scripts/df-work.mjs
