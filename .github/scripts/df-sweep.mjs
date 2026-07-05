@@ -12,6 +12,7 @@ import {
   isParkedRepo,
   listActiveManagedRepos,
   managedRepoLifecycleState,
+  missingRequiredStatusCheckContexts,
   normalizedRepoName,
   parseRepo,
   readManagedRepoRegistry,
@@ -169,7 +170,8 @@ export async function considerPullRequest(repository, pull) {
   }
 
   if (!checksAreGreen(pull.statusCheckRollup, requiredContexts)) {
-    const reason = requiredContexts.length && !pull.statusCheckRollup?.length
+    const missingRequiredChecks = missingRequiredStatusCheckContexts(pull.statusCheckRollup, requiredContexts);
+    const reason = missingRequiredChecks.length
       ? "required-checks-missing"
       : "checks-not-green";
     const issueUpdate = await markWorkerIssueBlocked(repository, pull, reason, [
@@ -196,17 +198,24 @@ export async function considerPullRequest(repository, pull) {
 
   const mergeGate = await getPullRequestMergeGate(repository, pull.number);
   const hasMergeGateChecks = Array.isArray(mergeGate.statusCheckRollup) && mergeGate.statusCheckRollup.length > 0;
-  if ((!hasMergeGateChecks && !NO_CHECK_ALLOWLIST.has(repoName(repository).toLowerCase())) || !checksAreGreen(mergeGate.statusCheckRollup)) {
-    const issueUpdate = await markWorkerIssueBlocked(repository, pull, "merge-checks-not-green", [
+  const missingMergeGateRequiredChecks = missingRequiredStatusCheckContexts(mergeGate.statusCheckRollup, requiredContexts);
+  const mergeGateReason = missingMergeGateRequiredChecks.length ? "required-checks-missing" : "merge-checks-not-green";
+  if (
+    (!hasMergeGateChecks && requiredContexts.length === 0 && !NO_CHECK_ALLOWLIST.has(repoName(repository).toLowerCase())) ||
+    !checksAreGreen(mergeGate.statusCheckRollup, requiredContexts)
+  ) {
+    const issueUpdate = await markWorkerIssueBlocked(repository, pull, mergeGateReason, [
       "Fresh merge gate check failed immediately before merge.",
+      `Required checks: ${requiredContexts.length ? requiredContexts.join(", ") : "(none configured)"}`,
       `Reported checks: ${checksSummary(mergeGate.statusCheckRollup) || "(none)"}`
     ]);
     return {
       repo: repoName(repository),
       pr: ref,
       action: "skip",
-      reason: "merge-checks-not-green",
+      reason: mergeGateReason,
       issue_update: issueUpdate,
+      required_checks: requiredContexts,
       checks: checksSummary(mergeGate.statusCheckRollup)
     };
   }

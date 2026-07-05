@@ -594,6 +594,10 @@ export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
     return requiredContexts.length === 0;
   }
 
+  if (missingRequiredStatusCheckContexts(statusCheckRollup, requiredContexts).length > 0) {
+    return false;
+  }
+
   return statusCheckRollup.every((check) => {
     if (check.__typename === "CheckRun") {
       return check.status === "COMPLETED" && check.conclusion === "SUCCESS";
@@ -603,6 +607,22 @@ export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
     }
     return false;
   });
+}
+
+export function missingRequiredStatusCheckContexts(statusCheckRollup, requiredContexts = []) {
+  if (!requiredContexts.length) return [];
+
+  const present = new Set(
+    (Array.isArray(statusCheckRollup) ? statusCheckRollup : [])
+      .map((check) => {
+        if (check.__typename === "CheckRun") return check.name;
+        if (check.__typename === "StatusContext") return check.context;
+        return "";
+      })
+      .filter(Boolean)
+  );
+
+  return requiredContexts.filter((context) => !present.has(context));
 }
 
 export function checksSummary(statusCheckRollup) {
