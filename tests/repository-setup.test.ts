@@ -30,6 +30,7 @@ test("checkRepositorySetup returns no comment when managed setup is current", as
       ".github/codex-review.Dockerfile": "FROM node:22-bookworm-slim\n",
       ".github/codex-review.schema.json": "{}\n",
       ".github/scripts/run-codex-review.sh": "#!/usr/bin/env bash\n",
+      ".github/scripts/validate-codex-review.mjs": "#!/usr/bin/env node\n",
       ".github/scripts/dark-factory-release-check.mjs": "#!/usr/bin/env node\n",
       ".github/scripts/df-lib.mjs": "export {}\n",
       ".github/scripts/df-plan.mjs": "import './df-lib.mjs';\n",
@@ -76,6 +77,7 @@ test("checkRepositorySetup reports stale agents and missing github bootstrap", a
   assert.ok(comment?.includes(".github/workflows/df-follow-through.yml"));
   assert.ok(comment?.includes(".github/workflows/df-work.yml"));
   assert.ok(comment?.includes(".github/workflows/codex-review.yml"));
+  assert.ok(comment?.includes(".github/scripts/validate-codex-review.mjs"));
   assert.ok(comment?.includes(".darkfactory/managed-repository.json"));
 });
 

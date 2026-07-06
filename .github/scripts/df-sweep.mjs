@@ -18,6 +18,7 @@ import {
   repoName,
   requiredEnv,
   warnReadOnlyRepository,
+  withCodexReviewRequiredContext,
   writeRunLedger
 } from "./df-lib.mjs";
 import { pathToFileURL } from "node:url";
@@ -152,7 +153,9 @@ export async function considerPullRequest(repository, pull) {
     return { repo: repoName(repository), pr: ref, action: "skip", reason: "checks-not-reported-yet" };
   }
 
-  const requiredContexts = await getRequiredStatusCheckContexts(gh, repository, pull.baseRefName);
+  const requiredContexts = withCodexReviewRequiredContext(
+    await getRequiredStatusCheckContexts(gh, repository, pull.baseRefName)
+  );
   const hasReportedChecks = Array.isArray(pull.statusCheckRollup) && pull.statusCheckRollup.length > 0;
   if (!hasReportedChecks && requiredContexts.length === 0 && !NO_CHECK_ALLOWLIST.has(repoName(repository).toLowerCase())) {
     const issueUpdate = await markWorkerIssueBlocked(repository, pull, "no-checks-not-allowed", [
@@ -196,9 +199,13 @@ export async function considerPullRequest(repository, pull) {
 
   const mergeGate = await getPullRequestMergeGate(repository, pull.number);
   const hasMergeGateChecks = Array.isArray(mergeGate.statusCheckRollup) && mergeGate.statusCheckRollup.length > 0;
-  if ((!hasMergeGateChecks && !NO_CHECK_ALLOWLIST.has(repoName(repository).toLowerCase())) || !checksAreGreen(mergeGate.statusCheckRollup)) {
+  if (
+    (!hasMergeGateChecks && !NO_CHECK_ALLOWLIST.has(repoName(repository).toLowerCase())) ||
+    !checksAreGreen(mergeGate.statusCheckRollup, requiredContexts)
+  ) {
     const issueUpdate = await markWorkerIssueBlocked(repository, pull, "merge-checks-not-green", [
       "Fresh merge gate check failed immediately before merge.",
+      `Required checks: ${requiredContexts.join(", ")}`,
       `Reported checks: ${checksSummary(mergeGate.statusCheckRollup) || "(none)"}`
     ]);
     return {

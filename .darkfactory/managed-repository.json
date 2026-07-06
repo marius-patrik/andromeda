@@ -22,6 +22,7 @@
     ".github/codex-review.Dockerfile",
     ".github/codex-review.schema.json",
     ".github/scripts/run-codex-review.sh",
+    ".github/scripts/validate-codex-review.mjs",
     ".github/scripts/dark-factory-release-check.mjs"
   ]
 }

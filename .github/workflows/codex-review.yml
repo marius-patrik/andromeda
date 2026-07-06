@@ -144,6 +144,11 @@ jobs:
 
           cp pr-workspace/codex-review.json codex-review.json
 
+      - name: Validate Codex verdict
+        if: always()
+        shell: bash
+        run: node .github/scripts/validate-codex-review.mjs codex-review.json .github/codex-review.schema.json
+
       - name: Comment review
         if: always()
         uses: actions/github-script@v7

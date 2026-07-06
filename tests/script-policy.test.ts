@@ -8,11 +8,14 @@ const dfLib: any = await import("../.github/scripts/df-lib.mjs");
 const dfFix: any = await import("../.github/scripts/df-fix.mjs");
 // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
 const dfSweep: any = await import("../.github/scripts/df-sweep.mjs");
+// @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+const codexReviewValidator: any = await import("../.github/scripts/validate-codex-review.mjs");
 
 const {
   assertAllowedRepo,
   checksAreGreen,
   cleanupTempRoot,
+  CODEX_REVIEW_REQUIRED_CONTEXT,
   extractClosingIssueNumbers,
   getBranchProtection,
   getRequiredStatusCheckContexts,
@@ -27,7 +30,8 @@ const {
   prdIssueBody,
   reconcileLabelDiff,
   repoName,
-  taskClassFromLabels
+  taskClassFromLabels,
+  withCodexReviewRequiredContext
 } = dfLib;
 
 const {
@@ -40,6 +44,9 @@ const {
   configureSweepRuntime,
   considerPullRequest: considerSweepPullRequest
 } = dfSweep;
+const {
+  validateReviewAgainstSchema
+} = codexReviewValidator;
 
 test("parsePrdItems creates stable df-prd markers from PRD milestones and loops", () => {
   const items = parsePrdItems([
@@ -198,10 +205,64 @@ test("checksAreGreen rejects pending or failing checks without requiring fixed c
       [{ __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" }],
       ["ci"]
     ),
-    true
+    false
   );
   assert.equal(checksAreGreen([{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }]), false);
   assert.equal(checksAreGreen([{ __typename: "StatusContext", state: "FAILURE" }]), false);
+});
+
+test("Codex Review is a universal merge-gate context for worker follow-through", () => {
+  assert.equal(CODEX_REVIEW_REQUIRED_CONTEXT, "Codex Review");
+  assert.deepEqual(withCodexReviewRequiredContext(["Validate", "Codex Review"]), ["Validate", "Codex Review"]);
+  assert.equal(
+    checksAreGreen(
+      [{ __typename: "CheckRun", name: "Validate", status: "COMPLETED", conclusion: "SUCCESS" }],
+      withCodexReviewRequiredContext(["Validate"])
+    ),
+    false
+  );
+  assert.equal(
+    checksAreGreen(
+      [
+        { __typename: "CheckRun", name: "Validate", status: "COMPLETED", conclusion: "SUCCESS" },
+        { __typename: "CheckRun", name: "Codex Review", status: "COMPLETED", conclusion: "SUCCESS" }
+      ],
+      withCodexReviewRequiredContext(["Validate"])
+    ),
+    true
+  );
+});
+
+test("Codex Review verdict validator enforces the managed schema shape", () => {
+  const schema = {
+    additionalProperties: false,
+    properties: {
+      approved: { type: "boolean" },
+      summary: { type: "string" },
+      blocking_findings: { type: "array", items: { type: "string" } },
+      non_blocking_notes: { type: "array", items: { type: "string" } }
+    },
+    required: ["approved", "summary", "blocking_findings", "non_blocking_notes"]
+  };
+
+  assert.deepEqual(
+    validateReviewAgainstSchema(
+      { approved: true, summary: "ok", blocking_findings: [], non_blocking_notes: ["note"] },
+      schema
+    ),
+    []
+  );
+  assert.deepEqual(
+    validateReviewAgainstSchema(
+      { approved: "yes", summary: "bad", blocking_findings: [false], non_blocking_notes: [], extra: true },
+      schema
+    ),
+    [
+      "unexpected property 'extra'",
+      "property 'approved' must be boolean",
+      "property 'blocking_findings[0]' must be string"
+    ]
+  );
 });
 
 test("getRequiredStatusCheckContexts treats inaccessible branch protection as no native requirements", async () => {
@@ -889,6 +950,7 @@ test("df-sweep verifies branch protection before merging empty check rollups", a
   const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
 
   assert.match(source, /getRequiredStatusCheckContexts/);
+  assert.match(source, /withCodexReviewRequiredContext/);
   assert.match(source, /required_checks/);
   assert.match(source, /required-checks-missing/);
   assert.match(source, /checksAreGreen\(pull\.statusCheckRollup, requiredContexts\)/);
@@ -908,8 +970,22 @@ test("df-sweep re-fetches checks immediately before direct merge and blocks red 
   assert.match(source, /hasMergeGateChecks/);
   assert.match(source, /NO_CHECK_ALLOWLIST/);
   assert.match(source, /Fresh merge gate check failed immediately before merge/);
-  assert.match(source, /checksAreGreen\(mergeGate\.statusCheckRollup\)/);
+  assert.match(source, /checksAreGreen\(mergeGate\.statusCheckRollup, requiredContexts\)/);
   assert.doesNotMatch(source, /--admin/);
+});
+
+test("Codex Review workflow validates verdicts before comments and enforcement", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/codex-review.yml", import.meta.url), "utf8");
+  const validate = workflow.indexOf("Validate Codex verdict");
+  const comment = workflow.indexOf("Comment review");
+  const enforce = workflow.indexOf("Enforce Codex verdict");
+
+  assert.notEqual(validate, -1);
+  assert.notEqual(comment, -1);
+  assert.notEqual(enforce, -1);
+  assert.ok(validate < comment);
+  assert.ok(validate < enforce);
+  assert.match(workflow, /node \.github\/scripts\/validate-codex-review\.mjs codex-review\.json \.github\/codex-review\.schema\.json/);
 });
 
 test("df-sweep requires explicit allowlist before merging PRs with no checks", async () => {
@@ -1231,6 +1307,12 @@ function workerPull(options: {
         name: "ci",
         status: options.checkStatus || "COMPLETED",
         conclusion: options.checkConclusion
+      },
+      {
+        __typename: "CheckRun",
+        name: "Codex Review",
+        status: "COMPLETED",
+        conclusion: "SUCCESS"
       }
     ]
   };
