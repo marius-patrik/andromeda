@@ -27,6 +27,16 @@ const DEFAULT_LIMITS = {
   perRepo: 1,
   perStream: 1
 };
+const STREAM_LEDGER_FILES = [
+  ".darkfactory/streams.json",
+  ".darkfactory/stream-ledgers.json",
+  ".darkfactory/stream-ledger.json",
+  ".darkfactory/ledger.json"
+];
+const STREAM_LEDGER_DIRS = [
+  ".darkfactory/streams",
+  ".darkfactory/ledgers"
+];
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
@@ -186,12 +196,13 @@ export async function targetRepositories(gh, controlRepo, options = {}) {
 export async function reconstructRepositoryState(gh, repository, warn = console.warn) {
   const repo = await getRepository(gh, repository);
   const defaultBranch = repo.default_branch || "main";
-  const [issues, branch, prd, workflowRuns, openWorkerPullsByIssue] = await Promise.all([
+  const [issues, branch, prd, workflowRuns, openWorkerPullsByIssue, streamLedgers] = await Promise.all([
     listIssues(gh, repository, "open"),
     getDefaultBranchState(gh, repository, defaultBranch),
     getPrdState(gh, repository, defaultBranch),
     getRecentWorkflowRuns(gh, repository, defaultBranch, warn),
-    listOpenWorkerPullRequestsByIssue(gh, repository)
+    listOpenWorkerPullRequestsByIssue(gh, repository),
+    readStreamLedgers(gh, repository, defaultBranch, warn)
   ]);
   const issueStates = issues.map((issue) => normalizeIssueState(issue));
   const issueByNumber = new Map(issueStates.map((issue) => [issue.number, issue]));
@@ -239,6 +250,7 @@ export async function reconstructRepositoryState(gh, repository, warn = console.
     },
     ci: summarizeWorkflowRuns(workflowRuns),
     prd: prd.exists ? { exists: true, sha: prd.sha, characters: prd.characters } : { exists: false },
+    stream_ledgers: streamLedgers,
     backlog: {
       total_open: issueStates.length,
       ready: issueStates.filter((issue) => issue.labels.has("df:ready")).length,
@@ -564,6 +576,10 @@ function synthesizeGlobalBrief(repoStates, actions, limits) {
       .map(([stream, counts]) => `${stream}:ready=${counts.ready},running=${counts.running},blocked=${counts.blocked}`)
       .join("; ");
     if (streams) lines.push(`  streams: ${streams}`);
+    if (state.stream_ledgers.files.length) {
+      const latest = state.stream_ledgers.latest ? ` latest=${state.stream_ledgers.latest}` : "";
+      lines.push(`  stream ledgers: files=${state.stream_ledgers.files.length} entries=${state.stream_ledgers.entries}${latest}`);
+    }
     if (state.open_blockers.length) lines.push(`  blockers: ${state.open_blockers.join(", ")}`);
   }
   lines.push("");
@@ -610,6 +626,130 @@ function normalizeIssueState(issue) {
     blockedCommentCount: countWorkerBlockedComments(body),
     state: issue.state || "open"
   };
+}
+
+async function readStreamLedgers(gh, repository, ref, warn = console.warn) {
+  const files = [];
+  const seen = new Set();
+
+  for (const filePath of STREAM_LEDGER_FILES) {
+    const content = await readOptionalLedgerFile(gh, repository, filePath, ref, warn);
+    if (content === null) continue;
+    files.push(summarizeLedgerContent(filePath, content));
+    seen.add(filePath);
+  }
+
+  for (const dirPath of STREAM_LEDGER_DIRS) {
+    const entries = await listOptionalContentDirectory(gh, repository, dirPath, ref, warn);
+    for (const entry of entries) {
+      if (entry?.type !== "file" || typeof entry.path !== "string") continue;
+      if (!/\.(json|jsonl|md|markdown)$/i.test(entry.path)) continue;
+      if (seen.has(entry.path)) continue;
+      const content = await readOptionalLedgerFile(gh, repository, entry.path, ref, warn);
+      if (content === null) continue;
+      files.push(summarizeLedgerContent(entry.path, content));
+      seen.add(entry.path);
+    }
+  }
+
+  const latest = files.map((file) => file.latest).filter(Boolean).sort().at(-1) ?? null;
+  return {
+    files,
+    entries: files.reduce((sum, file) => sum + file.entries, 0),
+    latest
+  };
+}
+
+async function readOptionalLedgerFile(gh, repository, filePath, ref, warn) {
+  try {
+    return await getOptionalFileContent(gh, repository, filePath, ref);
+  } catch (error) {
+    warn(`DarkFactory stream ledger warning for ${repoName(repository)}:${filePath}: ${error.message || String(error)}`);
+    return null;
+  }
+}
+
+async function listOptionalContentDirectory(gh, repository, dirPath, ref, warn) {
+  try {
+    const suffix = ref ? `?ref=${encodeURIComponent(ref)}` : "";
+    const data = await gh.request("GET", `/repos/${repoName(repository)}/contents/${encodeContentPath(dirPath)}${suffix}`);
+    return Array.isArray(data) ? data : [];
+  } catch (error) {
+    if (error.status === 404) return [];
+    warn(`DarkFactory stream ledger directory warning for ${repoName(repository)}:${dirPath}: ${error.message || String(error)}`);
+    return [];
+  }
+}
+
+function summarizeLedgerContent(filePath, content) {
+  const bytes = Buffer.byteLength(content, "utf8");
+  const trimmed = content.trim();
+  if (!trimmed) return { path: filePath, format: ledgerFormat(filePath), entries: 0, latest: null, bytes };
+
+  if (/\.json$/i.test(filePath)) {
+    try {
+      return summarizeJsonLedger(filePath, JSON.parse(trimmed), bytes);
+    } catch {
+      return { path: filePath, format: "json", entries: 1, latest: null, bytes };
+    }
+  }
+
+  if (/\.jsonl$/i.test(filePath)) {
+    const rows = trimmed.split("\n").filter(Boolean);
+    const latest = rows.map((row) => {
+      try {
+        return findLatestTimestamp(JSON.parse(row));
+      } catch {
+        return null;
+      }
+    }).filter(Boolean).sort().at(-1) ?? null;
+    return { path: filePath, format: "jsonl", entries: rows.length, latest, bytes };
+  }
+
+  return { path: filePath, format: ledgerFormat(filePath), entries: 1, latest: null, bytes };
+}
+
+function summarizeJsonLedger(filePath, value, bytes) {
+  if (Array.isArray(value)) {
+    return { path: filePath, format: "json", entries: value.length, latest: findLatestTimestamp(value), bytes };
+  }
+  if (value && typeof value === "object") {
+    const arrays = ["entries", "runs", "items", "actions", "events"]
+      .map((key) => Array.isArray(value[key]) ? value[key] : null)
+      .filter(Boolean);
+    const entries = arrays.length ? arrays.reduce((sum, rows) => sum + rows.length, 0) : 1;
+    return { path: filePath, format: "json", entries, latest: findLatestTimestamp(value), bytes };
+  }
+  return { path: filePath, format: "json", entries: 1, latest: null, bytes };
+}
+
+function findLatestTimestamp(value) {
+  const timestamps = [];
+  collectTimestamps(value, timestamps);
+  return timestamps.sort().at(-1) ?? null;
+}
+
+function collectTimestamps(value, timestamps) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectTimestamps(item, timestamps);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const [key, nested] of Object.entries(value)) {
+    if (typeof nested === "string" && /(?:created|updated|finished|timestamp|time|at)$/i.test(key) && !Number.isNaN(Date.parse(nested))) {
+      timestamps.push(new Date(nested).toISOString());
+    } else {
+      collectTimestamps(nested, timestamps);
+    }
+  }
+}
+
+function ledgerFormat(filePath) {
+  return filePath.split(".").at(-1)?.toLowerCase() || "text";
+}
+
+function encodeContentPath(filePath) {
+  return filePath.split("/").map(encodeURIComponent).join("/");
 }
 
 function issuePriority(labels) {

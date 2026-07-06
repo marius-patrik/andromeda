@@ -79,6 +79,51 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
   assert.match(result.brief, /Token use: 0 model calls/);
 });
 
+test("orchestrator reconstructs stream ledgers from .darkfactory", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-stream-ledger-test");
+  const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+  const ledger = {
+    entries: [
+      { stream: "core", status: "blocked", updated_at: "2026-07-06T09:00:00Z" },
+      { stream: "core", status: "ready", updated_at: "2026-07-06T09:15:00Z" }
+    ]
+  };
+  const gh = baseGithubMock(calls, {
+    issues: [],
+    graphql: async () => emptyPullRequestConnection()
+  });
+  const baseRequest = gh.request;
+  gh.request = async (method: string, path: string, body?: unknown) => {
+    calls.push({ method, path, body });
+    if (method === "GET" && path === "/repos/marius-patrik/example/contents/.darkfactory/streams?ref=main") {
+      return [{ type: "file", path: ".darkfactory/streams/core.json" }];
+    }
+    if (method === "GET" && path === "/repos/marius-patrik/example/contents/.darkfactory/streams/core.json?ref=main") {
+      return {
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(JSON.stringify(ledger), "utf8").toString("base64")
+      };
+    }
+    return baseRequest(method, path, body);
+  };
+
+  const result = await orchestrate({
+    gh,
+    controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+    registry: { repositories: { "marius-patrik/example": { state: "active" } } },
+    repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
+    writeLedger: false,
+    updateDashboard: false,
+    warn: () => {},
+    log: () => {}
+  });
+
+  assert.deepEqual(result.ledger.global_state_brief.match(/stream ledgers: files=1 entries=2 latest=2026-07-06T09:15:00.000Z/) !== null, true);
+  assert.equal(result.ledger.actions.length, 0);
+});
+
 test("orchestrator does not dispatch issues that already have an open worker PR", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-existing-pr-test");
@@ -457,6 +502,12 @@ async function baseResponse(method: string, path: string, _body: unknown, option
         content: Buffer.from("# PRD\n", "utf8").toString("base64")
       }
     };
+  }
+  if (
+    method === "GET" &&
+    /^\/repos\/marius-patrik\/example\/contents\/\.darkfactory\/(?:streams(?:\.json)?|stream-ledgers\.json|stream-ledger\.json|ledger\.json|ledgers)(?:\?ref=main)?$/.test(path)
+  ) {
+    return { handled: true, value: null };
   }
   if (method === "GET" && path === "/repos/marius-patrik/example/actions/runs?branch=main&per_page=10") {
     return { handled: true, value: { workflow_runs: [{ name: "validate", status: "completed", conclusion: "success" }] } };
