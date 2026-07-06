@@ -1347,7 +1347,7 @@ test("df-sweep merges green app-authored worker PRs even when the worker issue i
 test("df-orchestrate workflow validates trusted refs before privileged tokens", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-orchestrate.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");
-  const checkout = workflow.indexOf("Checkout DarkFactory from this repository");
+  const checkout = workflow.indexOf("Checkout DarkFactory control repository");
   const token = workflow.indexOf("Mint mp-agents installation token");
 
   assert.notEqual(gate, -1);
@@ -1356,11 +1356,15 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.ok(gate < token);
   assert.ok(checkout < token);
   assert.match(workflow, /GITHUB_REPOSITORY/);
-  assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
+  assert.match(workflow, /GITHUB_REF.*refs\/heads\/dev/);
+  assert.match(workflow, /GITHUB_REF_NAME.*dev/);
+  assert.match(workflow, /repository:\s+marius-patrik\/agent-darkfactory/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'[\s\S]+github\.event_name == 'schedule'/);
-  assert.match(workflow, /github\.repository_owner == 'marius-patrik'[\s\S]+github\.event_name == 'issues'/);
-  assert.match(workflow, /github\.repository_owner == 'marius-patrik'[\s\S]+github\.event_name == 'issue_comment'/);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'[\s\S]+github\.event_name == 'issues'/);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'[\s\S]+github\.event_name == 'issue_comment'/);
+  assert.doesNotMatch(workflow, /github\.repository_owner == 'marius-patrik'[\s\S]+github\.event_name == 'issues'/);
+  assert.doesNotMatch(workflow, /github\.repository_owner == 'marius-patrik'[\s\S]+github\.event_name == 'issue_comment'/);
   assert.match(workflow, /permission-actions:\s+write/);
   assert.match(workflow, /permission-workflows:\s+write/);
   assert.match(workflow, /permission-contents:\s+write/);
@@ -1376,7 +1380,7 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /workflows:\s*\n\s+-\s+DarkFactory Plan\s*\n\s+-\s+DarkFactory Work\s*\n\s+-\s+DarkFactory Follow Through/);
   assert.match(workflow, /types:\s*\n\s+-\s+completed/);
   assert.match(workflow, /github\.event_name == 'workflow_run'/);
-  assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'main'/);
+  assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'dev'/);
   assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
 });
 

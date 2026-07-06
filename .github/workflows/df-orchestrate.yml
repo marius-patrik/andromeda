@@ -27,20 +27,15 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       ${{
+        github.repository == 'marius-patrik/agent-darkfactory' &&
         (
-          github.repository == 'marius-patrik/agent-darkfactory' &&
+          github.event_name == 'schedule' ||
+          github.event_name == 'workflow_dispatch' ||
           (
-            github.event_name == 'schedule' ||
-            github.event_name == 'workflow_dispatch' ||
-            (
-              github.event_name == 'workflow_run' &&
-              github.event.workflow_run.head_branch == 'main' &&
-              github.event.workflow_run.conclusion == 'success'
-            )
-          )
-        ) ||
-        (
-          github.repository_owner == 'marius-patrik' &&
+            github.event_name == 'workflow_run' &&
+            github.event.workflow_run.head_branch == 'dev' &&
+            github.event.workflow_run.conclusion == 'success'
+          ) ||
           (
             (
               github.event_name == 'issues' &&
@@ -69,13 +64,18 @@ jobs:
       - name: Validate trusted control ref
         shell: bash
         run: |
-          if [[ "${GITHUB_REPOSITORY_OWNER}" != "marius-patrik" ]]; then
-            echo "::error::DarkFactory orchestrator can only run in the marius-patrik owner."
+          if [[ "${GITHUB_REPOSITORY}" != "marius-patrik/agent-darkfactory" ]]; then
+            echo "::error::DarkFactory privileged orchestration can only run from marius-patrik/agent-darkfactory."
             exit 1
           fi
 
-          if [[ "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
-            echo "::error::DarkFactory orchestrator can only run from refs/heads/main."
+          if [[ "${GITHUB_REF:-}" != "refs/heads/dev" ]]; then
+            echo "::error::DarkFactory privileged orchestration can only run from refs/heads/dev."
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF_TYPE:-}" == "branch" && "${GITHUB_REF_NAME:-}" != "dev" ]]; then
+            echo "::error::DarkFactory privileged orchestration branch mismatch."
             exit 1
           fi
 
@@ -89,9 +89,12 @@ jobs:
             echo "path=.github/scripts/df-orchestrate.mjs" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Checkout DarkFactory from this repository
+      - name: Checkout DarkFactory control repository
         uses: actions/checkout@v4
         with:
+          repository: marius-patrik/agent-darkfactory
+          # Pin control scripts to the exact trusted event commit before any
+          # installation token is minted.
           ref: ${{ github.sha }}
           persist-credentials: false
 
