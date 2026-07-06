@@ -226,6 +226,7 @@ test("orchestrator sequences Blocked-by issues before dispatch", async () => {
   const baseRequest = gh.request;
   gh.request = async (method: string, path: string, body?: unknown) => {
     calls.push({ method, path, body });
+    if (method === "POST" && path === "/repos/marius-patrik/example/issues/2/labels") return {};
     if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/2/labels/df%3Aready") return null;
     return baseRequest(method, path, body);
   };
@@ -242,8 +243,13 @@ test("orchestrator sequences Blocked-by issues before dispatch", async () => {
   });
 
   assert.deepEqual(result.dispatched, []);
+  assert.ok(calls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/2/labels" && JSON.stringify(call.body).includes("df:blocked")));
   assert.ok(calls.some((call) => call.method === "DELETE" && call.path === "/repos/marius-patrik/example/issues/2/labels/df%3Aready"));
-  assert.ok(result.ledger.actions.some((action: any) => action.action === "remove-ready-blocked-by" && action.issue === "#2"));
+  assert.ok(result.ledger.actions.some((action: any) =>
+    action.action === "remove-ready-blocked-by" &&
+    action.issue === "#2" &&
+    action.blockers.includes("#1")
+  ));
 });
 
 test("orchestrator marks resolved sequenced work ready and respects stream caps", async () => {

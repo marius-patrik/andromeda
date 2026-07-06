@@ -367,7 +367,7 @@ async function sequenceReadyIssues(gh, repository, state) {
     }
 
     if (!blockersClosed && issue.labels.has("df:ready")) {
-      await replaceIssueLabels(gh, repository, issue.number, [], ["df:ready"]);
+      await replaceIssueLabels(gh, repository, issue.number, ["df:blocked"], ["df:ready"]);
       actions.push({
         action: "remove-ready-blocked-by",
         repo: repoName(repository),
@@ -713,6 +713,7 @@ function applySequenceActionsToState(state, actions) {
       issue.labels.delete("df:done");
     }
     if (action.action === "remove-ready-blocked-by") {
+      issue.labels.add("df:blocked");
       issue.labels.delete("df:ready");
     }
   }
