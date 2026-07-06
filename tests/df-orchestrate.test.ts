@@ -21,7 +21,7 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
     async request(method: string, path: string, body?: unknown) {
       calls.push({ method, path, body });
 
-      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&labels=df%3Aready&per_page=100&page=1") {
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
         return [
           {
             number: 42,
@@ -30,7 +30,7 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
           }
         ];
       }
-      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&labels=df%3Aready&per_page=100&page=2") {
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") {
         return [];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example") {
@@ -109,10 +109,10 @@ test("orchestrator does not dispatch issues that already have an open worker PR"
     async request(method: string, path: string, body?: unknown) {
       calls.push({ method, path, body });
 
-      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&labels=df%3Aready&per_page=100&page=1") {
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
         return [{ number: 8, labels: [{ name: "df:ready" }] }];
       }
-      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&labels=df%3Aready&per_page=100&page=2") {
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") {
         return [];
       }
       if (method === "POST" && path === "/repos/marius-patrik/example/issues/8/labels") return {};
@@ -139,4 +139,65 @@ test("orchestrator does not dispatch issues that already have an open worker PR"
     { labels: ["df:running"] }
   );
   assert.ok(calls.some((call) => call.method === "DELETE" && call.path === "/repos/marius-patrik/example/issues/8/labels/df%3Aready"));
+});
+
+test("orchestrator selects next ready issues by priority, blocked-by, and stream lane", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { blockedByIssueNumbers, selectDispatchableIssues } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-scheduler-test");
+
+  assert.deepEqual(blockedByIssueNumbers("Blocked-by: #61, #63\nBlocked-by: owner/repo#70"), [61, 63, 70]);
+  assert.equal(Number.isNaN(blockedByIssueNumbers("Blocked-by: waiting for owner")[0]), true);
+
+  const selected = selectDispatchableIssues([
+    {
+      number: 10,
+      body: "",
+      labels: [{ name: "df:ready" }, { name: "P2" }, { name: "stream:docs" }]
+    },
+    {
+      number: 11,
+      body: "## Sequencing\n\nBlocked-by: #9",
+      labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:core" }]
+    },
+    {
+      number: 9,
+      body: "",
+      labels: [{ name: "df:running" }, { name: "stream:core" }]
+    },
+    {
+      number: 12,
+      body: "",
+      labels: [{ name: "df:ready" }, { name: "P1" }, { name: "stream:docs" }]
+    },
+    {
+      number: 13,
+      body: "",
+      labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:ui" }]
+    },
+    {
+      number: 14,
+      body: "Blocked-by: #99",
+      labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:api" }]
+    },
+    {
+      number: 15,
+      body: "Blocked-by: #99, #12",
+      labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:ops" }]
+    },
+    {
+      number: 16,
+      body: "Blocked-by: owner/repo#99, owner/repo#98",
+      labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:review" }]
+    },
+    {
+      number: 17,
+      body: "Blocked-by: waiting for owner",
+      labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:unsafe" }]
+    }
+  ]);
+
+  assert.deepEqual(
+    selected.map((issue: { number: number }) => issue.number),
+    [13, 14, 16, 12]
+  );
 });

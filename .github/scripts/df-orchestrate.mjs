@@ -56,7 +56,8 @@ export async function orchestrate(options) {
 
   for (const target of targets) {
     try {
-      const ready = await listReadyIssues(gh, target);
+      const openIssues = await listOpenIssues(gh, target);
+      const ready = selectDispatchableIssues(openIssues);
       for (const issue of ready) {
         try {
           const wasDispatched = await dispatchWorker(gh, controlRepo, target, issue.number);
@@ -96,26 +97,93 @@ export async function targetRepositories(gh, controlRepo, options = {}) {
 }
 
 export async function listReadyIssues(gh, repository) {
+  return selectDispatchableIssues(await listOpenIssues(gh, repository));
+}
+
+export async function listOpenIssues(gh, repository) {
   const issues = [];
   for (let page = 1; page <= 20; page += 1) {
-    const labels = encodeURIComponent("df:ready");
     const batch = await gh.request(
       "GET",
-      `/repos/${repoName(repository)}/issues?state=open&labels=${labels}&per_page=100&page=${page}`
+      `/repos/${repoName(repository)}/issues?state=open&per_page=100&page=${page}`
     );
     if (!Array.isArray(batch) || batch.length === 0) break;
     issues.push(...batch.filter((issue) => !issue.pull_request));
     if (batch.length < 100) break;
   }
 
-  return issues.filter((issue) => {
-    const names = new Set(
-      (issue.labels || []).map((label) => (typeof label === "string" ? label : label?.name)).filter(Boolean)
-    );
-    if (!names.has("df:ready")) return false;
-    if (names.has("df:running") || names.has("df:blocked") || names.has("df:done")) return false;
-    return true;
-  });
+  return issues;
+}
+
+export function selectDispatchableIssues(openIssues) {
+  const openIssueNumbers = new Set(openIssues.map((issue) => issue.number).filter(Number.isInteger));
+  const occupiedLanes = new Set();
+  const selectedLanes = new Set();
+
+  for (const issue of openIssues) {
+    const names = issueLabelNames(issue);
+    if (!names.has("df:running")) continue;
+    for (const lane of issueStreamLanes(issue)) occupiedLanes.add(lane);
+  }
+
+  return openIssues
+    .filter((issue) => {
+      const names = issueLabelNames(issue);
+      if (!names.has("df:ready")) return false;
+      if (names.has("df:running") || names.has("df:blocked") || names.has("df:done")) return false;
+      return blockedByIssueNumbers(issue.body || "").every(
+        (number) => Number.isInteger(number) && !openIssueNumbers.has(number)
+      );
+    })
+    .sort(compareReadyIssues)
+    .filter((issue) => {
+      const lanes = issueStreamLanes(issue);
+      if (lanes.some((lane) => occupiedLanes.has(lane) || selectedLanes.has(lane))) return false;
+      for (const lane of lanes) selectedLanes.add(lane);
+      return true;
+    });
+}
+
+export function compareReadyIssues(a, b) {
+  return priorityRank(a) - priorityRank(b) || a.number - b.number;
+}
+
+export function priorityRank(issue) {
+  const names = issueLabelNames(issue);
+  if (names.has("P0")) return 0;
+  if (names.has("P1")) return 1;
+  if (names.has("P2")) return 2;
+  return 3;
+}
+
+export function issueStreamLanes(issue) {
+  const streamLabels = [...issueLabelNames(issue)]
+    .filter((label) => /^stream:[^:\s]+$/i.test(label))
+    .sort((a, b) => a.localeCompare(b));
+  return streamLabels.length ? streamLabels : ["stream:default"];
+}
+
+export function blockedByIssueNumbers(body) {
+  const numbers = [];
+  for (const line of String(body || "").split(/\r?\n/)) {
+    const match = line.match(/^\s*Blocked-by:\s*(.+)$/i);
+    if (!match) continue;
+
+    const refs = [...match[1].matchAll(/(?:[\w.-]+\/[\w.-]+)?#(\d+)/g)];
+    if (refs.length === 0) {
+      numbers.push(Number.NaN);
+      continue;
+    }
+
+    numbers.push(...refs.map((ref) => Number(ref[1])));
+  }
+  return numbers;
+}
+
+function issueLabelNames(issue) {
+  return new Set(
+    (issue.labels || []).map((label) => (typeof label === "string" ? label : label?.name)).filter(Boolean)
+  );
 }
 
 export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
