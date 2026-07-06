@@ -14,7 +14,6 @@
     "dev:cli": "bun --filter @template/cli run dev",
     "dev:web": "bun --filter @template/web run dev",
     "start": "bun --filter @template/web run start",
-    "sync:submodules": "git submodule update --init --recursive",
     "test": "bun run --filter '*' test",
     "typecheck": "bun run --filter '*' typecheck"
   },

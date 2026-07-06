@@ -34,7 +34,7 @@ let allOk = true;
 
 for (const repo of repos) {
   if (!existsSync(repo.path)) {
-    console.error(`\n${repo.name}: missing repo path (${repo.path}); run \`git submodule update --init --recursive\``);
+    console.error(`\n${repo.name}: missing repo path (${repo.path}); template folders should exist in this repository`);
     allOk = false;
     continue;
   }

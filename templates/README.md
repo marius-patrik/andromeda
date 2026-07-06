@@ -1,30 +1,33 @@
-# darkfactory-templates
+# templates
 
-Bun and TypeScript templates monorepo for DarkFactory-managed repositories.
+Bun and TypeScript starter templates for DarkFactory-managed repositories.
 
-This repository publishes the canonical starter templates used by DarkFactory. Each template is a standalone repository that can also be consumed independently. The monorepo ties them together with shared validation, sync scripts, and release conventions.
+These are the canonical starter templates used by DarkFactory. They were folded into the control
+repository as normal folders (formerly the standalone `darkfactory-templates` monorepo and its
+`template-*` submodule repositories, all archived after the fold). Shared validation, sync
+scripts, and release conventions live alongside them here.
 
-## Monorepo layout
+## Layout
 
 ### Workspace packages
 
 - `packages/cli` – command-line package template (`@template/cli`).
 - `packages/web` – web package template served by Bun (`@template/web`).
 
-### Template submodules
+### Template folders
 
 - `templates/template-cli` – Bun CLI application template.
 - `templates/template-web` – Bun web application template.
 - `templates/template-bot` – TypeScript GitHub App bot template.
 - `templates/template-repo` – generic Bun repository template.
 
-Each submodule points to its own repository under `marius-patrik` and is tracked at the `main` branch.
+Each template is a normal folder in this repository; edit templates directly through pull
+requests against `dev` like any other control-repo change.
 
 ## Setup
 
 ```powershell
 bun install
-bun run sync:submodules
 bun run typecheck
 bun run build
 ```
@@ -44,17 +47,8 @@ Root CI runs:
 bun run ci
 ```
 
-This executes `bun run typecheck && bun run build` across all workspace packages. Submodule validation is run inside each submodule repository.
-
-## Sync
-
-To pull the latest submodule commits:
-
-```powershell
-bun run sync:submodules
-```
-
-To bump submodule gitlinks after a submodule release, open a dedicated bump PR against `dev`. Routine documentation-only changes should not mix in submodule gitlink bumps, but a coordinated refresh (such as updating root docs and pinning templates to their refreshed commits) may combine both in one PR.
+This executes `bun run typecheck && bun run build` across all workspace packages. Template
+folder validation runs in this repository's CI.
 
 ## Release and enforcement model
 
