@@ -12,11 +12,8 @@ container environment contract defined in `docs/agents-os/DATA-CONTRACTS.md`:
   `AGENTS_HOME` points to the mounted shared state (`/agents/state`).
 - `sharedStateFromEnv` honors an explicit `AGENTS_ROOT` and falls back to the
   parent directory of `AGENTS_HOME` for host-native usage.
-- `AGENTS_DATA` and `AGENTS_WORKSPACE` override the default `data/` and
-  `os/agents-workspace` directories used by shared state.
-
-The distro image definition and local build/smoke commands live in
-`os/agents-os/`.
+- `AGENTS_DATA` and `AGENTS_WORKSPACE` override the default `data/agentos` and
+  `data/workspace` directories used by shared state.
 
 ## Requirements
 

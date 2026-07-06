@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "managedBy": "darkfactory-agent",
-  "dataRepo": "marius-patrik/agentos-data",
+  "dataRepo": "marius-patrik/agents-data",
   "workspacePackage": "darkfactory-workspace",
   "requiredSecrets": ["CODEX_AUTH_JSON"],
   "requiredFiles": [

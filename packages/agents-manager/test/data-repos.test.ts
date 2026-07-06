@@ -13,25 +13,25 @@ describe("data repos", () => {
       await ensureSharedState(state);
       const initial = await readDataRepos(state);
       expect(initial[0].id).toBe("agentos-data");
-      expect(initial[0].repo).toBe("marius-patrik/agentos-data");
-      expect(dataRepoManagedRoot(initial[0])).toBe(path.join(root, "data", "data-agentos"));
+      expect(initial[0].repo).toBe("marius-patrik/agents-data");
+      expect(dataRepoManagedRoot(initial[0])).toBe(path.join(root, "data", "agentos"));
 
       const repo = await upsertDataRepo(state, {
         id: "darkfactory-workspace",
-        repo: "marius-patrik/agentos-data",
-        path: "data/data-agentos",
+        repo: "marius-patrik/agents-data",
+        path: "data/agentos",
         branch: "main",
         managedPath: "managed-repository",
         env: "DARK_FACTORY_WORKSPACE_ROOT",
       });
 
-      expect(repo.path).toBe(path.join(root, "data", "data-agentos"));
-      expect(dataRepoManagedRoot(repo)).toBe(path.join(root, "data", "data-agentos", "managed-repository"));
+      expect(repo.path).toBe(path.join(root, "data", "agentos"));
+      expect(dataRepoManagedRoot(repo)).toBe(path.join(root, "data", "agentos", "managed-repository"));
 
       const repos = await readDataRepos(state);
       expect(repos).toHaveLength(2);
       expect(repos[1].id).toBe("darkfactory-workspace");
-      expect(repos[1].repo).toBe("marius-patrik/agentos-data");
+      expect(repos[1].repo).toBe("marius-patrik/agents-data");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 
-const defaultDataPath = path.join("data", "data-agentos");
+const defaultDataPath = path.join("data", "agentos");
 const defaultDataRepoPath = (root: string) => path.join(root, defaultDataPath);
 
 export type InstallKind =
@@ -89,7 +89,7 @@ export function sharedStateAt(root: string, stateDir: string): SharedState {
     root,
     stateDir,
     dataDir: path.join(root, "data"),
-    workspaceDir: path.join(root, "os", "agents-workspace"),
+    workspaceDir: path.join(root, "data", "workspace"),
     clisDir: path.join(stateDir, "clis"),
     harnessesDir: path.join(stateDir, "harnesses"),
     skillsDir: path.join(stateDir, "skills"),
@@ -118,7 +118,7 @@ export function sharedStateFromEnv(cwd: string, env: Record<string, string | und
   return {
     ...sharedStateAt(root, stateDir),
     dataDir: env.AGENTS_DATA?.trim() || path.join(root, "data"),
-    workspaceDir: env.AGENTS_WORKSPACE?.trim() || path.join(root, "os", "agents-workspace"),
+    workspaceDir: env.AGENTS_WORKSPACE?.trim() || path.join(root, "data", "workspace"),
     clisDir: env.AGENTS_CLIS?.trim() || path.join(stateDir, "clis"),
     harnessesDir: env.AGENTS_HARNESSES?.trim() || path.join(stateDir, "harnesses"),
     skillsDir: env.AGENTS_SKILLS?.trim() || path.join(stateDir, "skills"),
@@ -186,7 +186,7 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
         [
           {
             id: "agentos-data",
-            repo: "marius-patrik/agentos-data",
+            repo: "marius-patrik/agents-data",
             path: defaultDataRepoPath(state.root),
             branch: "main",
             env: "AGENTOS_DATA_ROOT",

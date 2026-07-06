@@ -161,5 +161,5 @@ export async function materializeCredentials(state: SharedState, id: CliId): Pro
   }
   return copied;
 }
-const defaultDataPath = path.join("data", "data-agentos");
+const defaultDataPath = path.join("data", "agentos");
 

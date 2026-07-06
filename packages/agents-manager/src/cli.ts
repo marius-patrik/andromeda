@@ -554,7 +554,7 @@ async function dataCommand(args: string[], flags: Record<string, string | boolea
     const registration = await upsertDataRepo(state, {
       id,
       repo,
-      path: String(flags.path ?? (id === "agentos-data" ? path.join("data", "data-agentos") : path.join("data", id))),
+      path: String(flags.path ?? (id === "agentos-data" ? path.join("data", "agentos") : path.join("data", id))),
       branch: typeof flags.branch === "string" ? flags.branch : "main",
       managedPath: typeof flags["managed-path"] === "string" ? flags["managed-path"] : undefined,
       env: typeof flags.env === "string" ? flags.env : undefined,

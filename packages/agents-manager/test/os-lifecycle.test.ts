@@ -76,7 +76,7 @@ describe("os lifecycle pure helpers", () => {
       expect(env.AGENTS_HOME).toBe("/agents/state");
       expect(env.AGENTS_DATA).toBe("/agents/data");
       expect(env.AGENTS_WORKSPACE).toBe("/workspace/agents");
-      expect(env.AGENTOS_DATA_ROOT).toBe("/agents/data/agentos-data");
+      expect(env.AGENTOS_DATA_ROOT).toBe("/agents/data/agentos");
       expect(env.AGENTS_CREDITS).toBe("/agents/state/credits.json");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -90,8 +90,8 @@ describe("os lifecycle pure helpers", () => {
       await ensureSharedState(state);
       await upsertDataRepo(state, {
         id: "darkfactory-data",
-        repo: "marius-patrik/agentos-data",
-        path: path.join(root, "data", "darkfactory-data"),
+        repo: "marius-patrik/agents-data",
+        path: path.join(root, "data", "workspace"),
         branch: "main",
         env: "DARKFACTORY_DATA_ROOT",
       });
@@ -102,7 +102,7 @@ describe("os lifecycle pure helpers", () => {
       expect(mounts.find((m) => m.container === "/agents/data")?.host).toBe(toPosixPath(state.dataDir));
       expect(mounts.find((m) => m.container === "/workspace/agents")?.host).toBe(toPosixPath(state.workspaceDir));
       expect(mounts.find((m) => m.container === "/agents/data/darkfactory-data")?.host).toBe(
-        toPosixPath(path.join(root, "data", "darkfactory-data")),
+        toPosixPath(path.join(root, "data", "workspace")),
       );
       const secretsMount = mounts.find((m) => m.container === "/agents/state/secrets");
       expect(secretsMount).toBeDefined();
@@ -199,7 +199,7 @@ describe("agents os CLI", () => {
       const dockerfile = path.join(root, "os", "agents-os", "Dockerfile");
       await mkdir(path.dirname(dockerfile), { recursive: true });
       await Bun.write(dockerfile, "FROM scratch\n");
-      const data = await runAgents(root, ["data", "repo", "set", "darkfactory-data", "marius-patrik/agentos-data", "--env", "DARKFACTORY_DATA_ROOT"]);
+      const data = await runAgents(root, ["data", "repo", "set", "darkfactory-data", "marius-patrik/agents-data", "--path", "data/workspace", "--env", "DARKFACTORY_DATA_ROOT"]);
       expect(data.code).toBe(0);
       const build = await runAgents(root, ["os", "image", "build", "--image", "agents-os"], env);
       expect(build.code).toBe(0);

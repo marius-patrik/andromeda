@@ -104,7 +104,7 @@ export function containerEnv(dataRepos: DataRepoRegistration[]): Record<string, 
     AGENTS_PLUGINS: "/agents/state/plugins",
     AGENTS_HOOKS: "/agents/state/hooks",
     AGENTS_TEMPLATES: "/agents/state/templates",
-    AGENTOS_DATA_ROOT: "/agents/data/agentos-data",
+    AGENTOS_DATA_ROOT: "/agents/data/agentos",
   };
   for (const repo of dataRepos) {
     const key = repo.env ?? `${repo.id.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_ROOT`;
@@ -114,7 +114,7 @@ export function containerEnv(dataRepos: DataRepoRegistration[]): Record<string, 
 }
 
 export function containerDataRepoPath(repo: DataRepoRegistration): string {
-  if (repo.id === "agentos-data") return "/agents/data/agentos-data";
+  if (repo.id === "agentos-data") return "/agents/data/agentos";
   if (repo.id === "darkfactory-data") return "/agents/data/darkfactory-data";
   return `/agents/data/${repo.id}`;
 }
