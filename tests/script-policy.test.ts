@@ -538,6 +538,23 @@ test("df-plan queues newly ready PRD issues for the control orchestrator", async
   assert.doesNotMatch(source, /actions\/workflows\/df-work\.yml\/dispatches/);
 });
 
+test("managed sync workflow uses data-agentos as the baseline source", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/sync-managed-repos.yml", import.meta.url), "utf8");
+  const token = workflow.indexOf("Create DarkFactory App token");
+  const dataCheckout = workflow.indexOf("Check out data-agentos repo");
+  const sync = workflow.indexOf("Sync installed repositories");
+
+  assert.notEqual(token, -1);
+  assert.notEqual(dataCheckout, -1);
+  assert.notEqual(sync, -1);
+  assert.ok(token < dataCheckout);
+  assert.ok(dataCheckout < sync);
+  assert.match(workflow, /repository:\s+marius-patrik\/data-agentos/);
+  assert.match(workflow, /DARK_FACTORY_WORKSPACE_ROOT:\s+\$\{\{\s*github\.workspace\s*\}\}\/data-agentos\/managed-repository/);
+  assert.match(workflow, /npm run sync:managed/);
+  assert.doesNotMatch(workflow, /contents:\s+write|pull-requests:\s+write/);
+});
+
 test("df-plan preserves PRD sequence references across completed predecessors", async () => {
   const source = await readFile(new URL("../.github/scripts/df-plan.mjs", import.meta.url), "utf8");
 

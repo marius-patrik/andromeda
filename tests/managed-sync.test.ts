@@ -15,6 +15,8 @@ import {
   DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
   DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH,
   DARK_FACTORY_ORCHESTRATE_WORKFLOW_PATH,
+  DARK_FACTORY_MANAGED_CONFIG_PATH,
+  MANAGED_BASELINE_DATA_REPO,
   DARK_FACTORY_PLAN_SCRIPT_PATH,
   DARK_FACTORY_PLAN_WORKFLOW_PATH,
   DARK_FACTORY_SCRIPT_LIB_PATH,
@@ -173,7 +175,7 @@ test("readManagedFiles supplies every required package-managed payload", async (
       if (packagePaths.has(filePath)) continue;
       const fullPath = join(root, ...filePath.split("/"));
       await mkdir(dirname(fullPath), { recursive: true });
-      await writeFile(fullPath, `${filePath}\n`);
+      await writeFile(fullPath, filePath === DARK_FACTORY_MANAGED_CONFIG_PATH ? managedConfig() : `${filePath}\n`);
     }
 
     const managedFiles = readManagedFiles(undefined, root);
@@ -186,3 +188,57 @@ test("readManagedFiles supplies every required package-managed payload", async (
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("readManagedFiles requires files declared by the managed repository manifest", async () => {
+  const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
+
+  try {
+    const requiredPaths = requiredManagedFilePaths(root);
+    for (const filePath of requiredPaths) {
+      const fullPath = join(root, ...filePath.split("/"));
+      await mkdir(dirname(fullPath), { recursive: true });
+      await writeFile(
+        fullPath,
+        filePath === DARK_FACTORY_MANAGED_CONFIG_PATH
+          ? managedConfig([".darkfactory/manifest-only.json"])
+          : `${filePath}\n`
+      );
+    }
+
+    assert.throws(
+      () => readManagedFiles(undefined, root),
+      /Managed file source is missing required payloads: \.darkfactory\/manifest-only\.json/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("readManagedFiles rejects non-canonical managed baseline sources", async () => {
+  const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
+
+  try {
+    const requiredPaths = requiredManagedFilePaths(root);
+    for (const filePath of requiredPaths) {
+      const fullPath = join(root, ...filePath.split("/"));
+      await mkdir(dirname(fullPath), { recursive: true });
+      await writeFile(
+        fullPath,
+        filePath === DARK_FACTORY_MANAGED_CONFIG_PATH
+          ? managedConfig([], "marius-patrik/workspace-darkfactory")
+          : `${filePath}\n`
+      );
+    }
+
+    assert.throws(
+      () => readManagedFiles(undefined, root),
+      /Managed baseline source must be marius-patrik\/data-agentos/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function managedConfig(requiredFiles: string[] = [], dataRepo = MANAGED_BASELINE_DATA_REPO): string {
+  return `${JSON.stringify({ schemaVersion: 1, managedBy: "agent-darkfactory", dataRepo, requiredFiles }, null, 2)}\n`;
+}

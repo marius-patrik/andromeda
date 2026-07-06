@@ -57,11 +57,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 }
 
 async function main() {
-  const token = requiredEnv("DARK_FACTORY_TOKEN");
+  // GITHUB_TOKEN cannot perform cross-repo issue writes; this loop must use the
+  // mp-agents installation token minted by the control workflow.
+  const appInstallationToken = requiredEnv("DARK_FACTORY_TOKEN");
   const controlRepo = parseRepo(requiredEnv("DF_CONTROL_REPO"));
   const dataRepo = process.env.DF_DATA_REPO ?? DEFAULT_DATA_REPO;
   const trigger = process.env.DF_TRIGGER ?? "unknown";
-  const gh = createGithubClient(token, "darkfactory-orchestrate");
+  const gh = createGithubClient(appInstallationToken, "darkfactory-orchestrate");
 
   await orchestrate({ gh, controlRepo, dataRepo, trigger, root: CONTROL_ROOT });
 }

@@ -24,11 +24,14 @@ export const DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH = ".github/scripts/df-orchestr
 export const DARK_FACTORY_SWEEP_SCRIPT_PATH = ".github/scripts/df-sweep.mjs";
 export const DARK_FACTORY_WORK_SCRIPT_PATH = ".github/scripts/df-work.mjs";
 export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".darkfactory/managed-repository.json";
+export const DARK_FACTORY_MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
+export const DARK_FACTORY_ORCHESTRATION_PATH = ".darkfactory/orchestration.json";
 export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".darkfactory/installer-policy.json";
 export const DARK_FACTORY_RELEASE_POLICY_PATH = ".darkfactory/release-policy.json";
 export const DARK_FACTORY_BRANCHING_POLICY_PATH = ".darkfactory/branching-policy.md";
 export const DARK_FACTORY_LABELS_PATH = ".darkfactory/labels.json";
 export const DARK_FACTORY_RELEASE_CONVENTIONS_PATH = ".darkfactory/release-conventions.md";
+export const MANAGED_BASELINE_DATA_REPO = "marius-patrik/data-agentos";
 
 export interface ManagedFile {
   path: string;
@@ -94,6 +97,8 @@ export function readManagedFiles(repository?: ManagedRepositoryRef, root = resol
     }
   }
 
+  assertManagedBaselineSource(files.get(DARK_FACTORY_MANAGED_CONFIG_PATH)?.content ?? null);
+
   const missingRequired = requiredManagedFilePaths(root).filter((filePath) => !files.has(filePath));
   if (missingRequired.length > 0) {
     throw new Error(`Managed file source is missing required payloads: ${missingRequired.join(", ")}`);
@@ -102,12 +107,12 @@ export function readManagedFiles(repository?: ManagedRepositoryRef, root = resol
   return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function requiredManagedFilePaths(_root = resolveManagedWorkspaceRoot()): string[] {
+export function requiredManagedFilePaths(root = resolveManagedWorkspaceRoot()): string[] {
   // Package-managed workflow/script payloads are required unconditionally.
   // readManagedFiles() falls back to the package root when a workspace overlay
   // does not provide them, and throws if neither source exists. This keeps CI
   // from silently omitting generated payloads when a source generator is missing.
-  return [
+  const required = new Set<string>([
     AGENTS_ENTRYPOINT_PATH,
     AGENTS_GLOBAL_VERSION_PATH,
     CI_WORKFLOW_PATH,
@@ -123,11 +128,58 @@ export function requiredManagedFilePaths(_root = resolveManagedWorkspaceRoot()):
     DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH,
     DARK_FACTORY_BRANCHING_POLICY_PATH,
     DARK_FACTORY_LABELS_PATH,
+    DARK_FACTORY_MANAGED_REPOS_PATH,
     DARK_FACTORY_MANAGED_CONFIG_PATH,
+    DARK_FACTORY_ORCHESTRATION_PATH,
     DARK_FACTORY_INSTALLER_POLICY_PATH,
     DARK_FACTORY_RELEASE_CONVENTIONS_PATH,
     DARK_FACTORY_RELEASE_POLICY_PATH
-  ];
+  ]);
+  const config = readManagedFile(root, DARK_FACTORY_MANAGED_CONFIG_PATH);
+
+  if (config) {
+    for (const filePath of parseManagedRepositoryConfig(config.content).requiredFiles) {
+      required.add(filePath);
+    }
+  }
+
+  return [...required].sort((a, b) => a.localeCompare(b));
+}
+
+function assertManagedBaselineSource(configContent: string | null): void {
+  if (configContent === null) return;
+
+  const config = parseManagedRepositoryConfig(configContent);
+
+  if (config.dataRepo !== MANAGED_BASELINE_DATA_REPO) {
+    throw new Error(
+      `Managed baseline source must be ${MANAGED_BASELINE_DATA_REPO}; found ${config.dataRepo ?? "unknown"}.`
+    );
+  }
+}
+
+function parseManagedRepositoryConfig(content: string): { dataRepo?: string; requiredFiles: string[] } {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    throw new Error(`Invalid ${DARK_FACTORY_MANAGED_CONFIG_PATH}: ${(error as Error).message}`);
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error(`Invalid ${DARK_FACTORY_MANAGED_CONFIG_PATH}: expected a JSON object.`);
+  }
+
+  const requiredFiles = parsed.requiredFiles;
+  if (requiredFiles !== undefined && !isStringArray(requiredFiles)) {
+    throw new Error(`Invalid ${DARK_FACTORY_MANAGED_CONFIG_PATH}: requiredFiles must be an array of paths.`);
+  }
+
+  return {
+    dataRepo: typeof parsed.dataRepo === "string" ? parsed.dataRepo : undefined,
+    requiredFiles: requiredFiles ?? []
+  };
 }
 
 function readManagedFile(root: string, relativePath: string): ManagedFile | null {
@@ -285,4 +337,8 @@ function resolveManagedRepositoryRoot(candidate: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }

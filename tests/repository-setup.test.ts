@@ -39,7 +39,9 @@ test("checkRepositorySetup returns no comment when managed setup is current", as
       ".github/scripts/df-work.mjs": "import './df-lib.mjs';\n",
       ".darkfactory/branching-policy.md": "# Branching\n",
       ".darkfactory/labels.json": "{}\n",
+      ".darkfactory/managed-repos.json": "{}\n",
       ".darkfactory/managed-repository.json": "{}\n",
+      ".darkfactory/orchestration.json": "{}\n",
       ".darkfactory/installer-policy.json": "{}\n",
       ".darkfactory/release-conventions.md": "# Release\n",
       ".darkfactory/release-policy.json": "{}\n"
@@ -78,7 +80,9 @@ test("checkRepositorySetup reports stale agents and missing github bootstrap", a
   assert.ok(comment?.includes(".github/workflows/df-work.yml"));
   assert.ok(comment?.includes(".github/workflows/codex-review.yml"));
   assert.ok(comment?.includes(".github/scripts/validate-codex-review.mjs"));
+  assert.ok(comment?.includes(".darkfactory/managed-repos.json"));
   assert.ok(comment?.includes(".darkfactory/managed-repository.json"));
+  assert.ok(comment?.includes(".darkfactory/orchestration.json"));
 });
 
 function createRequester(files: Record<string, string>): GitHubRequester {
