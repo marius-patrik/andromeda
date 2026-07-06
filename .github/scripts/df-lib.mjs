@@ -454,6 +454,12 @@ export async function getRequiredStatusCheckContexts(gh, repository, branch) {
   }
 }
 
+export const CODEX_REVIEW_REQUIRED_CONTEXT = "Codex Review";
+
+export function withCodexReviewRequiredContext(requiredContexts = []) {
+  return [...new Set([...requiredContexts, CODEX_REVIEW_REQUIRED_CONTEXT].filter(Boolean))];
+}
+
 export async function getOptionalFileContent(gh, repository, filePath, ref) {
   try {
     const data = await gh.request(
@@ -594,15 +600,27 @@ export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
     return requiredContexts.length === 0;
   }
 
-  return statusCheckRollup.every((check) => {
-    if (check.__typename === "CheckRun") {
-      return check.status === "COMPLETED" && check.conclusion === "SUCCESS";
-    }
-    if (check.__typename === "StatusContext") {
-      return check.state === "SUCCESS";
-    }
-    return false;
+  if (!statusCheckRollup.every(checkIsGreen)) return false;
+
+  return requiredContexts.every((context) => {
+    return statusCheckRollup.some((check) => checkContextName(check) === context);
   });
+}
+
+function checkIsGreen(check) {
+  if (check.__typename === "CheckRun") {
+    return check.status === "COMPLETED" && check.conclusion === "SUCCESS";
+  }
+  if (check.__typename === "StatusContext") {
+    return check.state === "SUCCESS";
+  }
+  return false;
+}
+
+function checkContextName(check) {
+  if (check.__typename === "CheckRun") return check.name || "";
+  if (check.__typename === "StatusContext") return check.context || "";
+  return "";
 }
 
 export function checksSummary(statusCheckRollup) {
