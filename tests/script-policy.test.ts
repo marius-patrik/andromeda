@@ -15,10 +15,12 @@ const { load: loadYaml }: any = await import("js-yaml");
 
 const {
   assertAllowedRepo,
+  auditIssueBody,
   checksAreGreen,
   cleanupTempRoot,
   CODEX_REVIEW_REQUIRED_CONTEXT,
   extractClosingIssueNumbers,
+  findAuditMarker,
   getBranchProtection,
   getRequiredStatusCheckContexts,
   darkFactoryWorkerIssueNumber,
@@ -108,6 +110,22 @@ test("prdIssueBody records deterministic Blocked-by sequencing", () => {
 
   assert.match(body, /Blocked-by: #10/);
   assert.match(body, /df-prd:milestones-m2/);
+});
+
+test("auditIssueBody records deterministic L5 audit findings", () => {
+  const body = auditIssueBody(
+    "marius-patrik/example",
+    [{ category: "health", message: "Workflow `ci` concluded `failure`." }],
+    { auditedAt: "2026-07-06T00:00:00.000Z" }
+  );
+
+  assert.match(body, /df-audit:marius-patrik-example/);
+  assert.equal(findAuditMarker(body), "df-audit:marius-patrik-example");
+  assert.match(body, /Git state/);
+  assert.match(body, /Health/);
+  assert.match(body, /PRD drift/);
+  assert.match(body, /Doc staleness/);
+  assert.match(body, /AI tokens: 0/);
 });
 
 test("label reconciliation removes stale df:ready when PRD sequencing blocks an issue", () => {
@@ -523,6 +541,51 @@ test("df-plan preserves PRD sequence references across completed predecessors", 
   assert.match(source, /previousIssueNumber = closed\.number/);
   assert.match(source, /previousIssueNumber = existing\.number/);
   assert.match(source, /create-closed-completed-prd-issue/);
+});
+
+test("df-audit script performs deterministic repo audits and files findings as issues", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-audit.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /auditGitState/);
+  assert.match(source, /auditHealth/);
+  assert.match(source, /auditEnforcement/);
+  assert.match(source, /auditPrdDrift/);
+  assert.match(source, /auditDocStaleness/);
+  assert.match(source, /upsertAuditIssue/);
+  assert.match(source, /closeResolvedAuditIssue/);
+  assert.match(source, /df-audit/);
+  assert.match(source, /df:audit/);
+  assert.match(source, /writeRunLedger/);
+  assert.match(source, /codex_calls:\s*0/);
+  assert.match(source, /listActiveManagedRepos\(gh, CONTROL_REPO, \{ registry \}\)/);
+  assert.doesNotMatch(source, /\bcodex\s+exec\b|CODEX_AUTH_JSON|DF_WORKER_IMAGE|docker\s+run/);
+});
+
+test("df-audit workflow schedules trusted managed-repo audits", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-audit.yml", import.meta.url), "utf8");
+  const gate = workflow.indexOf("Validate trusted control ref");
+  const checkout = workflow.indexOf("Checkout DarkFactory control scripts");
+  const token = workflow.indexOf("Mint mp-agents installation token");
+
+  assert.match(workflow, /^\s+schedule:\s*$/m);
+  assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'/);
+  assert.notEqual(gate, -1);
+  assert.notEqual(checkout, -1);
+  assert.notEqual(token, -1);
+  assert.ok(gate < checkout);
+  assert.ok(checkout < token);
+  assert.match(workflow, /GITHUB_REF.*refs\/heads\/dev.*GITHUB_REF.*refs\/heads\/main/);
+  assert.match(workflow, /Validate manual audit target repository/);
+  assert.match(workflow, /marius-patrik\/fabrica/);
+  assert.match(workflow, /must be a marius-patrik repository/);
+  assert.match(workflow, /path=\.github\/scripts\/df-audit\.mjs/);
+  assert.match(workflow, /permission-actions:\s+read/);
+  assert.match(workflow, /permission-contents:\s+read/);
+  assert.match(workflow, /permission-issues:\s+write/);
+  assert.doesNotMatch(workflow, /permission-pull-requests:\s+write/);
+  assert.match(workflow, /DF_AUDIT_ALL/);
+  assert.match(workflow, /DF_DATA_REPO/);
 });
 
 test("df-follow-through workflow validates trusted refs before privileged tokens", async () => {

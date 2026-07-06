@@ -28,7 +28,8 @@ export const PLANNING_LABELS = [
   { name: "P0", color: "B60205", description: "Priority 0: urgent or release-blocking" },
   { name: "P1", color: "D93F0B", description: "Priority 1: important planned work" },
   { name: "P2", color: "FBCA04", description: "Priority 2: follow-up or lower urgency" },
-  { name: "df:prd-drift", color: "B60205", description: "DarkFactory PRD drift report" }
+  { name: "df:prd-drift", color: "B60205", description: "DarkFactory PRD drift report" },
+  { name: "df:audit", color: "0E8A16", description: "DarkFactory audit finding" }
 ];
 
 export const WORKER_PULL_REQUEST_AUTHORS = new Set([
@@ -587,12 +588,52 @@ export function driftIssueBody(targetRepoName, driftItems) {
   ].join("\n");
 }
 
+export function auditIssueBody(targetRepoName, findings, metadata = {}) {
+  const auditedAt = metadata.auditedAt || new Date().toISOString();
+  const categories = Array.isArray(findings) ? findings : [];
+
+  return [
+    `<!-- df-audit:${slug(targetRepoName)} -->`,
+    "## Audit Report",
+    "",
+    `Target repository: \`${targetRepoName}\``,
+    `Audited at: \`${auditedAt}\``,
+    "",
+    "DarkFactory found repository health, enforcement, PRD, documentation, or git-state findings that need follow-up.",
+    "",
+    "## Findings",
+    "",
+    categories.length
+      ? categories.map((finding) => `- **${finding.category}**: ${finding.message}`).join("\n")
+      : "- No audit details were provided.",
+    "",
+    "## Acceptance Criteria",
+    "",
+    "- Resolve or explicitly accept each audit finding.",
+    "- Re-run DarkFactory audit and confirm this issue is closed or updated with only remaining findings.",
+    "",
+    "## Audit Scope",
+    "",
+    "- Git state: default branch metadata and branch protection.",
+    "- Health: latest GitHub Actions workflow conclusions on the default branch.",
+    "- Enforcement conformance: required DarkFactory-managed files and workflows.",
+    "- PRD drift: presence of tracked `PRD.md` files and PRD-backed backlog state.",
+    "- Doc staleness: stale PRD/agent docs relative to recent repository activity.",
+    "- AI tokens: 0 (deterministic audit checks).",
+    "- Harness migration path: this GitHub-native audit issue stream migrates to harness observers when L5 moves into the harness scheduler."
+  ].join("\n");
+}
+
 export function findPrdMarker(body) {
   return body?.match(/df-prd:[a-z0-9-]+/)?.[0] ?? "";
 }
 
 export function findDriftMarker(body) {
   return body?.match(/df-prd-drift:[a-z0-9-]+/)?.[0] ?? "";
+}
+
+export function findAuditMarker(body) {
+  return body?.match(/df-audit:[a-z0-9-]+/)?.[0] ?? "";
 }
 
 export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
