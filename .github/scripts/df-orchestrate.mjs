@@ -237,6 +237,7 @@ export function normalizeOrchestrationPolicy(policy = DEFAULT_ORCHESTRATION_POLI
 export function buildOrchestrationPlan(snapshots, policyInput = DEFAULT_ORCHESTRATION_POLICY) {
   const policy = normalizeOrchestrationPolicy(policyInput);
   const counts = activeConcurrencyCounts(snapshots);
+  const gateWave = globalGateWave(snapshots, policy);
   const candidates = [];
   const repositories = [];
 
@@ -244,7 +245,7 @@ export function buildOrchestrationPlan(snapshots, policyInput = DEFAULT_ORCHESTR
     const repository = snapshot.repository;
     const openIssues = Array.isArray(snapshot.openIssues) ? snapshot.openIssues : [];
     const repositoryName = repoName(repository);
-    const gateWave = repositoryGateWave(openIssues, policy);
+    const repositoryWave = repositoryGateWave(openIssues, policy);
     const selected = selectDispatchableIssues(openIssues)
       .map((issue) => ({
         repository,
@@ -260,6 +261,7 @@ export function buildOrchestrationPlan(snapshots, policyInput = DEFAULT_ORCHESTR
     repositories.push({
       repo: repositoryName,
       gate_wave: gateWave || "none",
+      repository_gate_wave: repositoryWave || "none",
       open_work: openIssues.filter(isWorkIssue).length,
       ready: openIssues.filter((issue) => issueLabelNames(issue).has("df:ready")).length,
       running: openIssues.filter((issue) => issueLabelNames(issue).has("df:running")).length,
@@ -283,6 +285,7 @@ export function buildOrchestrationPlan(snapshots, policyInput = DEFAULT_ORCHESTR
 
   return {
     policy,
+    gate_wave: gateWave || "none",
     candidates: planned,
     repositories,
     active: {
@@ -291,6 +294,16 @@ export function buildOrchestrationPlan(snapshots, policyInput = DEFAULT_ORCHESTR
       byStream: Object.fromEntries([...counts.initialByStream.entries()].sort())
     }
   };
+}
+
+export function globalGateWave(snapshots, policyInput = DEFAULT_ORCHESTRATION_POLICY) {
+  const policy = normalizeOrchestrationPolicy(policyInput);
+  let gate = null;
+  for (const snapshot of snapshots) {
+    const wave = repositoryGateWave(Array.isArray(snapshot.openIssues) ? snapshot.openIssues : [], policy);
+    if (wave && (!gate || waveRank(wave, policy) < waveRank(gate, policy))) gate = wave;
+  }
+  return gate;
 }
 
 export function repositoryGateWave(openIssues, policyInput = DEFAULT_ORCHESTRATION_POLICY) {
@@ -385,6 +398,7 @@ function dashboardIssueBody(policy, plan, dispatched, trigger) {
     "## Wave Gates",
     "",
     `Order: ${policy.waves.map((wave) => `\`${wave.name}\``).join(" -> ")}`,
+    `Current global gate: \`${plan.gate_wave}\``,
     "",
     "## Concurrency",
     "",

@@ -229,7 +229,8 @@ test("orchestration plan applies wave gates and cross-repo concurrency caps", as
       repository: { owner: "marius-patrik", repo: "pkg-b" },
       openIssues: [
         { number: 3, title: "Enforcement", body: "", labels: [{ name: "df:ready" }, { name: "P1" }, { name: "stream:enforcement" }] },
-        { number: 4, title: "Feature", body: "", labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:features" }] }
+        { number: 4, title: "Feature", body: "", labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:features" }] },
+        { number: 6, title: "Hygiene", body: "", labels: [{ name: "df:ready" }, { name: "P1" }, { name: "stream:hygiene" }] }
       ]
     },
     {
@@ -246,14 +247,19 @@ test("orchestration plan applies wave gates and cross-repo concurrency caps", as
       candidate.issue.number,
       candidate.wave
     ]),
-    [["pkg-b", 3, "enforcement"], ["pkg-c", 5, "features"]]
+    [["pkg-b", 6, "hygiene"]]
   );
+  assert.equal(plan.gate_wave, "hygiene");
   assert.deepEqual(
-    plan.repositories.map((repository: { repo: string; gate_wave: string }) => [repository.repo, repository.gate_wave]),
+    plan.repositories.map((repository: { repo: string; gate_wave: string; repository_gate_wave: string }) => [
+      repository.repo,
+      repository.gate_wave,
+      repository.repository_gate_wave
+    ]),
     [
-      ["marius-patrik/pkg-a", "hygiene"],
-      ["marius-patrik/pkg-b", "enforcement"],
-      ["marius-patrik/pkg-c", "features"]
+      ["marius-patrik/pkg-a", "hygiene", "hygiene"],
+      ["marius-patrik/pkg-b", "hygiene", "hygiene"],
+      ["marius-patrik/pkg-c", "hygiene", "features"]
     ]
   );
 });
