@@ -134,6 +134,53 @@ test("orchestrator does not dispatch issues that already have an open worker PR"
   assert.deepEqual(result.ledger.actions, []);
 });
 
+test("orchestrator records merge-policy ask-owner escalations distinctly", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-merge-policy-escalation-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const issue = { number: 13, title: "Protected branch lane", body: "", state: "open", labels: [{ name: "df:ready" }, { name: "roadmap" }] };
+  const gh = baseGithubMock(calls, { issues: [issue], graphql: async () => emptyPullRequestConnection() });
+
+  gh.request = async (method: string, path: string, body?: any) => {
+    calls.push({ method, path, body });
+    if (method === "GET" && path === "/repos/marius-patrik/example") {
+      return { default_branch: "main", allow_auto_merge: false };
+    }
+    const common = await baseResponse(method, path, body, { issues: [issue], controlIssues: [] });
+    if (common.handled) return common.value;
+    if (method === "GET" && path === "/repos/marius-patrik/example/git/ref/heads/dev") {
+      throw Object.assign(new Error("not found"), { status: 404 });
+    }
+    if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") return {};
+    if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
+    if (method === "PATCH" && path.startsWith("/repos/marius-patrik/example/labels/")) return {};
+    if (method === "POST" && path === "/repos/marius-patrik/example/issues/13/labels") return {};
+    if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/13/labels/df%3Aready") return null;
+    if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/13/labels/df%3Arunning") return null;
+    if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/13/labels/df%3Adone") return null;
+    if (method === "POST" && path === "/repos/marius-patrik/example/issues/13/comments") return {};
+    if (method === "POST" && path === "/repos/marius-patrik/example/issues") return { number: 101, ...body };
+    throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+  };
+
+  const result = await orchestrate({
+    gh,
+    controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+    registry: { repositories: { "marius-patrik/example": { state: "active" } } },
+    repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
+    writeLedger: false,
+    updateDashboard: false,
+    warn: () => {},
+    log: () => {}
+  });
+
+  assert.deepEqual(result.dispatched, []);
+  assert.ok(calls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues" && call.body.labels.includes("df:ask-owner")));
+  assert.ok(result.ledger.escalations.some((action: any) => action.reason === "merge-policy-blocked" && action.ask_owner_issue === "#101"));
+  assert.ok(result.ledger.actions.some((action: any) => action.action === "ask-owner" && action.reason === "merge-policy-blocked"));
+  assert.equal(result.ledger.actions.some((action: any) => action.action === "worker-already-open"), false);
+});
+
 test("orchestrator does not dispatch candidates with running blocked or ask-owner labels", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-state-label-test");

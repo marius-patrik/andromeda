@@ -98,8 +98,8 @@ export async function orchestrate(options) {
         }
 
         try {
-          const wasDispatched = await dispatchWorker(gh, controlRepo, target, candidate.issue.number);
-          if (wasDispatched) {
+          const dispatchResult = await dispatchWorker(gh, controlRepo, target, candidate.issue.number);
+          if (dispatchResult.dispatched) {
             const dispatch = {
               repo: repoName(target),
               issue: candidate.issue.number,
@@ -108,6 +108,10 @@ export async function orchestrate(options) {
             dispatched.push(dispatch);
             actions.push({ action: "dispatch-worker", ...dispatch });
             incrementActiveCounts(activeCounts, target, candidate.streams);
+          } else if (dispatchResult.action) {
+            const action = { ...dispatchResult.action, streams: candidate.streams };
+            actions.push(action);
+            if (action.action === "ask-owner") escalations.push(action);
           } else {
             actions.push({
               action: "worker-already-open",
@@ -265,7 +269,7 @@ export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
   const existingPullRequest = await findOpenWorkerPullRequestForIssue(gh, repository, issueNumber);
   if (existingPullRequest) {
     await replaceIssueLabels(gh, repository, issueNumber, ["df:running"], ["df:ready"]);
-    return false;
+    return { dispatched: false, reason: "existing-worker-pr" };
   }
 
   const repo = await getRepository(gh, repository);
@@ -273,7 +277,7 @@ export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
   const mergePolicy = await preflightMergePolicy(gh, repository, workBaseBranch, repo);
   if (mergePolicy.blocked) {
     await blockIssueBeforeDispatch(gh, repository, issueNumber, workBaseBranch, mergePolicy);
-    await ensureAskOwnerIssue(gh, repository, issueNumber, {
+    const ask = await ensureAskOwnerIssue(gh, repository, issueNumber, {
       reason: "merge-policy-blocked",
       title: "Enable auto-merge for protected DarkFactory worker dispatch",
       details: [
@@ -282,7 +286,17 @@ export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
         `Repository auto-merge enabled: \`${mergePolicy.autoMergeSupported ? "yes" : "no"}\``
       ]
     });
-    return false;
+    return {
+      dispatched: false,
+      action: {
+        action: "ask-owner",
+        repo: repoName(repository),
+        issue: `#${issueNumber}`,
+        ask_owner_issue: ask.issue,
+        result: ask.result,
+        reason: "merge-policy-blocked"
+      }
+    };
   }
 
   // Claim the issue before dispatch so a subsequent orchestrator tick cannot
@@ -302,7 +316,7 @@ export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
     await replaceIssueLabels(gh, repository, issueNumber, ["df:ready"], ["df:running"]);
     throw error;
   }
-  return true;
+  return { dispatched: true };
 }
 
 export function extractBlockedBy(body) {
