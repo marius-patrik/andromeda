@@ -14,7 +14,7 @@ on:
         required: false
         type: string
       source_event:
-        description: Optional forwarded managed event name.
+        description: Optional source event name for a scoped control dispatch.
         required: false
         type: string
   workflow_run:

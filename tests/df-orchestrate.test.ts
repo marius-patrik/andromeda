@@ -745,7 +745,7 @@ test("parseEventRequest accepts df:ready label events for one issue", async () =
   });
 });
 
-test("parseWorkflowDispatchRequest scopes forwarded managed events", async () => {
+test("parseWorkflowDispatchRequest scopes source events", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { parseWorkflowDispatchRequest } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-dispatch-parse-test");
 
@@ -764,7 +764,7 @@ test("parseWorkflowDispatchRequest scopes forwarded managed events", async () =>
   assert.equal(parseWorkflowDispatchRequest("", "", "", () => {}), null);
 });
 
-test("orchestrator turns forwarded /df run dispatches into df:ready before dispatch", async () => {
+test("orchestrator turns scoped /df run dispatches into df:ready before dispatch", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-forwarded-slash-run-test");
   const calls: Array<{ method: string; path: string; body?: any }> = [];

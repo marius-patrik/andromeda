@@ -145,11 +145,17 @@ Managed files:
 - `.github/workflows/dark-factory-bootstrap.yml`
 - `.github/workflows/dark-factory-autoupdate.yml`
 - `.github/workflows/dark-factory-release.yml`
+- `.github/workflows/df-plan.yml`
+- `.github/workflows/df-follow-through.yml`
+- `.github/workflows/df-orchestrate.yml`
+- `.github/workflows/df-work.yml`
 - `.github/workflows/codex-review.yml`
 - `.github/codex-review.Dockerfile`
 - `.github/codex-review.schema.json`
 - `.github/scripts/run-codex-review.sh`
 - `.github/scripts/dark-factory-release-check.mjs`
+
+Managed setup does not ship `.github/workflows/df-event-forward.yml`. That workflow uses control-repository app secrets and is kept only in `marius-patrik/agent-darkfactory`; `df:ready` labels and `/df run` comments in managed repositories are picked up by the next scheduled orchestrator tick or by workflow-run chaining.
 
 The `agentos-data` repository is the single source of truth for managed setup. Keep reusable policy in `managed-repository/.agents/.global/` and `managed-repository/.darkfactory/`, and per-repository context in `managed-repository/repositories/<owner>/<repo>/.agents/.project/`.
 

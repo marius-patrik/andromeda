@@ -22,7 +22,6 @@ test("checkRepositorySetup returns no comment when managed setup is current", as
       ".github/workflows/dark-factory-bootstrap.yml": "name: Dark Factory Bootstrap\n",
       ".github/workflows/dark-factory-autoupdate.yml": "name: DarkFactory Auto Update\n",
       ".github/workflows/dark-factory-release.yml": "name: DarkFactory Release\n",
-      ".github/workflows/df-event-forward.yml": "name: DarkFactory Event Forward\n",
       ".github/workflows/df-plan.yml": "name: DarkFactory Plan\n",
       ".github/workflows/df-follow-through.yml": "name: DarkFactory Follow Through\n",
       ".github/workflows/df-orchestrate.yml": "name: DarkFactory Orchestrate\n",
@@ -74,7 +73,7 @@ test("checkRepositorySetup reports stale agents and missing github bootstrap", a
   assert.ok(comment?.includes(".github/workflows/dark-factory-bootstrap.yml"));
   assert.ok(comment?.includes(".github/workflows/dark-factory-autoupdate.yml"));
   assert.ok(comment?.includes(".github/workflows/dark-factory-release.yml"));
-  assert.ok(comment?.includes(".github/workflows/df-event-forward.yml"));
+  assert.ok(!comment?.includes(".github/workflows/df-event-forward.yml"));
   assert.ok(comment?.includes(".github/workflows/df-plan.yml"));
   assert.ok(comment?.includes(".github/workflows/df-follow-through.yml"));
   assert.ok(comment?.includes(".github/workflows/df-work.yml"));

@@ -8,7 +8,6 @@ export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 export const GITHUB_BOOTSTRAP_WORKFLOW_PATH = ".github/workflows/dark-factory-bootstrap.yml";
 export const DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH = ".github/workflows/dark-factory-autoupdate.yml";
 export const DARK_FACTORY_RELEASE_WORKFLOW_PATH = ".github/workflows/dark-factory-release.yml";
-export const DARK_FACTORY_EVENT_FORWARD_WORKFLOW_PATH = ".github/workflows/df-event-forward.yml";
 export const DARK_FACTORY_PLAN_WORKFLOW_PATH = ".github/workflows/df-plan.yml";
 export const DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH = ".github/workflows/df-follow-through.yml";
 export const DARK_FACTORY_ORCHESTRATE_WORKFLOW_PATH = ".github/workflows/df-orchestrate.yml";
@@ -43,8 +42,8 @@ export interface ManagedRepositoryRef {
 
 const MANAGED_COMMON_DIRS = [".agents/.global", ".github", ".darkfactory"] as const;
 const MANAGED_COMMON_FILES = [AGENTS_ENTRYPOINT_PATH] as const;
+const EXCLUDED_MANAGED_FILE_PATHS = new Set([".github/workflows/df-event-forward.yml"]);
 const PACKAGE_MANAGED_FILES = [
-  DARK_FACTORY_EVENT_FORWARD_WORKFLOW_PATH,
   DARK_FACTORY_PLAN_WORKFLOW_PATH,
   DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
   DARK_FACTORY_ORCHESTRATE_WORKFLOW_PATH,
@@ -94,6 +93,10 @@ export function readManagedFiles(repository?: ManagedRepositoryRef, root = resol
         });
       }
     }
+  }
+
+  for (const filePath of EXCLUDED_MANAGED_FILE_PATHS) {
+    files.delete(filePath);
   }
 
   const missingRequired = requiredManagedFilePaths(root).filter((filePath) => !files.has(filePath));

@@ -186,3 +186,25 @@ test("readManagedFiles supplies every required package-managed payload", async (
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("readManagedFiles does not ship the control-only event forward workflow", async () => {
+  const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
+
+  try {
+    for (const filePath of requiredManagedFilePaths(root)) {
+      const fullPath = join(root, ...filePath.split("/"));
+      await mkdir(dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, `${filePath}\n`);
+    }
+    const eventForwardPath = join(root, ".github", "workflows", "df-event-forward.yml");
+    await mkdir(dirname(eventForwardPath), { recursive: true });
+    await writeFile(eventForwardPath, "name: DarkFactory Event Forward\n");
+
+    const managedFiles = readManagedFiles(undefined, root);
+    const managedPaths = new Set(managedFiles.map((file) => file.path));
+
+    assert.equal(managedPaths.has(".github/workflows/df-event-forward.yml"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

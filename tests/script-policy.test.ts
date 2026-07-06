@@ -1378,7 +1378,7 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /DF_CONTROL_REPO: marius-patrik\/agent-darkfactory/);
   assert.match(workflow, /repo:\s*\n\s+description: Optional managed repository/);
   assert.match(workflow, /issue_number:\s*\n\s+description: Optional managed issue number/);
-  assert.match(workflow, /source_event:\s*\n\s+description: Optional forwarded managed event name/);
+  assert.match(workflow, /source_event:\s*\n\s+description: Optional source event name for a scoped control dispatch/);
   assert.match(workflow, /DF_TARGET_REPO: \$\{\{ inputs\.repo \}\}/);
   assert.match(workflow, /DF_TARGET_ISSUE_NUMBER: \$\{\{ inputs\.issue_number \}\}/);
   assert.match(workflow, /DF_SOURCE_EVENT: \$\{\{ inputs\.source_event \}\}/);
@@ -1390,12 +1390,13 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
 });
 
-test("df-event-forward workflow safely dispatches managed events to control", async () => {
+test("control df-event-forward workflow safely dispatches local events to orchestrate", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-event-forward.yml", import.meta.url), "utf8");
 
   assert.match(workflow, /^\s+issues:\s*$/m);
   assert.match(workflow, /^\s+issue_comment:\s*$/m);
   assert.match(workflow, /permissions:\s*\{\}/);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'/);
   assert.match(workflow, /github\.event\.label\.name == 'df:ready'/);
   assert.match(workflow, /github\.event\.comment\.body == '\/df run'/);
   assert.match(workflow, /startsWith\(github\.event\.comment\.body, '\/df run '\)/);
