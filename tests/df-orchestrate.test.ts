@@ -420,6 +420,24 @@ test("parseEventRequest ignores untrusted /df run comments", async () => {
   assert.equal(request, null);
 });
 
+test("parseEventRequest accepts df:ready label events for one issue", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { parseEventRequest } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-label-event-parse-test");
+
+  const request = parseEventRequest(JSON.stringify({
+    repository: { full_name: "marius-patrik/example" },
+    issue: { number: 44 },
+    label: { name: "df:ready" }
+  }), "issues", () => {});
+
+  assert.deepEqual(request, {
+    repository: { owner: "marius-patrik", repo: "example" },
+    issueNumber: 44,
+    slashRun: false,
+    readyLabel: true
+  });
+});
+
 test("orchestrator treats untrusted /df run comments as no-op events", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-untrusted-slash-run-test");
