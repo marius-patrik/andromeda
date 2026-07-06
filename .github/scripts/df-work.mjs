@@ -113,6 +113,38 @@ async function main() {
     return;
   }
 
+  if (await remoteBranchExists(TARGET_REPO, branch)) {
+    ledger.status = "blocked";
+    ledger.error = "Stale worker branch exists without an open worker PR. Owner/manual recovery is required.";
+    ledger.actions.push({
+      action: "stale-worker-branch",
+      result: "blocked",
+      branch
+    });
+    await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:blocked"], ["df:ready", "df:running", "df:done"]);
+    await createIssueComment(
+      TARGET_REPO,
+      TARGET_ISSUE_NUMBER,
+      [
+        `DarkFactory worker blocked for \`${target}\` because the remote branch already exists but no open worker PR was found.`,
+        "",
+        `Branch: \`${branch}\``,
+        "",
+        "Owner/manual recovery is required."
+      ].join("\n")
+    );
+    const askOwnerIssue = await upsertStaleBranchAskOwnerIssue(branch);
+    ledger.actions.push({
+      action: "ask-owner",
+      result: askOwnerIssue.result,
+      reason: "stale-worker-branch",
+      issue: `#${askOwnerIssue.number}`,
+      branch
+    });
+    await writeLedger(ledger);
+    return;
+  }
+
   const mergePolicy = await preflightMergePolicy(gh, TARGET_REPO, workBaseBranch, repo);
   ledger.actions.push({ action: "preflight-merge-policy", result: mergePolicy });
   if (mergePolicy.blocked) {
@@ -151,7 +183,6 @@ async function main() {
     const codexHome = path.join(tempRoot, "codex-home");
 
     await cloneRepository(TARGET_REPO, worktree, workBaseBranch);
-    await ensureNoRemoteBranch(TARGET_REPO, branch);
     runGit(["checkout", "-b", branch], worktree);
 
     await writeCodexAuth(codexHome);
@@ -305,19 +336,60 @@ async function createIssueComment(repository, issueNumber, body) {
   await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/comments`, { body });
 }
 
+async function upsertStaleBranchAskOwnerIssue(branch) {
+  await ensureLabels(gh, TARGET_REPO, WORK_LABELS);
+  await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:ask-owner", "df:blocked"], ["df:ready", "df:running", "df:done"]);
+  const marker = `<!-- dark-factory:stale-worker-branch issue=${TARGET_ISSUE_NUMBER} branch=${slug(branch)} -->`;
+  const body = [
+    marker,
+    "",
+    "DarkFactory found a remote worker branch without an open worker PR.",
+    "",
+    `Source issue: #${TARGET_ISSUE_NUMBER}`,
+    `Branch: \`${branch}\``,
+    "",
+    "Owner/manual recovery is required before this lane should be dispatched again."
+  ].join("\n");
+  const existing = await findOpenIssueByMarker(TARGET_REPO, marker);
+
+  if (existing) {
+    const updated = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}`, {
+      title: `Resolve stale DarkFactory worker branch for #${TARGET_ISSUE_NUMBER}`,
+      body
+    });
+    return { number: updated.number ?? existing.number, result: "updated" };
+  }
+
+  const created = await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues`, {
+    title: `Resolve stale DarkFactory worker branch for #${TARGET_ISSUE_NUMBER}`,
+    labels: ["df:ask-owner", "df:blocked"],
+    body
+  });
+  return { number: created.number, result: "created" };
+}
+
+async function findOpenIssueByMarker(repository, marker) {
+  for (let page = 1; page <= 20; page += 1) {
+    const batch = await gh.request("GET", `/repos/${repoName(repository)}/issues?state=open&per_page=100&page=${page}`);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    const match = batch.find((issue) => !issue.pull_request && String(issue.body || "").includes(marker));
+    if (match) return match;
+    if (batch.length < 100) break;
+  }
+  return null;
+}
+
 async function cloneRepository(repository, worktree, branch) {
   const url = `https://github.com/${repoName(repository)}.git`;
   runGitWithAuth(["clone", "--depth", "1", "--branch", branch, url, worktree], process.cwd());
 }
 
-async function ensureNoRemoteBranch(repository, branch) {
+async function remoteBranchExists(repository, branch) {
   const refs = await gh.request(
     "GET",
     `/repos/${repoName(repository)}/git/matching-refs/heads/${encodeURIComponent(branch)}`
   );
-  if (Array.isArray(refs) && refs.some((ref) => ref.ref === `refs/heads/${branch}`)) {
-    throw new Error(`Remote branch already exists: ${branch}`);
-  }
+  return Array.isArray(refs) && refs.some((ref) => ref.ref === `refs/heads/${branch}`);
 }
 
 async function writeCodexAuth(codexHome) {
