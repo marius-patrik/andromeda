@@ -384,10 +384,10 @@ export function shouldAutoReadySequencedIssue(issue, options = {}) {
   if (names.has("df:ready") || names.has("df:running") || names.has("df:blocked") || names.has("df:done") || names.has("df:ask-owner")) {
     return false;
   }
-  // Spec (#168): an explicit planning signal (df:planned label, df-prd:
-  // marker, or Blocked-by sequencing) makes an issue eligible; Blocked-by
-  // references gate readiness only when present. Backlog without any signal
-  // is never touched.
+  // Spec (#168): this pass is for Blocked-by successors ONLY — an issue with
+  // no Blocked-by references is never auto-readied here (planned/PRD backlog
+  // without dependencies is queued by planning, not by the orchestrator).
+  if (blockedByIssueRefs(issue.body || "", options.repository).length === 0) return false;
   if (!hasPlanningSignal(issue)) return false;
   return blockedByRefsResolved(issue, options);
 }
