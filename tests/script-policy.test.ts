@@ -1184,6 +1184,7 @@ test("df-orchestrate uses the app token for cross-repo writes", async () => {
   assert.match(workflow, /permission-workflows:\s+write/);
   assert.match(workflow, /DARK_FACTORY_TOKEN: \$\{\{ steps\.app-token\.outputs\.token \}\}/);
   assert.doesNotMatch(workflow, /DARK_FACTORY_TOKEN:.*github\.token/);
+  assert.doesNotMatch(workflow, /^\s+issues:\s+write$/m);
   assert.match(source, /const appInstallationToken = requiredEnv\("DARK_FACTORY_TOKEN"\)/);
   assert.match(source, /createGithubClient\(appInstallationToken, "darkfactory-orchestrate"\)/);
   assert.match(source, /GITHUB_TOKEN[\s\S]+cannot perform cross-repo issue writes/);
