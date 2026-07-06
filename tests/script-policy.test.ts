@@ -8,12 +8,19 @@ const dfLib: any = await import("../.github/scripts/df-lib.mjs");
 const dfFix: any = await import("../.github/scripts/df-fix.mjs");
 // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
 const dfSweep: any = await import("../.github/scripts/df-sweep.mjs");
+// @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+const codexReviewValidator: any = await import("../.github/scripts/validate-codex-review.mjs");
+// @ts-ignore js-yaml does not ship types in this package; tests only need load().
+const { load: loadYaml }: any = await import("js-yaml");
 
 const {
   assertAllowedRepo,
+  auditIssueBody,
   checksAreGreen,
   cleanupTempRoot,
+  CODEX_REVIEW_REQUIRED_CONTEXT,
   extractClosingIssueNumbers,
+  findAuditMarker,
   getBranchProtection,
   getRequiredStatusCheckContexts,
   darkFactoryWorkerIssueNumber,
@@ -27,7 +34,8 @@ const {
   prdIssueBody,
   reconcileLabelDiff,
   repoName,
-  taskClassFromLabels
+  taskClassFromLabels,
+  withCodexReviewRequiredContext
 } = dfLib;
 
 const {
@@ -40,6 +48,9 @@ const {
   configureSweepRuntime,
   considerPullRequest: considerSweepPullRequest
 } = dfSweep;
+const {
+  validateReviewAgainstSchema
+} = codexReviewValidator;
 
 test("parsePrdItems creates stable df-prd markers from PRD milestones and loops", () => {
   const items = parsePrdItems([
@@ -99,6 +110,22 @@ test("prdIssueBody records deterministic Blocked-by sequencing", () => {
 
   assert.match(body, /Blocked-by: #10/);
   assert.match(body, /df-prd:milestones-m2/);
+});
+
+test("auditIssueBody records deterministic L5 audit findings", () => {
+  const body = auditIssueBody(
+    "marius-patrik/example",
+    [{ category: "health", message: "Workflow `ci` concluded `failure`." }],
+    { auditedAt: "2026-07-06T00:00:00.000Z" }
+  );
+
+  assert.match(body, /df-audit:marius-patrik-example/);
+  assert.equal(findAuditMarker(body), "df-audit:marius-patrik-example");
+  assert.match(body, /Git state/);
+  assert.match(body, /Health/);
+  assert.match(body, /PRD drift/);
+  assert.match(body, /Doc staleness/);
+  assert.match(body, /AI tokens: 0/);
 });
 
 test("label reconciliation removes stale df:ready when PRD sequencing blocks an issue", () => {
@@ -198,10 +225,64 @@ test("checksAreGreen rejects pending or failing checks without requiring fixed c
       [{ __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" }],
       ["ci"]
     ),
-    true
+    false
   );
   assert.equal(checksAreGreen([{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }]), false);
   assert.equal(checksAreGreen([{ __typename: "StatusContext", state: "FAILURE" }]), false);
+});
+
+test("Codex Review is added to required contexts only after provisioning is detected", () => {
+  assert.equal(CODEX_REVIEW_REQUIRED_CONTEXT, "Codex Review");
+  assert.deepEqual(withCodexReviewRequiredContext(["Validate", "Codex Review"]), ["Validate", "Codex Review"]);
+  assert.equal(
+    checksAreGreen(
+      [{ __typename: "CheckRun", name: "Validate", status: "COMPLETED", conclusion: "SUCCESS" }],
+      withCodexReviewRequiredContext(["Validate"])
+    ),
+    false
+  );
+  assert.equal(
+    checksAreGreen(
+      [
+        { __typename: "CheckRun", name: "Validate", status: "COMPLETED", conclusion: "SUCCESS" },
+        { __typename: "CheckRun", name: "Codex Review", status: "COMPLETED", conclusion: "SUCCESS" }
+      ],
+      withCodexReviewRequiredContext(["Validate"])
+    ),
+    true
+  );
+});
+
+test("Codex Review verdict validator enforces the managed schema shape", () => {
+  const schema = {
+    additionalProperties: false,
+    properties: {
+      approved: { type: "boolean" },
+      summary: { type: "string" },
+      blocking_findings: { type: "array", items: { type: "string" } },
+      non_blocking_notes: { type: "array", items: { type: "string" } }
+    },
+    required: ["approved", "summary", "blocking_findings", "non_blocking_notes"]
+  };
+
+  assert.deepEqual(
+    validateReviewAgainstSchema(
+      { approved: true, summary: "ok", blocking_findings: [], non_blocking_notes: ["note"] },
+      schema
+    ),
+    []
+  );
+  assert.deepEqual(
+    validateReviewAgainstSchema(
+      { approved: "yes", summary: "bad", blocking_findings: [false], non_blocking_notes: [], extra: true },
+      schema
+    ),
+    [
+      "unexpected property 'extra'",
+      "property 'approved' must be boolean",
+      "property 'blocking_findings[0]' must be string"
+    ]
+  );
 });
 
 test("getRequiredStatusCheckContexts treats inaccessible branch protection as no native requirements", async () => {
@@ -398,15 +479,34 @@ test("df-plan drift detection covers untracked open issues and PRs", async () =>
   assert.match(source, /listOpenPullRequests/);
 });
 
-test("df-plan workflow reacts safely to PRD edits on main", async () => {
+test("df-plan drift detection maps M2 PRD commitments to code artifacts", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-plan.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /detectPrdArtifactDrift/);
+  assert.match(source, /PRD editing to automatically reconcile sequenced backlog issues/);
+  assert.match(source, /PRD drift reporting when code or backlog contradicts the PRD/);
+  assert.match(source, /prd\\W\*backlog/);
+  assert.match(source, /\.github\/workflows\/df-plan\.yml/);
+  assert.match(source, /\.github\/scripts\/df-plan\.mjs/);
+  assert.match(source, /listen for PRD file changes/);
+  assert.match(source, /maintain sequencing references/);
+  assert.match(source, /file or update a drift report issue/);
+  assert.match(source, /does not \$\{check\.reason\}/);
+  assert.match(source, /artifactContentForChecks/);
+  assert.match(source, /detectPrdArtifactDrift\[\\s\\S\]\*\?/);
+});
+
+test("df-plan workflow reacts safely to PRD edits on the trusted default branch", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-plan.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");
+  const pushCheckout = workflow.indexOf("Checkout target repository scripts");
   const checkout = workflow.indexOf("Checkout DarkFactory control scripts");
   const token = workflow.indexOf("Mint mp-agents installation token");
 
   assert.match(workflow, /^\s+push:\s*$/m);
   assert.match(workflow, /^\s+branches:\s*$/m);
   assert.match(workflow, /^\s+-\s+main\s*$/m);
+  assert.doesNotMatch(workflow, /^\s+-\s+dev\s*$/m);
   assert.match(workflow, /PRD\.md/);
   assert.doesNotMatch(workflow, /raw\.githubusercontent\.com|commits\/main|method:\s*'HEAD'/);
   assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
@@ -415,16 +515,24 @@ test("df-plan workflow reacts safely to PRD edits on main", async () => {
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'.*github\.repository == 'marius-patrik\/agent-darkfactory'/);
   assert.doesNotMatch(workflow, /actions:\s+write/);
   assert.notEqual(gate, -1);
+  assert.notEqual(pushCheckout, -1);
   assert.notEqual(checkout, -1);
   assert.notEqual(token, -1);
+  assert.ok(gate < pushCheckout);
+  assert.ok(pushCheckout < token);
   assert.ok(gate < checkout);
   assert.ok(checkout < token);
   assert.match(workflow, /Resolve DarkFactory script path/);
+  assert.match(workflow, /Checkout target repository scripts/);
+  assert.match(workflow, /if:\s*github\.event_name == 'push'/);
+  assert.match(workflow, /persist-credentials:\s+false/);
   assert.match(workflow, /Checkout DarkFactory control scripts/);
   assert.match(workflow, /repository:\s+marius-patrik\/agent-darkfactory/);
   assert.match(workflow, /GITHUB_REPOSITORY_OWNER/);
   assert.match(workflow, /GITHUB_REF_NAME.*main/);
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
+  assert.doesNotMatch(workflow, /GITHUB_REF_NAME.*dev/);
+  assert.doesNotMatch(workflow, /GITHUB_REF.*refs\/heads\/dev/);
   assert.doesNotMatch(workflow, /path:\s+darkfactory-control/);
   assert.match(workflow, /ref:\s+\$\{\{\s*github\.sha\s*\}\}/);
   assert.match(workflow, /if:\s*github\.event_name != 'push'/);
@@ -459,6 +567,55 @@ test("df-plan preserves PRD sequence references across completed predecessors", 
   assert.match(source, /previousIssueNumber = closed\.number/);
   assert.match(source, /previousIssueNumber = existing\.number/);
   assert.match(source, /create-closed-completed-prd-issue/);
+});
+
+test("df-audit script performs deterministic repo audits and files findings as issues", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-audit.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /auditGitState/);
+  assert.match(source, /auditHealth/);
+  assert.match(source, /auditEnforcement/);
+  assert.match(source, /auditPrdDrift/);
+  assert.match(source, /auditDocStaleness/);
+  assert.match(source, /upsertAuditIssue/);
+  assert.match(source, /closeResolvedAuditIssue/);
+  assert.match(source, /df-audit/);
+  assert.match(source, /df:audit/);
+  assert.match(source, /writeRunLedger/);
+  assert.match(source, /codex_calls:\s*0/);
+  assert.match(source, /listActiveManagedRepos\(gh, CONTROL_REPO, \{ registry \}\)/);
+  assert.doesNotMatch(source, /\bcodex\s+exec\b|CODEX_AUTH_JSON|DF_WORKER_IMAGE|docker\s+run/);
+});
+
+test("df-audit workflow schedules trusted managed-repo audits", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-audit.yml", import.meta.url), "utf8");
+  const gate = workflow.indexOf("Validate trusted control ref");
+  const checkout = workflow.indexOf("Checkout DarkFactory control scripts");
+  const token = workflow.indexOf("Mint mp-agents installation token");
+
+  assert.match(workflow, /^\s+schedule:\s*$/m);
+  assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'/);
+  assert.notEqual(gate, -1);
+  assert.notEqual(checkout, -1);
+  assert.notEqual(token, -1);
+  assert.ok(gate < checkout);
+  assert.ok(checkout < token);
+  assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
+  assert.doesNotMatch(workflow, /GITHUB_REF.*refs\/heads\/dev/);
+  assert.match(workflow, /Validate manual audit target repository/);
+  assert.match(workflow, /marius-patrik\/fabrica/);
+  assert.match(workflow, /must be a marius-patrik repository/);
+  assert.match(workflow, /DF_MANUAL_AUDIT_REPO: \$\{\{ inputs\.repo \}\}/);
+  assert.match(workflow, /repo="\$\{DF_MANUAL_AUDIT_REPO\}"/);
+  assert.doesNotMatch(workflow, /repo="\$\{\{ inputs\.repo \}\}"/);
+  assert.match(workflow, /path=\.github\/scripts\/df-audit\.mjs/);
+  assert.match(workflow, /permission-actions:\s+read/);
+  assert.match(workflow, /permission-contents:\s+write/);
+  assert.match(workflow, /permission-issues:\s+write/);
+  assert.doesNotMatch(workflow, /permission-pull-requests:\s+write/);
+  assert.match(workflow, /DF_AUDIT_ALL/);
+  assert.match(workflow, /DF_DATA_REPO/);
 });
 
 test("df-follow-through workflow validates trusted refs before privileged tokens", async () => {
@@ -613,6 +770,19 @@ test("df-work blocks target auto-merge setup failures before clone or Codex", as
   assert.ok(blockIndex < codexIndex);
   assert.match(source, /before cloning or running Codex/);
   assert.match(source, /not a code implementation failure/);
+});
+
+test("df-work failure path comments blocker, marks blocked, and releases the lane", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-work.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /ledger\.status = "blocked"/);
+  assert.match(source, /markWorkerBlocked\(TARGET_REPO, TARGET_ISSUE_NUMBER, ledger\.error\)/);
+  assert.match(source, /function markWorkerBlocked\(repository, issueNumber, blocker\)/);
+  assert.match(source, /Removing df:running releases the stream lane/);
+  assert.match(source, /replaceIssueLabels\(repository, issueNumber, \["df:blocked"\], \["df:ready", "df:running", "df:done"\]\)/);
+  assert.match(source, /DarkFactory worker blocked\./);
+  assert.match(source, /Blocker:/);
+  assert.match(source, /truncate\(blocker, 6000\)/);
 });
 
 test("df-work workflow does not expose privileged worker triggers in managed repositories", async () => {
@@ -889,6 +1059,7 @@ test("df-sweep verifies branch protection before merging empty check rollups", a
   const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
 
   assert.match(source, /getRequiredStatusCheckContexts/);
+  assert.match(source, /withCodexReviewRequiredContext/);
   assert.match(source, /required_checks/);
   assert.match(source, /required-checks-missing/);
   assert.match(source, /checksAreGreen\(pull\.statusCheckRollup, requiredContexts\)/);
@@ -908,8 +1079,28 @@ test("df-sweep re-fetches checks immediately before direct merge and blocks red 
   assert.match(source, /hasMergeGateChecks/);
   assert.match(source, /NO_CHECK_ALLOWLIST/);
   assert.match(source, /Fresh merge gate check failed immediately before merge/);
-  assert.match(source, /checksAreGreen\(mergeGate\.statusCheckRollup\)/);
+  assert.match(source, /checksAreGreen\(mergeGate\.statusCheckRollup, requiredContexts\)/);
   assert.doesNotMatch(source, /--admin/);
+});
+
+test("Codex Review workflow validates verdicts before comments and enforcement", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/codex-review.yml", import.meta.url), "utf8");
+  const parsedWorkflow = loadYaml(workflow);
+  const codexReviewJob = parsedWorkflow.jobs["codex-review"];
+  const validate = workflow.indexOf("Validate Codex verdict");
+  const comment = workflow.indexOf("Comment review");
+  const enforce = workflow.indexOf("Enforce Codex verdict");
+
+  assert.equal(codexReviewJob.name, CODEX_REVIEW_REQUIRED_CONTEXT);
+  assert.notEqual(validate, -1);
+  assert.notEqual(comment, -1);
+  assert.notEqual(enforce, -1);
+  assert.ok(validate < comment);
+  assert.ok(validate < enforce);
+  assert.match(workflow, /inline trusted schema/);
+  assert.match(workflow, /approved: \{ type: "boolean" \}/);
+  assert.match(workflow, /blocking_findings: \{ type: "array", items: \{ type: "string" \} \}/);
+  assert.doesNotMatch(workflow, /node \.github\/scripts\/validate-codex-review\.mjs/);
 });
 
 test("df-sweep requires explicit allowlist before merging PRs with no checks", async () => {
@@ -963,12 +1154,16 @@ test("df-work blocks stale remote branches without open worker PRs", async () =>
   assert.match(source, /action: "stale-worker-branch"/);
   assert.match(source, /result: "blocked"/);
   assert.match(source, /Stale worker branch exists without an open worker PR\. Owner\/manual recovery is required\./);
-  assert.match(source, /replaceIssueLabels\(TARGET_REPO, TARGET_ISSUE_NUMBER, \["df:blocked"\], \["df:ready", "df:running", "df:done"\]\)/);
   assert.match(source, /upsertStaleBranchAskOwnerIssue\(branch\)/);
   assert.match(source, /replaceIssueLabels\(TARGET_REPO, TARGET_ISSUE_NUMBER, \["df:ask-owner", "df:blocked"\], \["df:ready", "df:running", "df:done"\]\)/);
-  assert.match(source, /dark-factory:stale-worker-branch issue=\$\{TARGET_ISSUE_NUMBER\} branch=\$\{slug\(branch\)\}/);
-  assert.match(source, /findOpenIssueByMarker\(TARGET_REPO, marker\)/);
-  assert.match(source, /method === "PATCH"|gh\.request\("PATCH", `\/repos\/\$\{repoName\(TARGET_REPO\)\}\/issues\/\$\{existing\.number\}`/);
+  // Recovery issues are upserted in the CONTROL repository (central owner
+  // queue), keyed by a marker that includes the target repo and issue.
+  assert.match(source, /dark-factory:stale-worker-branch repo=\$\{repoName\(TARGET_REPO\)\} issue=\$\{TARGET_ISSUE_NUMBER\} branch=\$\{slug\(branch\)\}/);
+  assert.match(source, /findOpenIssueByMarker\(CONTROL_REPO, marker\)/);
+  assert.match(source, /gh\.request\("PATCH", `\/repos\/\$\{repoName\(CONTROL_REPO\)\}\/issues\/\$\{existing\.number\}`/);
+  // The update path re-applies df:ask-owner so a recovery issue that lost the
+  // label reappears on label-driven queues.
+  assert.match(source, /gh\.request\("POST", `\/repos\/\$\{repoName\(CONTROL_REPO\)\}\/issues\/\$\{existing\.number\}\/labels`/);
   assert.match(source, /reason: "stale-worker-branch"/);
   assert.match(source, /no open worker PR was found/);
   assert.doesNotMatch(source, /action: "remote-branch-exists"/);
@@ -1040,6 +1235,157 @@ test("df-sweep merges green app-authored dev worker PRs and blocks red ones", as
   assert.equal(redResult.reason, "checks-not-green");
   assert.ok(calls.some((call) => call.method === "PUT" && call.pathName === "/repos/marius-patrik/active/pulls/40/merge"));
   assert.equal(calls.some((call) => call.method === "PUT" && call.pathName === "/repos/marius-patrik/active/pulls/41/merge"), false);
+});
+
+test("df-sweep holds worker PRs when the Codex Review context is present and red", async () => {
+  const repository = { owner: "marius-patrik", repo: "active" };
+  const pull = workerPull({
+    number: 42,
+    checkConclusion: "SUCCESS",
+    codexReviewConclusion: "FAILURE",
+    author: "app/darkfactory-agent"
+  });
+  const calls: Array<{ method: string; pathName: string; body?: any }> = [];
+
+  configureSweepRuntime({
+    controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+    dataRepo: "marius-patrik/darkfactory-data",
+    gh: {
+      request: async (method: string, pathName: string, body?: any) => {
+        calls.push({ method, pathName, body });
+        if (method === "GET" && pathName.endsWith("/protection")) {
+          const error: Error & { status?: number } = new Error("Branch not protected");
+          error.status = 404;
+          throw error;
+        }
+        if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/42/labels") return {};
+        if (method === "DELETE" && pathName.startsWith("/repos/marius-patrik/active/issues/42/labels/")) return {};
+        if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/42/comments?per_page=100") return [];
+        if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/42/comments") return {};
+        throw new Error(`unexpected mocked request: ${method} ${pathName}`);
+      }
+    }
+  });
+
+  const result = await considerSweepPullRequest(repository, pull);
+
+  assert.equal(result.action, "skip");
+  assert.equal(result.reason, "checks-not-green");
+  assert.deepEqual(result.required_checks, ["Codex Review"]);
+  assert.equal(calls.some((call) => call.method === "PUT" && call.pathName === "/repos/marius-patrik/active/pulls/42/merge"), false);
+  assert.equal(calls.some((call) => call.pathName.includes("managed-repository.json")), false);
+});
+
+test("df-sweep falls back to branch-protection checks when Codex Review is not provisioned", async () => {
+  const repository = { owner: "marius-patrik", repo: "active" };
+  const pull = workerPull({
+    number: 43,
+    checkConclusion: "SUCCESS",
+    includeCodexReview: false,
+    author: "app/darkfactory-agent"
+  });
+  const calls: Array<{ method: string; pathName: string; body?: any }> = [];
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message?: any) => warnings.push(String(message));
+
+  try {
+    configureSweepRuntime({
+      controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+      dataRepo: "marius-patrik/darkfactory-data",
+      gh: {
+        graphql: async () => ({
+          repository: {
+            pullRequest: {
+              ...pull,
+              id: "PR_43",
+              mergeable: "MERGEABLE",
+              statusCheckRollup: { contexts: { nodes: pull.statusCheckRollup } }
+            }
+          }
+        }),
+        request: async (method: string, pathName: string, body?: any) => {
+          calls.push({ method, pathName, body });
+          if (method === "GET" && pathName.endsWith("/protection")) {
+            const error: Error & { status?: number } = new Error("Branch not protected");
+            error.status = 404;
+            throw error;
+          }
+          if (method === "GET" && pathName.includes("/contents/.darkfactory/managed-repository.json")) {
+            const error: Error & { status?: number } = new Error("Missing managed config");
+            error.status = 404;
+            throw error;
+          }
+          if (method === "PUT" && pathName === "/repos/marius-patrik/active/pulls/43/merge") {
+            return { sha: "merged-without-codex-review-sha" };
+          }
+          if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/43/comments?per_page=100") return [];
+          if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/43/comments") return {};
+          if (method === "PATCH" && pathName === "/repos/marius-patrik/active/issues/43") return {};
+          throw new Error(`unexpected mocked request: ${method} ${pathName}`);
+        }
+      }
+    });
+
+    const result = await considerSweepPullRequest(repository, pull);
+
+    assert.equal(result.action, "merge");
+    assert.equal(result.sha, "merged-without-codex-review-sha");
+    assert.equal(result.codex_review_gap.warning, "codex-review-not-provisioned");
+    assert.ok(warnings.some((warning) => warning.includes("falling back to branch-protection checks only")));
+    assert.ok(calls.some((call) => call.method === "PUT" && call.pathName === "/repos/marius-patrik/active/pulls/43/merge"));
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("df-sweep holds worker PRs when managed config declares Codex Review but the context is absent", async () => {
+  const repository = { owner: "marius-patrik", repo: "active" };
+  const pull = workerPull({
+    number: 44,
+    checkConclusion: "SUCCESS",
+    includeCodexReview: false,
+    author: "app/darkfactory-agent"
+  });
+  const calls: Array<{ method: string; pathName: string; body?: any }> = [];
+  const managedConfig = {
+    schemaVersion: 1,
+    requiredFiles: [".github/workflows/codex-review.yml"]
+  };
+
+  configureSweepRuntime({
+    controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+    dataRepo: "marius-patrik/darkfactory-data",
+    gh: {
+      request: async (method: string, pathName: string, body?: any) => {
+        calls.push({ method, pathName, body });
+        if (method === "GET" && pathName.endsWith("/protection")) {
+          const error: Error & { status?: number } = new Error("Branch not protected");
+          error.status = 404;
+          throw error;
+        }
+        if (method === "GET" && pathName.includes("/contents/.darkfactory/managed-repository.json")) {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(JSON.stringify(managedConfig), "utf8").toString("base64")
+          };
+        }
+        if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/44/labels") return {};
+        if (method === "DELETE" && pathName.startsWith("/repos/marius-patrik/active/issues/44/labels/")) return {};
+        if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/44/comments?per_page=100") return [];
+        if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/44/comments") return {};
+        throw new Error(`unexpected mocked request: ${method} ${pathName}`);
+      }
+    }
+  });
+
+  const result = await considerSweepPullRequest(repository, pull);
+
+  assert.equal(result.action, "skip");
+  assert.equal(result.reason, "checks-not-green");
+  assert.deepEqual(result.required_checks, ["Codex Review"]);
+  assert.equal(calls.some((call) => call.method === "PUT" && call.pathName === "/repos/marius-patrik/active/pulls/44/merge"), false);
 });
 
 test("df-sweep merges green app-authored dev worker PRs even when the worker issue is done", async () => {
@@ -1155,7 +1501,7 @@ test("df-sweep merges green app-authored worker PRs even when the worker issue i
 test("df-orchestrate workflow validates trusted refs before privileged tokens", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-orchestrate.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");
-  const checkout = workflow.indexOf("Checkout DarkFactory from this repository");
+  const checkout = workflow.indexOf("Checkout DarkFactory control repository");
   const token = workflow.indexOf("Mint mp-agents installation token");
 
   assert.notEqual(gate, -1);
@@ -1165,17 +1511,62 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.ok(checkout < token);
   assert.match(workflow, /GITHUB_REPOSITORY/);
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
+  assert.match(workflow, /GITHUB_REF_NAME.*main/);
+  assert.doesNotMatch(workflow, /GITHUB_REF.*refs\/heads\/dev/);
+  assert.doesNotMatch(workflow, /GITHUB_REF_NAME.*dev/);
+  assert.match(workflow, /repository:\s+marius-patrik\/agent-darkfactory/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'[\s\S]+github\.event_name == 'schedule'/);
+  assert.doesNotMatch(workflow, /^\s+issues:\s*$/m);
+  assert.doesNotMatch(workflow, /^\s+issue_comment:\s*$/m);
+  assert.doesNotMatch(workflow, /github\.repository_owner == 'marius-patrik'[\s\S]+github\.event_name == 'issues'/);
+  assert.doesNotMatch(workflow, /github\.repository_owner == 'marius-patrik'[\s\S]+github\.event_name == 'issue_comment'/);
   assert.match(workflow, /permission-actions:\s+write/);
   assert.match(workflow, /permission-workflows:\s+write/);
   assert.match(workflow, /permission-contents:\s+write/);
   assert.match(workflow, /permission-issues:\s+write/);
+  assert.match(workflow, /DARK_FACTORY_TOKEN: \$\{\{ steps\.app-token\.outputs\.token \}\}/);
+  assert.match(workflow, /DF_CONTROL_REPO: marius-patrik\/agent-darkfactory/);
+  assert.match(workflow, /repo:\s*\n\s+description: Optional managed repository/);
+  assert.match(workflow, /issue_number:\s*\n\s+description: Optional managed issue number/);
+  assert.match(workflow, /source_event:\s*\n\s+description: Optional source event name for a scoped control dispatch/);
+  assert.match(workflow, /DF_TARGET_REPO: \$\{\{ inputs\.repo \}\}/);
+  assert.match(workflow, /DF_TARGET_ISSUE_NUMBER: \$\{\{ inputs\.issue_number \}\}/);
+  assert.match(workflow, /DF_SOURCE_EVENT: \$\{\{ inputs\.source_event \}\}/);
   assert.match(workflow, /^\s+workflow_run:\s*$/m);
   assert.match(workflow, /workflows:\s*\n\s+-\s+DarkFactory Plan\s*\n\s+-\s+DarkFactory Work\s*\n\s+-\s+DarkFactory Follow Through/);
   assert.match(workflow, /types:\s*\n\s+-\s+completed/);
   assert.match(workflow, /github\.event_name == 'workflow_run'/);
   assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'main'/);
   assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
+});
+
+test("control df-event-forward workflow safely dispatches local events to orchestrate", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-event-forward.yml", import.meta.url), "utf8");
+
+  assert.match(workflow, /^\s+issues:\s*$/m);
+  assert.match(workflow, /^\s+issue_comment:\s*$/m);
+  assert.match(workflow, /permissions:\s*\{\}/);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'/);
+  assert.match(workflow, /github\.event\.label\.name == 'df:ready'/);
+  assert.match(workflow, /github\.event\.comment\.body == '\/df run'/);
+  assert.match(workflow, /startsWith\(github\.event\.comment\.body, '\/df run '\)/);
+  assert.match(workflow, /github\.event\.comment\.author_association == 'OWNER'/);
+  assert.match(workflow, /github\.event\.comment\.author_association == 'MEMBER'/);
+  assert.match(workflow, /github\.event\.comment\.author_association == 'COLLABORATOR'/);
+  assert.match(workflow, /actions\/create-github-app-token@v2/);
+  assert.match(workflow, /repositories:\s+agent-darkfactory/);
+  assert.match(workflow, /permission-actions:\s+write/);
+  assert.doesNotMatch(workflow, /permission-contents:\s+write/);
+  assert.doesNotMatch(workflow, /permission-issues:\s+write/);
+  assert.doesNotMatch(workflow, /actions\/checkout/);
+  assert.doesNotMatch(workflow, /\.github\/scripts|npm\s|node\s/);
+  assert.match(workflow, /createWorkflowDispatch/);
+  assert.match(workflow, /workflow_id: "df-orchestrate\.yml"/);
+  assert.match(workflow, /ref: "main"/);
+  assert.match(workflow, /repo: `\$\{context\.repo\.owner\}\/\$\{context\.repo\.repo\}`/);
+  assert.match(workflow, /issue_number: String\(context\.payload\.issue\.number\)/);
+  assert.match(workflow, /source_event: context\.eventName/);
 });
 
 test("df-orchestrate source requires the app token for cross-repo writes", async () => {
@@ -1192,6 +1583,10 @@ test("df-orchestrate script uses the active managed registry and dispatches via 
 
   assert.match(source, /const CONTROL_ROOT = path\.resolve/);
   assert.match(source, /listActiveManagedRepos\(gh, controlRepo, options\)/);
+  assert.match(source, /parseEventRequest\(process\.env\.GITHUB_EVENT_PAYLOAD/);
+  assert.match(source, /parseWorkflowDispatchRequest\(\s*process\.env\.DF_TARGET_REPO/);
+  assert.match(source, /readySlashRunIssue/);
+  assert.match(source, /DarkFactory received `\/df run` and queued this issue with `df:ready`\./);
   assert.match(source, /\/repos\/\$\{repoName\(controlRepo\)\}\/actions\/workflows\/df-work\.yml\/dispatches/);
   assert.doesNotMatch(source, /df-prd:\[a-z0-9-\]\+/);
   assert.match(source, /df:running/);
@@ -1212,6 +1607,24 @@ test("df-orchestrate claims ready issues before dispatching workers", async () =
   assert.ok(claimIndex < dispatchIndex);
 });
 
+test("df-orchestrate runs scoped sequencing auto-ready before plan building", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-orchestrate.mjs", import.meta.url), "utf8");
+
+  // Auto-ready resolves blockers against the FULL snapshots (event-scoped
+  // runs pass the target via options.targetIssue instead of pre-filtering).
+  const autoReadyIndex = source.indexOf("await autoReadySequencedIssues(gh, snapshots, warn, { targetIssue: eventRequest })");
+  const escalationIndex = source.indexOf("await escalateOwnerDecisionIssues(gh, scopedSnapshots, warn)");
+  const planIndex = source.indexOf("buildOrchestrationPlan(scopedSnapshots");
+  assert.notEqual(autoReadyIndex, -1);
+  assert.notEqual(escalationIndex, -1);
+  assert.notEqual(planIndex, -1);
+  assert.ok(autoReadyIndex < escalationIndex);
+  assert.ok(escalationIndex < planIndex);
+  assert.match(source, /names\.has\("df:planned"\)/);
+  assert.match(source, /\\bdf-prd:/);
+  assert.match(source, /names\.has\("df:ready"\) \|\| names\.has\("df:running"\) \|\| names\.has\("df:blocked"\) \|\| names\.has\("df:done"\) \|\| names\.has\("df:ask-owner"\)/);
+});
+
 test("df-orchestrate blocks target auto-merge setup failures before worker dispatch", async () => {
   const source = await readFile(new URL("../.github/scripts/df-orchestrate.mjs", import.meta.url), "utf8");
 
@@ -1221,8 +1634,11 @@ test("df-orchestrate blocks target auto-merge setup failures before worker dispa
   assert.notEqual(dispatchIndex, -1);
   assert.ok(blockIndex < dispatchIndex);
   assert.match(source, /if \(mergePolicy\.blocked\)/);
-  assert.match(source, /replaceIssueLabels\(gh, repository, issueNumber, \["df:blocked"\], \["df:ready", "df:running", "df:done"\]\)/);
-  assert.match(source, /DarkFactory blocked this issue before worker dispatch/);
+  // Merge-policy blockers escalate for owner input (df:ask-owner + df:blocked)
+  // so the lane stays on the owner-decision queue instead of stalling silently.
+  assert.match(source, /replaceIssueLabels\(gh, repository, issueNumber, \["df:ask-owner", "df:blocked"\], \["df:ready", "df:running", "df:done"\]\)/);
+  assert.match(source, /reason=merge-policy-blocked/);
+  assert.match(source, /DarkFactory blocked this issue before worker dispatch and escalated it for owner input/);
   assert.match(source, /not a code implementation failure/);
 });
 
@@ -1240,9 +1656,29 @@ function workerPull(options: {
   number: number;
   checkConclusion: string | null;
   checkStatus?: string;
+  codexReviewConclusion?: string | null;
+  codexReviewStatus?: string;
+  includeCodexReview?: boolean;
   labels?: Array<{ name: string }>;
   author?: string;
 }) {
+  const statusCheckRollup = [
+    {
+      __typename: "CheckRun",
+      name: "ci",
+      status: options.checkStatus || "COMPLETED",
+      conclusion: options.checkConclusion
+    }
+  ];
+  if (options.includeCodexReview !== false) {
+    statusCheckRollup.push({
+      __typename: "CheckRun",
+      name: "Codex Review",
+      status: options.codexReviewStatus || "COMPLETED",
+      conclusion: options.codexReviewConclusion === undefined ? "SUCCESS" : options.codexReviewConclusion
+    });
+  }
+
   return {
     id: `PR_${options.number}`,
     number: options.number,
@@ -1257,13 +1693,6 @@ function workerPull(options: {
     createdAt: "2026-07-01T00:00:00.000Z",
     updatedAt: "2026-07-01T00:00:00.000Z",
     labels: options.labels || [],
-    statusCheckRollup: [
-      {
-        __typename: "CheckRun",
-        name: "ci",
-        status: options.checkStatus || "COMPLETED",
-        conclusion: options.checkConclusion
-      }
-    ]
+    statusCheckRollup
   };
 }

@@ -8,6 +8,7 @@ import {
   ensureManagedRepositorySetup,
   managedSetupPullRequestBody,
   MANAGED_SETUP_BRANCH,
+  orderManagedRepositoriesForSync,
   type GitHubRequester
 } from "../src/managed-sync.js";
 import {
@@ -122,6 +123,36 @@ test("ensureManagedRepositorySetup creates a managed PR when files are missing",
   );
 });
 
+test("orderManagedRepositoriesForSync processes DarkFactory control repository first", () => {
+  const repositories = [
+    { owner: "marius-patrik", repo: "dream" },
+    { owner: "marius-patrik", repo: "agent-darkfactory" },
+    { owner: "marius-patrik", repo: "agents-plugin" }
+  ];
+
+  const ordered = orderManagedRepositoriesForSync(repositories, (repository) => repository);
+
+  assert.deepEqual(
+    ordered.map((repository) => repository.repo),
+    ["agent-darkfactory", "dream", "agents-plugin"]
+  );
+});
+
+test("orderManagedRepositoriesForSync deduplicates repository entries case-insensitively", () => {
+  const repositories = [
+    { owner: "marius-patrik", repo: "agent-darkfactory", id: 1 },
+    { owner: "MARIUS-PATRIK", repo: "Agent-DarkFactory", id: 2 },
+    { owner: "marius-patrik", repo: "dream", id: 3 }
+  ];
+
+  const ordered = orderManagedRepositoriesForSync(repositories, (repository) => repository);
+
+  assert.deepEqual(
+    ordered.map((repository) => repository.id),
+    [1, 3]
+  );
+});
+
 test("readManagedFiles supplies every required package-managed payload", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
   const packagePaths = new Set([
@@ -151,6 +182,28 @@ test("readManagedFiles supplies every required package-managed payload", async (
     for (const filePath of requiredPaths) {
       assert.equal(managedPaths.has(filePath), true, filePath);
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("readManagedFiles does not ship the control-only event forward workflow", async () => {
+  const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
+
+  try {
+    for (const filePath of requiredManagedFilePaths(root)) {
+      const fullPath = join(root, ...filePath.split("/"));
+      await mkdir(dirname(fullPath), { recursive: true });
+      await writeFile(fullPath, `${filePath}\n`);
+    }
+    const eventForwardPath = join(root, ".github", "workflows", "df-event-forward.yml");
+    await mkdir(dirname(eventForwardPath), { recursive: true });
+    await writeFile(eventForwardPath, "name: DarkFactory Event Forward\n");
+
+    const managedFiles = readManagedFiles(undefined, root);
+    const managedPaths = new Set(managedFiles.map((file) => file.path));
+
+    assert.equal(managedPaths.has(".github/workflows/df-event-forward.yml"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

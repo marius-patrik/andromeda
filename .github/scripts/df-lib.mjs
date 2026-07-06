@@ -28,7 +28,8 @@ export const PLANNING_LABELS = [
   { name: "P0", color: "B60205", description: "Priority 0: urgent or release-blocking" },
   { name: "P1", color: "D93F0B", description: "Priority 1: important planned work" },
   { name: "P2", color: "FBCA04", description: "Priority 2: follow-up or lower urgency" },
-  { name: "df:prd-drift", color: "B60205", description: "DarkFactory PRD drift report" }
+  { name: "df:prd-drift", color: "B60205", description: "DarkFactory PRD drift report" },
+  { name: "df:audit", color: "0E8A16", description: "DarkFactory audit finding" }
 ];
 
 export const WORKER_PULL_REQUEST_AUTHORS = new Set([
@@ -454,6 +455,12 @@ export async function getRequiredStatusCheckContexts(gh, repository, branch) {
   }
 }
 
+export const CODEX_REVIEW_REQUIRED_CONTEXT = "Codex Review";
+
+export function withCodexReviewRequiredContext(requiredContexts = []) {
+  return [...new Set([...requiredContexts, CODEX_REVIEW_REQUIRED_CONTEXT].filter(Boolean))];
+}
+
 export async function getOptionalFileContent(gh, repository, filePath, ref) {
   try {
     const data = await gh.request(
@@ -581,6 +588,42 @@ export function driftIssueBody(targetRepoName, driftItems) {
   ].join("\n");
 }
 
+export function auditIssueBody(targetRepoName, findings, metadata = {}) {
+  const auditedAt = metadata.auditedAt || new Date().toISOString();
+  const categories = Array.isArray(findings) ? findings : [];
+
+  return [
+    `<!-- df-audit:${slug(targetRepoName)} -->`,
+    "## Audit Report",
+    "",
+    `Target repository: \`${targetRepoName}\``,
+    `Audited at: \`${auditedAt}\``,
+    "",
+    "DarkFactory found repository health, enforcement, PRD, documentation, or git-state findings that need follow-up.",
+    "",
+    "## Findings",
+    "",
+    categories.length
+      ? categories.map((finding) => `- **${finding.category}**: ${finding.message}`).join("\n")
+      : "- No audit details were provided.",
+    "",
+    "## Acceptance Criteria",
+    "",
+    "- Resolve or explicitly accept each audit finding.",
+    "- Re-run DarkFactory audit and confirm this issue is closed or updated with only remaining findings.",
+    "",
+    "## Audit Scope",
+    "",
+    "- Git state: default branch metadata and branch protection.",
+    "- Health: latest GitHub Actions workflow conclusions on the default branch.",
+    "- Enforcement conformance: required DarkFactory-managed files and workflows.",
+    "- PRD drift: presence of tracked `PRD.md` files and PRD-backed backlog state.",
+    "- Doc staleness: stale PRD/agent docs relative to recent repository activity.",
+    "- AI tokens: 0 (deterministic audit checks).",
+    "- Harness migration path: this GitHub-native audit issue stream migrates to harness observers when L5 moves into the harness scheduler."
+  ].join("\n");
+}
+
 export function findPrdMarker(body) {
   return body?.match(/df-prd:[a-z0-9-]+/)?.[0] ?? "";
 }
@@ -589,20 +632,36 @@ export function findDriftMarker(body) {
   return body?.match(/df-prd-drift:[a-z0-9-]+/)?.[0] ?? "";
 }
 
+export function findAuditMarker(body) {
+  return body?.match(/df-audit:[a-z0-9-]+/)?.[0] ?? "";
+}
+
 export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
   if (!Array.isArray(statusCheckRollup) || statusCheckRollup.length === 0) {
     return requiredContexts.length === 0;
   }
 
-  return statusCheckRollup.every((check) => {
-    if (check.__typename === "CheckRun") {
-      return check.status === "COMPLETED" && check.conclusion === "SUCCESS";
-    }
-    if (check.__typename === "StatusContext") {
-      return check.state === "SUCCESS";
-    }
-    return false;
+  if (!statusCheckRollup.every(checkIsGreen)) return false;
+
+  return requiredContexts.every((context) => {
+    return statusCheckRollup.some((check) => checkContextName(check) === context);
   });
+}
+
+function checkIsGreen(check) {
+  if (check.__typename === "CheckRun") {
+    return check.status === "COMPLETED" && check.conclusion === "SUCCESS";
+  }
+  if (check.__typename === "StatusContext") {
+    return check.state === "SUCCESS";
+  }
+  return false;
+}
+
+function checkContextName(check) {
+  if (check.__typename === "CheckRun") return check.name || "";
+  if (check.__typename === "StatusContext") return check.context || "";
+  return "";
 }
 
 export function checksSummary(statusCheckRollup) {

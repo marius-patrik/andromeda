@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           # Privileged planning uses installation or repository tokens, so it only
-          # runs from a trusted default branch in an allowed owner.
+          # runs from the trusted control branch in an allowed owner.
           if [[ "${GITHUB_REPOSITORY_OWNER}" != "marius-patrik" ]]; then
             echo "::error::DarkFactory privileged planning can only run in the marius-patrik owner."
             exit 1
@@ -104,6 +104,12 @@ jobs:
           else
             echo "path=.github/scripts/df-plan.mjs" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Checkout target repository scripts
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Checkout DarkFactory control scripts
         if: github.event_name != 'push'

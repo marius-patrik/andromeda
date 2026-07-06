@@ -12,7 +12,7 @@ The system it replaces looks like this (the manual workflow it must absorb): a h
 
 - GitHub App **mp-agents** (App ID 3827239), installed account-wide (`repository_selection: all`, contents + PRs write). Secrets `DARK_FACTORY_APP_ID` / `DARK_FACTORY_PRIVATE_KEY` configured; `CODEX_AUTH_JSON` available for worker auth.
 - Existing assets: webhook server scaffold (`src/bot.ts`, `src/server.ts`), managed-file sync (`src/managed-sync.ts`, `src/managed-files.ts` reading `data/data-agentos/managed-repository`), Docker Codex reviewer, release workflow, repo-setup enforcement.
-- Runtime strategy: **GitHub Actions first** (schedule + `workflow_dispatch` + issue/PR events). The always-on webhook server is a later optimization, not a prerequisite. Workers are `codex exec` runs in Docker on Actions runners; later they dispatch to self-hosted runners/cluster via agents-manager + inference-engine.
+- Runtime strategy: **GitHub Actions first** (schedule + `workflow_dispatch` + control-repository issue/PR events). Managed repository `df:ready` labels and `/df run` comments are picked up on the next orchestrator tick or workflow-run chain, so managed repos do not need control-repository app secrets. The always-on webhook server is a later optimization, not a prerequisite. Workers are `codex exec` runs in Docker on Actions runners; later they dispatch to self-hosted runners/cluster via agents-manager + inference-engine.
 
 ## One system (integration principle)
 
@@ -43,7 +43,7 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 
 ## Core loops
 
-- **L0 Orchestrator** (NEW — replaces the orchestrator session): a scheduled + event-driven brain run (AI worker with a synthesized global-state brief: all installed repos' git/CI/backlog/PRD state, stream ledgers, open blockers). Each run does exactly what the human-driven orchestrator session does today: assess state, plan/replan waves, sequence and ready issues, dispatch L3 workers within concurrency caps, unstick blocked lanes, post a status digest to the dashboard, and escalate genuinely owner-only decisions as labeled question issues (`df:ask-owner`) instead of blocking. The orchestrator holds no memory outside GitHub — every run reconstructs state from repos, ledgers in `.darkfactory/`, and issue history, so it is fully resumable and replaceable.
+- **L0 Orchestrator** (NEW — replaces the orchestrator session): a scheduled brain run, with additional control-repository triggers, using a synthesized global-state brief: all installed repos' git/CI/backlog/PRD state, stream ledgers, open blockers. Managed repository pickup is schedule-driven through cron orchestrate ticks and workflow-run chaining. Each run does exactly what the human-driven orchestrator session does today: assess state, plan/replan waves, sequence and ready issues, dispatch L3 workers within concurrency caps, unstick blocked lanes, post a status digest to the dashboard, and escalate genuinely owner-only decisions as labeled question issues (`df:ask-owner`) instead of blocking. The orchestrator holds no memory outside GitHub — every run reconstructs state from repos, ledgers in `.darkfactory/`, and issue history, so it is fully resumable and replaceable.
 - **L1 Sync** (exists — harden): managed baseline files pushed to every installed repo via PRs. Baseline source: `data-agentos/managed-repository`. Must become self-applying (DarkFactory manages itself first).
 - **L2 Review** (exists on some repos — universalize): Codex Review gate on every PR, Docker-isolated, schema-validated verdicts; merge blocked until green.
 - **L3 Work** (NEW — the heart): pick next `df:ready` issue respecting priority + `Blocked-by` + stream lane → create branch `df/<issue>-<slug>` → worker implements with validation → push → open PR referencing the issue → gates run → automerge on green → issue closes. Failure paths: worker comments its blocker on the issue, labels `df:blocked`, releases the lane.
@@ -54,14 +54,14 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 ## User controls (all on GitHub)
 
 - Edit `PRD.md` → L4 replans the backlog (PRD-edit triggers run in the edited repository with the repository token).
-- Label an issue `df:ready` (or let L4 auto-ready sequenced work) → the issue is queued for L3 dispatch.
+- Label an issue `df:ready` (or let L4 auto-ready sequenced work) → the issue is queued for L3 dispatch on the next scheduled orchestrator tick or workflow-run chain.
 - Comment `/df plan`, `/df audit`, `/df pause`, `/df release` on issues/PRs → the request is scoped to that repo/issue where a control-repository bridge exists.
-- `workflow_dispatch` for manual wave starts; until the webhook server is deployed, `/df run` is represented by `df:ready` plus the control-repository orchestrator dispatching L3 workers across managed repositories via `workflow_dispatch`, so app/Codex secrets stay out of managed-repo workflows.
+- `workflow_dispatch` for manual wave starts; until the webhook server is deployed, `/df run` in managed repositories is represented by `df:ready` and picked up on the next scheduled orchestrator tick, while the control-repository orchestrator dispatches L3 workers across managed repositories via `workflow_dispatch` so app/Codex secrets stay out of managed-repo workflows.
 - Merge/close/comment exactly as on any repo — the bot treats human actions as authoritative.
 
 ## Milestones
 
-- **M1 — Minimum work loop (dogfood ASAP)**: Actions workflow in agent-darkfactory that, on `df:ready` label or `/df run`, spawns a codex worker for one issue → branch → PR → existing review gate → automerge. Acceptance: one issue in a target repo goes label-to-merged with zero terminal use. First dogfood targets: `dream` (small), then `agents-plugin`.
+- **M1 — Minimum work loop (dogfood ASAP)**: Actions workflow in agent-darkfactory that spawns a codex worker for one scheduled `df:ready` issue, with control-repository event triggers as a low-latency path only where control secrets are present → branch → PR → existing review gate → automerge. Acceptance: one issue in a target repo goes label-to-merged after scheduled pickup with zero terminal use. First dogfood targets: `dream` (small), then `agents-plugin`.
 - **M2 — Planning loop / PRD enforcement**: PRD→backlog reconciliation for one repo, then all. Acceptance: editing PRD.md files/updates sequenced issues automatically; drift report issue when code contradicts PRD.
 - **M3 — Orchestrator loop & streams**: L0 shipped — sequencing engine (priorities, Blocked-by graph, stream lanes, concurrency caps), cross-repo waves, scheduled orchestrator runs dispatching workers, dashboard, `df:ask-owner` escalation. Acceptance: the agents-mono backlog (113 issues) drains through DarkFactory in parallel lanes **with zero orchestrator terminal sessions** — the session that built this system is retired.
 - **M4 — Audit loop**: scheduled per-repo deep audits filing findings-as-issues feeding L4 sequencing. Acceptance: a regression (dirty submodule, red CI, stale doc) is detected and issued within one schedule period.

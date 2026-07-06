@@ -2,18 +2,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DEFAULT_DATA_REPO,
+  PLANNING_LABELS,
   WORK_LABELS,
   assertAllowedRepo,
   createGithubClient,
-  darkFactoryWorkerIssueNumber,
   ensureLabels,
   findOpenWorkerPullRequestForIssue,
-  getOptionalFileContent,
   getRepository,
   listActiveManagedRepos,
-  listIssues,
+  normalizedRepoName,
   parseRepo,
   preflightMergePolicy,
+  readLocalJson,
   repoName,
   requiredEnv,
   warnReadOnlyRepository,
@@ -21,23 +21,36 @@ import {
 } from "./df-lib.mjs";
 
 const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const DASHBOARD_MARKER = "<!-- dark-factory:orchestrator-dashboard -->";
-const ASK_OWNER_MARKER_PREFIX = "<!-- dark-factory:l0-ask-owner";
-const DEFAULT_LIMITS = {
-  global: 4,
-  perRepo: 1,
-  perStream: 1
+const ORCHESTRATION_POLICY_PATH = ".darkfactory/orchestration.json";
+export const DASHBOARD_MARKER = "df-dashboard:orchestration";
+export const ASK_OWNER_MARKER = "dark-factory:orchestrator-ask-owner";
+export const REPEATED_FAILURE_THRESHOLD = 3;
+export const DEFAULT_ORCHESTRATION_POLICY = {
+  schemaVersion: 1,
+  concurrency: {
+    global: 6,
+    perRepository: 2,
+    perStream: 3
+  },
+  waves: [
+    {
+      name: "hygiene",
+      streams: ["hygiene", "setup", "bootstrap", "sync", "audit", "docs"]
+    },
+    {
+      name: "enforcement",
+      streams: ["enforcement", "review", "gate", "gates", "ci", "release"]
+    },
+    {
+      name: "features",
+      streams: ["feature", "features", "core", "work", "default"]
+    }
+  ],
+  dashboard: {
+    enabled: true,
+    issueTitle: "DarkFactory L6 Orchestration Dashboard"
+  }
 };
-const STREAM_LEDGER_FILES = [
-  ".darkfactory/streams.json",
-  ".darkfactory/stream-ledgers.json",
-  ".darkfactory/stream-ledger.json",
-  ".darkfactory/ledger.json"
-];
-const STREAM_LEDGER_DIRS = [
-  ".darkfactory/streams",
-  ".darkfactory/ledgers"
-];
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
@@ -47,15 +60,21 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 }
 
 async function main() {
-  // The workflow supplies a GitHub App installation token here. The repository GITHUB_TOKEN
-  // cannot perform cross-repo issue writes for managed repositories.
+  // GITHUB_TOKEN cannot perform cross-repo issue writes or dispatch workers in
+  // every managed repository; the orchestrator must use the app installation token.
   const appInstallationToken = requiredEnv("DARK_FACTORY_TOKEN");
   const controlRepo = parseRepo(requiredEnv("DF_CONTROL_REPO"));
   const dataRepo = process.env.DF_DATA_REPO ?? DEFAULT_DATA_REPO;
   const trigger = process.env.DF_TRIGGER ?? "unknown";
+  const dispatchRequest = parseWorkflowDispatchRequest(
+    process.env.DF_TARGET_REPO,
+    process.env.DF_TARGET_ISSUE_NUMBER,
+    process.env.DF_SOURCE_EVENT,
+    console.warn
+  );
   const gh = createGithubClient(appInstallationToken, "darkfactory-orchestrate");
 
-  await orchestrate({ gh, controlRepo, dataRepo, trigger, root: CONTROL_ROOT });
+  await orchestrate({ gh, controlRepo, dataRepo, trigger, root: CONTROL_ROOT, dispatchRequest });
 }
 
 export async function orchestrate(options) {
@@ -67,224 +86,959 @@ export async function orchestrate(options) {
     root = CONTROL_ROOT,
     registry,
     repositories,
+    dispatchRequest: dispatchRequestInput,
+    policy: policyInput,
     writeLedger: shouldWriteLedger = true,
     updateDashboard: shouldUpdateDashboard = true,
-    limits = readLimitsFromEnv(),
     warn = console.warn,
     log = console.log
   } = options;
 
   assertAllowedRepo(controlRepo);
-  const targets = await targetRepositories(gh, controlRepo, { root, registry, repositories, warn });
-  const dispatched = [];
-  const actions = [];
-  const escalations = [];
-  const repoStates = [];
-  const activeCounts = newActiveCounts();
+  const isEventTrigger = trigger === "issue_comment" || trigger === "issues";
+  const eventRequest = parseEventRequest(process.env.GITHUB_EVENT_PAYLOAD || "", trigger, warn)
+    ?? normalizeDispatchRequest(dispatchRequestInput, warn)
+    ?? parseWorkflowDispatchRequest(
+      process.env.DF_TARGET_REPO,
+      process.env.DF_TARGET_ISSUE_NUMBER,
+      process.env.DF_SOURCE_EVENT,
+      warn
+    );
+  const policy = normalizeOrchestrationPolicy(policyInput ?? await readOrchestrationPolicy(root, warn));
+  let targets = [];
+  if (eventRequest) {
+    const activeTargets = await targetRepositories(gh, controlRepo, { root, registry, repositories, warn });
+    const activeEventTarget = activeTargets.find((target) => repoName(target) === repoName(eventRequest.repository));
+    if (activeEventTarget) {
+      targets = [activeEventTarget];
+      if (eventRequest.slashRun) {
+        await readySlashRunIssue(gh, activeEventTarget, eventRequest.issueNumber);
+      }
+    } else {
+      warn(`DarkFactory ignored event for unmanaged repository ${repoName(eventRequest.repository)}.`);
+    }
+  } else if (!isEventTrigger) {
+    targets = await targetRepositories(gh, controlRepo, { root, registry, repositories, warn });
+  }
+  const snapshots = [];
 
   for (const target of targets) {
     try {
-      assertAllowedRepo(target);
-      const state = await reconstructRepositoryState(gh, target, warn);
-      repoStates.push(state.brief);
-      addExistingActiveCounts(activeCounts, state);
-
-      const sequenceActions = await sequenceReadyIssues(gh, target, state);
-      actions.push(...sequenceActions);
-      applySequenceActionsToState(state, sequenceActions);
-
-      const escalationActions = await escalateOwnerOnlyBlockers(gh, target, state, controlRepo);
-      actions.push(...escalationActions);
-      escalations.push(...escalationActions.filter((action) => action.action === "ask-owner"));
-
-      const candidates = dispatchCandidates(state);
-      for (const candidate of candidates) {
-        if (!hasDispatchCapacity(activeCounts, target, candidate.streams, limits)) {
-          actions.push({
-            action: "defer-capacity",
-            repo: repoName(target),
-            issue: `#${candidate.issue.number}`,
-            streams: candidate.streams,
-            reason: "concurrency-cap"
-          });
-          continue;
-        }
-
-        try {
-          const dispatchResult = await dispatchWorker(gh, controlRepo, target, candidate.issue.number);
-          if (dispatchResult.dispatched) {
-            const dispatch = {
-              repo: repoName(target),
-              issue: candidate.issue.number,
-              streams: candidate.streams
-            };
-            dispatched.push(dispatch);
-            actions.push({ action: "dispatch-worker", ...dispatch });
-            incrementActiveCounts(activeCounts, target, candidate.streams);
-          } else if (dispatchResult.action) {
-            const action = { ...dispatchResult.action, streams: candidate.streams };
-            actions.push(action);
-            if (action.action === "ask-owner") escalations.push(action);
-          } else {
-            actions.push({
-              action: "worker-already-open",
-              repo: repoName(target),
-              issue: `#${candidate.issue.number}`,
-              streams: candidate.streams
-            });
-          }
-        } catch (error) {
-          if (warnReadOnlyRepository(target, error, "worker dispatch")) continue;
-          warn(`Failed to dispatch worker for ${repoName(target)}#${candidate.issue.number}: ${error.message || String(error)}`);
-          actions.push({
-            action: "dispatch-error",
-            repo: repoName(target),
-            issue: `#${candidate.issue.number}`,
-            error: error.message || String(error)
-          });
-        }
-      }
+      snapshots.push({ repository: target, openIssues: await listOpenIssues(gh, target) });
     } catch (error) {
       if (warnReadOnlyRepository(target, error, "orchestration")) continue;
-      warn(`Failed to orchestrate ${repoName(target)}: ${error.message || String(error)}`);
-      actions.push({ action: "repo-error", repo: repoName(target), error: error.message || String(error) });
+      warn(`Failed to inspect ${repoName(target)} for orchestration: ${error.message || String(error)}`);
     }
   }
 
-  const brief = synthesizeGlobalBrief(repoStates, actions, limits);
-  if (shouldUpdateDashboard) {
+  const scopedSnapshots = eventRequest
+    ? snapshots.map((snapshot) => ({
+      ...snapshot,
+      openIssues: (snapshot.openIssues || []).filter((issue) => issue.number === eventRequest.issueNumber)
+    }))
+    : snapshots;
+  const autoReadied = await autoReadySequencedIssues(gh, snapshots, warn, { targetIssue: eventRequest });
+  const escalated = await escalateOwnerDecisionIssues(gh, scopedSnapshots, warn);
+  const plan = buildOrchestrationPlan(scopedSnapshots, policy, { targetIssue: eventRequest });
+  const dispatched = [];
+
+  for (const candidate of plan.candidates) {
+    const target = candidate.repository;
+    const issue = candidate.issue;
     try {
-      const dashboard = await upsertDashboardDigest(gh, controlRepo, brief);
-      actions.push({ action: "dashboard", issue: dashboard.issue, result: dashboard.result });
+      const wasDispatched = await dispatchWorker(gh, controlRepo, target, issue.number);
+      if (wasDispatched) dispatched.push({
+        repo: repoName(target),
+        issue: issue.number,
+        wave: candidate.wave,
+        streams: candidate.streams
+      });
     } catch (error) {
-      warn(`DarkFactory dashboard warning: ${error.message || String(error)}`);
-      actions.push({ action: "dashboard-error", error: error.message || String(error) });
+      if (warnReadOnlyRepository(target, error, "worker dispatch")) continue;
+      warn(`Failed to dispatch worker for ${repoName(target)}#${issue.number}: ${error.message || String(error)}`);
     }
   }
 
   const ledger = {
     trigger,
     control_repo: repoName(controlRepo),
-    limits,
+    wave_order: policy.waves.map((wave) => wave.name),
+    concurrency: policy.concurrency,
+    repositories: plan.repositories,
     dispatched,
-    escalations: escalations.map((action) => ({
-      repo: action.repo,
-      issue: action.issue,
-      ask_owner_issue: action.ask_owner_issue,
-      reason: action.reason
-    })),
-    actions,
-    global_state_brief: brief,
+    auto_readied: autoReadied,
+    escalated,
     token_usage: {
       codex_calls: 0,
       input_tokens: 0,
       output_tokens: 0,
-      note: "L0 orchestrator tick is deterministic; AI escalation is represented by df:ask-owner issues"
+      note: "Orchestrator dispatch is deterministic and uses no model calls"
     }
   };
 
   if (shouldWriteLedger) {
     await writeLedger(gh, dataRepo, controlRepo, ledger, warn, log);
   }
-  log(`DarkFactory orchestrator dispatched ${dispatched.length} worker runs.`);
-  return { dispatched, ledger, brief };
+  if (shouldUpdateDashboard && policy.dashboard.enabled) {
+    await updateDashboardIssue(gh, controlRepo, policy, plan, dispatched, escalated, trigger, warn, log);
+  }
+  log(`DarkFactory orchestrator dispatched ${dispatched.length} worker runs and escalated ${escalated.length} owner decisions.`);
+  return { dispatched, autoReadied, escalated, ledger };
 }
 
 export async function targetRepositories(gh, controlRepo, options = {}) {
   return await listActiveManagedRepos(gh, controlRepo, options);
 }
 
-export async function reconstructRepositoryState(gh, repository, warn = console.warn) {
-  const repo = await getRepository(gh, repository);
-  const defaultBranch = repo.default_branch || "main";
-  const [issues, branch, prd, workflowRuns, openWorkerPullsByIssue, streamLedgers] = await Promise.all([
-    listIssues(gh, repository, "open"),
-    getDefaultBranchState(gh, repository, defaultBranch),
-    getPrdState(gh, repository, defaultBranch),
-    getRecentWorkflowRuns(gh, repository, defaultBranch, warn),
-    listOpenWorkerPullRequestsByIssue(gh, repository),
-    readStreamLedgers(gh, repository, defaultBranch, warn)
-  ]);
-  const issueStates = issues.map((issue) => normalizeIssueState(issue));
-  const issueByNumber = new Map(issueStates.map((issue) => [issue.number, issue]));
-  const referencedBlockers = [...new Set(issueStates.flatMap((issue) => issue.blockedBy))]
-    .filter((issueNumber) => !issueByNumber.has(issueNumber));
+export function parseEventRequest(payloadText, trigger = "unknown", warn = console.warn) {
+  if (!payloadText || (trigger !== "issue_comment" && trigger !== "issues")) return null;
 
-  for (const issueNumber of referencedBlockers) {
-    const blocker = await getIssueState(gh, repository, issueNumber, warn);
-    if (blocker) issueByNumber.set(issueNumber, blocker);
+  let payload;
+  try {
+    payload = JSON.parse(payloadText);
+  } catch (error) {
+    warn(`DarkFactory event payload warning: ${error.message || String(error)}`);
+    return null;
   }
 
-  const openWorkerIssues = [];
-  const runningIssues = issueStates.filter((issue) => issue.labels.has("df:running"));
-  const blockedIssues = issueStates.filter((issue) => issue.labels.has("df:blocked"));
-  const askOwnerIssues = issueStates.filter((issue) => issue.labels.has("df:ask-owner"));
+  const repository = payload.repository?.full_name ? parseRepo(payload.repository.full_name) : null;
+  const issueNumber = Number(payload.issue?.number);
+  if (!repository || !Number.isInteger(issueNumber) || issueNumber <= 0 || payload.issue?.pull_request) return null;
 
-  for (const issue of issueStates.filter(
-    (issue) =>
-      isManagedWorkIssue(issue) &&
-      issue.fixRound < 3 &&
-      (issue.labels.has("df:ready") || issue.labels.has("df:blocked"))
-  )) {
-    issue.blockedCommentCount += await countBlockedCommentsFromHistory(gh, repository, issue.number, warn);
+  if (trigger === "issue_comment") {
+    const commentBody = String(payload.comment?.body || "");
+    const trustedAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+    if (!/^\/df\s+run\b/im.test(commentBody) || !trustedAssociations.has(payload.comment?.author_association)) {
+      return null;
+    }
+    return {
+      repository,
+      issueNumber,
+      slashRun: true
+    };
   }
 
-  for (const issue of issueStates) {
-    if (!isManagedWorkIssue(issue)) continue;
-    const pull = openWorkerPullsByIssue.get(issue.number);
-    if (!pull) continue;
-    issue.openWorkerPull = pull;
-    openWorkerIssues.push({
-      issue: issue.number,
-      pull: pull.number || pull.url || "open",
-      branch: pull.headRefName || ""
-    });
-  }
-
-  const brief = {
-    repo: repoName(repository),
-    default_branch: defaultBranch,
-    git: {
-      branch: defaultBranch,
-      sha: branch.sha,
-      protected: branch.protected
-    },
-    ci: summarizeWorkflowRuns(workflowRuns),
-    prd: prd.exists ? { exists: true, sha: prd.sha, characters: prd.characters } : { exists: false },
-    stream_ledgers: streamLedgers,
-    backlog: {
-      total_open: issueStates.length,
-      ready: issueStates.filter((issue) => issue.labels.has("df:ready")).length,
-      running: runningIssues.length,
-      blocked: blockedIssues.length,
-      ask_owner: askOwnerIssues.length,
-      managed: issueStates.filter((issue) => isManagedWorkIssue(issue)).length
-    },
-    streams: summarizeStreams(issueStates),
-    open_blockers: blockedIssues.map((issue) => issueRef(issue)),
-    open_worker_prs: openWorkerIssues
-  };
-
+  if (payload.label?.name !== "df:ready") return null;
   return {
     repository,
-    repo,
-    defaultBranch,
-    issues: issueStates,
-    issueByNumber,
-    brief
+    issueNumber,
+    slashRun: false,
+    readyLabel: true
   };
 }
 
+export function parseWorkflowDispatchRequest(repoInput, issueNumberInput, sourceEventInput = "", warn = console.warn) {
+  const repoText = String(repoInput || "").trim();
+  const issueNumber = Number(String(issueNumberInput || "").trim());
+  if (!repoText && !issueNumberInput) return null;
+  if (!repoText || !Number.isInteger(issueNumber) || issueNumber <= 0) {
+    warn("DarkFactory workflow_dispatch scope ignored because repo or issue_number input is invalid.");
+    return null;
+  }
+
+  const sourceEvent = String(sourceEventInput || "").trim();
+  let repository;
+  try {
+    repository = parseRepo(repoText);
+  } catch (error) {
+    warn(`DarkFactory workflow_dispatch scope ignored: ${error.message || String(error)}`);
+    return null;
+  }
+
+  return {
+    repository,
+    issueNumber,
+    slashRun: sourceEvent === "issue_comment",
+    readyLabel: sourceEvent === "issues"
+  };
+}
+
+function normalizeDispatchRequest(request, warn = console.warn) {
+  if (!request) return null;
+  const repoText = request.repository ? repoName(request.repository) : request.repo;
+  const issueNumber = request.issueNumber ?? request.issue_number;
+  return parseWorkflowDispatchRequest(
+    repoText,
+    issueNumber,
+    request.sourceEvent ?? request.source_event ?? "",
+    warn
+  );
+}
+
+async function readySlashRunIssue(gh, repository, issueNumber) {
+  assertAllowedRepo(repository);
+  await ensureLabels(gh, repository, WORK_LABELS);
+  await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/labels`, { labels: ["df:ready"] });
+  await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/comments`, {
+    body: "DarkFactory received `/df run` and queued this issue with `df:ready`."
+  });
+}
+
 export async function listReadyIssues(gh, repository) {
-  const state = await reconstructRepositoryState(gh, repository);
-  return dispatchCandidates(state).map((candidate) => candidate.issue.raw);
+  return selectDispatchableIssues(await listOpenIssues(gh, repository));
+}
+
+export async function listOpenIssues(gh, repository) {
+  const issues = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const batch = await gh.request(
+      "GET",
+      `/repos/${repoName(repository)}/issues?state=open&per_page=100&page=${page}`
+    );
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    issues.push(...batch.filter((issue) => !issue.pull_request));
+    if (batch.length < 100) break;
+  }
+
+  return issues;
+}
+
+export function selectDispatchableIssues(openIssues, options = {}) {
+  const openIssueNumbers = new Set(openIssues.map((issue) => issue.number).filter(Number.isInteger));
+  const currentRepoName = options.repository ? normalizedRepoName(options.repository) : null;
+
+  return openIssues
+    .filter((issue) => {
+      const names = issueLabelNames(issue);
+      if (!names.has("df:ready")) return false;
+      if (names.has("df:running") || names.has("df:blocked") || names.has("df:done") || names.has("df:ask-owner")) return false;
+      return blockedByRefsResolved(issue, {
+        repository: options.repository,
+        currentRepoOpenIssueNumbers: openIssueNumbers,
+        openIssueIndex: options.openIssueIndex,
+        knownRepositories: options.knownRepositories,
+        currentRepoName
+      });
+    })
+    .sort(compareReadyIssues);
+}
+
+export async function autoReadySequencedIssues(gh, snapshots, warn = console.warn, options = {}) {
+  // Blocker resolution must always see the FULL open-issue state: a targeted
+  // (event-scoped) run may only consider one candidate issue, but its
+  // Blocked-by predecessors live in the unfiltered snapshots.
+  const openIssueIndex = buildOpenIssueIndex(snapshots);
+  const knownRepositories = buildKnownRepositories(snapshots);
+  const targetIssue = options.targetIssue || null;
+  const autoReadied = [];
+
+  for (const snapshot of snapshots) {
+    const repository = snapshot.repository;
+    const openIssues = Array.isArray(snapshot.openIssues) ? snapshot.openIssues : [];
+    const currentRepoName = normalizedRepoName(repository);
+    const currentRepoOpenIssueNumbers = new Set(openIssues.map((issue) => issue.number).filter(Number.isInteger));
+    const candidates = targetIssue
+      ? openIssues.filter((issue) =>
+        issue.number === targetIssue.issueNumber
+          && normalizedRepoName(targetIssue.repository) === currentRepoName)
+      : openIssues;
+
+    for (const issue of candidates) {
+      if (!shouldAutoReadySequencedIssue(issue, {
+        repository,
+        currentRepoOpenIssueNumbers,
+        openIssueIndex,
+        knownRepositories,
+        currentRepoName
+      })) continue;
+
+      try {
+        const escalation = repeatedFailureEscalation(await listIssueFailureHistory(gh, repository, issue.number));
+        if (escalation) continue;
+      } catch (error) {
+        if (warnReadOnlyRepository(repository, error, "failure-history scan", warn)) continue;
+        warn(`Failed to inspect failure history before auto-ready for ${repoName(repository)}#${issue.number}: ${error.message || String(error)}`);
+        continue;
+      }
+
+      try {
+        await replaceIssueLabels(gh, repository, issue.number, ["df:ready"], []);
+        setIssueLabelNames(issue, [...issueLabelNames(issue), "df:ready"]);
+        autoReadied.push({ repo: repoName(repository), issue: issue.number });
+      } catch (error) {
+        if (warnReadOnlyRepository(repository, error, "auto-ready sequencing", warn)) continue;
+        warn(`Failed to auto-ready sequenced issue ${repoName(repository)}#${issue.number}: ${error.message || String(error)}`);
+      }
+    }
+  }
+
+  return autoReadied;
+}
+
+export function shouldAutoReadySequencedIssue(issue, options = {}) {
+  const names = issueLabelNames(issue);
+  if (names.has("df:ready") || names.has("df:running") || names.has("df:blocked") || names.has("df:done") || names.has("df:ask-owner")) {
+    return false;
+  }
+  // Spec (#168): this pass is for Blocked-by successors ONLY — an issue with
+  // no Blocked-by references is never auto-readied here (planned/PRD backlog
+  // without dependencies is queued by planning, not by the orchestrator).
+  if (blockedByIssueRefs(issue.body || "", options.repository).length === 0) return false;
+  if (!hasPlanningSignal(issue)) return false;
+  return blockedByRefsResolved(issue, options);
+}
+
+function hasPlanningSignal(issue) {
+  const names = issueLabelNames(issue);
+  return names.has("df:planned")
+    || /\bdf-prd:/i.test(String(issue.body || ""))
+    || blockedByIssueRefs(issue.body || "").length > 0;
+}
+
+function blockedByRefsResolved(issue, options = {}) {
+  const refs = blockedByIssueRefs(issue.body || "", options.repository);
+  const currentRepoName = options.currentRepoName
+    ?? (options.repository ? normalizedRepoName(options.repository) : null);
+  const currentRepoOpenIssueNumbers = options.currentRepoOpenIssueNumbers
+    ?? new Set();
+
+  return refs.every((ref) => {
+    if (!Number.isInteger(ref.number)) return false;
+    if (ref.repository && ref.repository !== currentRepoName) {
+      // Cross-repo references only resolve as unblocked when the referenced
+      // repository is part of the managed snapshot set and the issue is
+      // positively observed as absent/closed there. Unknown repositories
+      // hold the issue so work is never dispatched past an unverified blocker.
+      if (!options.openIssueIndex || !options.knownRepositories?.has(ref.repository)) return false;
+      return !options.openIssueIndex.has(openIssueKey(ref.repository, ref.number));
+    }
+    return !currentRepoOpenIssueNumbers.has(ref.number);
+  });
+}
+
+export async function readOrchestrationPolicy(root = CONTROL_ROOT, warn = console.warn) {
+  try {
+    return await readLocalJson(path.join(root, ORCHESTRATION_POLICY_PATH), DEFAULT_ORCHESTRATION_POLICY);
+  } catch (error) {
+    warn(`DarkFactory orchestration policy warning: ${error.message || String(error)}`);
+    return DEFAULT_ORCHESTRATION_POLICY;
+  }
+}
+
+export function normalizeOrchestrationPolicy(policy = DEFAULT_ORCHESTRATION_POLICY) {
+  const source = policy && typeof policy === "object" ? policy : {};
+  const defaultPolicy = DEFAULT_ORCHESTRATION_POLICY;
+  const sourceConcurrency = source.concurrency && typeof source.concurrency === "object" ? source.concurrency : {};
+  const waves = Array.isArray(source.waves) && source.waves.length
+    ? source.waves
+    : defaultPolicy.waves;
+  const normalizedWaves = waves
+    .map((wave) => ({
+      name: String(wave?.name || "").trim().toLowerCase(),
+      streams: Array.isArray(wave?.streams)
+        ? wave.streams.map((stream) => String(stream).trim().toLowerCase()).filter(Boolean)
+        : []
+    }))
+    .filter((wave) => wave.name);
+
+  return {
+    schemaVersion: Number.isInteger(source.schemaVersion) ? source.schemaVersion : defaultPolicy.schemaVersion,
+    concurrency: {
+      global: positiveInteger(sourceConcurrency.global, defaultPolicy.concurrency.global),
+      perRepository: positiveInteger(sourceConcurrency.perRepository, defaultPolicy.concurrency.perRepository),
+      perStream: positiveInteger(sourceConcurrency.perStream, defaultPolicy.concurrency.perStream)
+    },
+    waves: normalizedWaves.length ? normalizedWaves : defaultPolicy.waves,
+    dashboard: {
+      enabled: source.dashboard?.enabled !== false,
+      issueTitle: String(source.dashboard?.issueTitle || defaultPolicy.dashboard.issueTitle).trim()
+        || defaultPolicy.dashboard.issueTitle
+    }
+  };
+}
+
+export function buildOrchestrationPlan(snapshots, policyInput = DEFAULT_ORCHESTRATION_POLICY, options = {}) {
+  const policy = normalizeOrchestrationPolicy(policyInput);
+  const counts = activeConcurrencyCounts(snapshots);
+  const gateWave = globalGateWave(snapshots, policy);
+  const targetIssue = options.targetIssue || null;
+  const openIssueIndex = buildOpenIssueIndex(snapshots);
+  const knownRepositories = buildKnownRepositories(snapshots);
+  const candidates = [];
+  const repositories = [];
+
+  for (const snapshot of snapshots) {
+    const repository = snapshot.repository;
+    const openIssues = Array.isArray(snapshot.openIssues) ? snapshot.openIssues : [];
+    const repositoryName = repoName(repository);
+    const repositoryWave = repositoryGateWave(openIssues, policy);
+    const selected = selectDispatchableIssues(openIssues, { repository, openIssueIndex, knownRepositories })
+      .map((issue) => ({
+        repository,
+        issue,
+        wave: issueWave(issue, policy),
+        waveRank: waveRank(issueWave(issue, policy), policy),
+        streams: issueStreamKeys(issue),
+        priority: priorityRank(issue)
+      }))
+      .filter((candidate) => !targetIssue || (
+        repoName(candidate.repository) === repoName(targetIssue.repository)
+        && candidate.issue.number === targetIssue.issueNumber
+      ))
+      .filter((candidate) => !gateWave || candidate.wave === gateWave);
+
+    candidates.push(...selected);
+    repositories.push({
+      repo: repositoryName,
+      gate_wave: gateWave || "none",
+      repository_gate_wave: repositoryWave || "none",
+      open_work: openIssues.filter(isWorkIssue).length,
+      ready: openIssues.filter((issue) => issueLabelNames(issue).has("df:ready")).length,
+      running: openIssues.filter((issue) => issueLabelNames(issue).has("df:running")).length,
+      blocked: openIssues.filter((issue) => issueLabelNames(issue).has("df:blocked")).length,
+      ask_owner: openIssues.filter((issue) => issueLabelNames(issue).has("df:ask-owner")).length,
+      dispatchable: selected.length
+    });
+  }
+
+  const planned = [];
+  for (const candidate of candidates.sort(comparePlanCandidates)) {
+    const repositoryKey = repoName(candidate.repository);
+    if (counts.global >= policy.concurrency.global) break;
+    if ((counts.byRepository.get(repositoryKey) || 0) >= policy.concurrency.perRepository) continue;
+    if (candidate.streams.some((stream) => (counts.byStream.get(stream) || 0) >= policy.concurrency.perStream)) continue;
+
+    planned.push(candidate);
+    counts.global += 1;
+    counts.byRepository.set(repositoryKey, (counts.byRepository.get(repositoryKey) || 0) + 1);
+    for (const stream of candidate.streams) counts.byStream.set(stream, (counts.byStream.get(stream) || 0) + 1);
+  }
+
+  return {
+    policy,
+    gate_wave: gateWave || "none",
+    candidates: planned,
+    repositories,
+    active: {
+      global: counts.initialGlobal,
+      byRepository: Object.fromEntries([...counts.initialByRepository.entries()].sort()),
+      byStream: Object.fromEntries([...counts.initialByStream.entries()].sort())
+    }
+  };
+}
+
+export function globalGateWave(snapshots, policyInput = DEFAULT_ORCHESTRATION_POLICY) {
+  const policy = normalizeOrchestrationPolicy(policyInput);
+  let gate = null;
+  for (const snapshot of snapshots) {
+    const wave = repositoryGateWave(Array.isArray(snapshot.openIssues) ? snapshot.openIssues : [], policy);
+    if (wave && (!gate || waveRank(wave, policy) < waveRank(gate, policy))) gate = wave;
+  }
+  return gate;
+}
+
+export function repositoryGateWave(openIssues, policyInput = DEFAULT_ORCHESTRATION_POLICY) {
+  const policy = normalizeOrchestrationPolicy(policyInput);
+  let gate = null;
+  for (const issue of openIssues.filter(isWaveGateIssue)) {
+    const wave = issueWave(issue, policy);
+    if (!gate || waveRank(wave, policy) < waveRank(gate, policy)) gate = wave;
+  }
+  return gate;
+}
+
+export function issueWave(issue, policyInput = DEFAULT_ORCHESTRATION_POLICY) {
+  const policy = normalizeOrchestrationPolicy(policyInput);
+  const names = issueLabelNames(issue);
+  const waveLabel = [...names].find((label) => /^wave:[^:\s]+$/i.test(label));
+  if (waveLabel) return waveLabel.slice("wave:".length).toLowerCase();
+
+  const streamsByWave = new Map();
+  for (const wave of policy.waves) {
+    for (const stream of wave.streams) streamsByWave.set(stream, wave.name);
+  }
+  for (const stream of issueStreamKeys(issue)) {
+    const wave = streamsByWave.get(stream);
+    if (wave) return wave;
+  }
+
+  const text = `${issue.title || ""}\n${issue.body || ""}`.toLowerCase();
+  if (/\b(hygiene|bootstrap|setup|managed setup|sync|audit|documentation|docs)\b/.test(text)) return "hygiene";
+  if (/\b(enforcement|review gate|codex review|branch protection|ci|release)\b/.test(text)) return "enforcement";
+  return "features";
+}
+
+async function escalateOwnerDecisionIssues(gh, snapshots, warn = console.warn) {
+  const escalated = [];
+  const knownRepositories = buildKnownRepositories(snapshots);
+
+  for (const snapshot of snapshots) {
+    const repository = snapshot.repository;
+    for (const issue of snapshot.openIssues || []) {
+      let escalation = ownerDecisionEscalation(issue, knownRepositories);
+      if (!escalation) {
+        try {
+          escalation = repeatedFailureEscalation(await listIssueFailureHistory(gh, repository, issue.number));
+        } catch (error) {
+          if (warnReadOnlyRepository(repository, error, "failure-history scan", warn)) continue;
+          warn(`Failed to inspect failure history for ${repoName(repository)}#${issue.number}: ${error.message || String(error)}`);
+        }
+      }
+      if (!escalation) continue;
+
+      try {
+        await ensureLabels(gh, repository, WORK_LABELS);
+        await replaceIssueLabels(
+          gh,
+          repository,
+          issue.number,
+          ["df:ask-owner", "df:blocked"],
+          ["df:ready", "df:running", "df:done"]
+        );
+        await createIssueComment(
+          gh,
+          repository,
+          issue.number,
+          askOwnerComment(repository, issue, escalation)
+        );
+        setIssueLabelNames(issue, [
+          ...issueLabelNames(issue),
+          "df:ask-owner",
+          "df:blocked"
+        ].filter((label) => !["df:ready", "df:running", "df:done"].includes(label)));
+        escalated.push({
+          repo: repoName(repository),
+          issue: issue.number,
+          reason: escalation.reason,
+          detail: escalation.detail
+        });
+      } catch (error) {
+        if (warnReadOnlyRepository(repository, error, "owner escalation", warn)) continue;
+        warn(`Failed to escalate owner decision for ${repoName(repository)}#${issue.number}: ${error.message || String(error)}`);
+      }
+    }
+  }
+
+  return escalated;
+}
+
+export function ownerDecisionEscalation(issue, knownRepositories = new Set()) {
+  const names = issueLabelNames(issue);
+  if (names.has("df:ask-owner") || names.has("df:done") || names.has("df:running")) return null;
+  if (!names.has("df:ready") && !names.has("df:blocked")) return null;
+
+  const priorityLabels = ["P0", "P1", "P2"].filter((label) => names.has(label));
+  if (priorityLabels.length > 1) {
+    return {
+      reason: "conflicting-priority-labels",
+      detail: `Issue has multiple priority labels: ${priorityLabels.join(", ")}.`
+    };
+  }
+
+  const waveLabels = [...names].filter((label) => /^wave:[^:\s]+$/i.test(label)).sort();
+  if (waveLabels.length > 1) {
+    return {
+      reason: "conflicting-wave-labels",
+      detail: `Issue has multiple wave labels: ${waveLabels.join(", ")}.`
+    };
+  }
+
+  const refs = blockedByIssueRefs(issue.body || "");
+  if (refs.some((ref) => !Number.isInteger(ref.number))) {
+    return {
+      reason: "ambiguous-blocked-by",
+      detail: "Blocked-by lines must reference GitHub issues as #123 or owner/repo#123."
+    };
+  }
+
+  const unknownCrossRepo = refs
+    .filter((ref) => Number.isInteger(ref.number) && ref.repository && !knownRepositories.has(ref.repository))
+    .map((ref) => ref.raw)
+    .filter(Boolean);
+  if (unknownCrossRepo.length) {
+    return {
+      reason: "unknown-cross-repo-blocked-by",
+      detail: `Blocked-by references repositories outside the managed snapshot set: ${unknownCrossRepo.join("; ")}. The orchestrator cannot verify these blockers, so owner input is required.`
+    };
+  }
+
+  return null;
+}
+
+export function repeatedFailureEscalation(history, threshold = REPEATED_FAILURE_THRESHOLD) {
+  const evidence = repeatedFailureEvidenceSinceReset(history);
+  if (evidence.count < threshold) return null;
+
+  return {
+    reason: "repeated-worker-failure",
+    detail: [
+      `Issue has ${evidence.count} worker failure evidence item(s) since the most recent owner reset.`,
+      evidence.resetAt ? `Reset point: ${evidence.resetAt}.` : "No owner reset was found after the previous failure batch.",
+      "Owner input is required before DarkFactory spends another worker run."
+    ].join(" ")
+  };
+}
+
+export function repeatedFailureEvidenceSinceReset(history = {}) {
+  const events = [
+    ...failureEvidenceItems(history.comments || []),
+    ...failureLabelEvidenceItems(history.timeline || []),
+    ...readyRelabelEvents(history.timeline || [])
+  ].sort(compareHistoryItems);
+
+  let resetAt = null;
+  let seenFailureBeforeReady = false;
+  for (const event of events) {
+    if (event.kind === "failure") {
+      seenFailureBeforeReady = true;
+      continue;
+    }
+    if (event.kind === "ready" && seenFailureBeforeReady) {
+      resetAt = event.createdAt;
+    }
+  }
+
+  const count = events.filter((event) => {
+    return event.kind === "failure" && (!resetAt || Date.parse(event.createdAt) > Date.parse(resetAt));
+  }).length;
+
+  return { count, resetAt };
+}
+
+function failureEvidenceItems(items) {
+  return items
+    .filter((item) => historyTimestamp(item) && isRepeatedFailureEvidence(item))
+    .map((item) => ({ kind: "failure", createdAt: historyTimestamp(item) }));
+}
+
+function failureLabelEvidenceItems(items) {
+  return items
+    .filter((item) => historyTimestamp(item) && item?.event === "labeled" && /^df:fix-round:\d+$/i.test(labelName(item)))
+    .map((item) => ({ kind: "failure", createdAt: historyTimestamp(item) }));
+}
+
+function readyRelabelEvents(items) {
+  return items
+    .filter((item) => historyTimestamp(item) && item?.event === "labeled" && labelName(item) === "df:ready")
+    .map((item) => ({ kind: "ready", createdAt: historyTimestamp(item) }));
+}
+
+function isRepeatedFailureEvidence(item) {
+  const body = String(item?.body || "");
+  return (
+    /\bdf:fix-round:\d+\b/i.test(body)
+    || /DarkFactory worker blocked\./i.test(body)
+    || /DarkFactory follow-through blocked this worker PR\./i.test(body)
+    || /dark-factory:sweep-blocked/i.test(body)
+  );
+}
+
+function labelName(item) {
+  return String(item?.label?.name || item?.label || "").toLowerCase();
+}
+
+function historyTimestamp(item) {
+  const timestamp = item?.created_at || item?.createdAt;
+  return Number.isFinite(Date.parse(timestamp || "")) ? new Date(timestamp).toISOString() : "";
+}
+
+function compareHistoryItems(a, b) {
+  return Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.kind === "failure" ? -1 : 1);
+}
+
+async function listIssueFailureHistory(gh, repository, issueNumber) {
+  const [comments, timeline] = await Promise.all([
+    listIssueComments(gh, repository, issueNumber),
+    listIssueTimeline(gh, repository, issueNumber)
+  ]);
+  return { comments, timeline };
+}
+
+async function listIssueComments(gh, repository, issueNumber) {
+  const comments = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const batch = await gh.request(
+      "GET",
+      `/repos/${repoName(repository)}/issues/${issueNumber}/comments?per_page=100&page=${page}`
+    );
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    comments.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return comments;
+}
+
+async function listIssueTimeline(gh, repository, issueNumber) {
+  const events = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const batch = await gh.request(
+      "GET",
+      `/repos/${repoName(repository)}/issues/${issueNumber}/timeline?per_page=100&page=${page}`
+    );
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    events.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return events;
+}
+
+function askOwnerComment(repository, issue, escalation) {
+  return [
+    `<!-- ${ASK_OWNER_MARKER} issue=${issue.number} reason=${escalation.reason} -->`,
+    "DarkFactory orchestrator needs owner input before this issue can continue.",
+    "",
+    `Issue: \`${repoName(repository)}#${issue.number}\``,
+    `Reason: \`${escalation.reason}\``,
+    "",
+    "Detail:",
+    "",
+    escalation.detail,
+    "",
+    "The orchestrator applied `df:ask-owner` and `df:blocked`, and removed runnable worker-state labels so no terminal session is needed to hold this decision."
+  ].join("\n");
+}
+
+async function updateDashboardIssue(gh, controlRepo, policy, plan, dispatched, escalated, trigger, warn = console.warn, log = console.log) {
+  try {
+    await ensureLabels(gh, controlRepo, PLANNING_LABELS);
+    const title = policy.dashboard.issueTitle;
+    const body = dashboardIssueBody(policy, plan, dispatched, escalated, trigger);
+    const existing = await findDashboardIssue(gh, controlRepo);
+    if (existing) {
+      await gh.request("PATCH", `/repos/${repoName(controlRepo)}/issues/${existing.number}`, { title, body });
+      log(`DarkFactory dashboard updated at ${repoName(controlRepo)}#${existing.number}`);
+      return { action: "update", issue: existing.number };
+    }
+
+    const created = await gh.request("POST", `/repos/${repoName(controlRepo)}/issues`, {
+      title,
+      body,
+      labels: ["roadmap"]
+    });
+    log(`DarkFactory dashboard created at ${repoName(controlRepo)}#${created.number}`);
+    return { action: "create", issue: created.number };
+  } catch (error) {
+    warn(`DarkFactory dashboard warning: ${error.message || String(error)}`);
+    return { action: "warning", warning: error.message || String(error) };
+  }
+}
+
+async function findDashboardIssue(gh, controlRepo) {
+  for (let page = 1; page <= 10; page += 1) {
+    const issues = await gh.request(
+      "GET",
+      `/repos/${repoName(controlRepo)}/issues?state=open&per_page=100&page=${page}`
+    );
+    if (!Array.isArray(issues) || issues.length === 0) break;
+    const found = issues.find((issue) => !issue.pull_request && String(issue.body || "").includes(DASHBOARD_MARKER));
+    if (found) return found;
+    if (issues.length < 100) break;
+  }
+  return null;
+}
+
+function dashboardIssueBody(policy, plan, dispatched, escalated, trigger) {
+  const updatedAt = new Date().toISOString();
+  const rows = plan.repositories.length
+    ? plan.repositories.map((state) => {
+      const dispatchedCount = dispatched.filter((item) => item.repo === state.repo).length;
+      return `| \`${state.repo}\` | ${state.gate_wave} | ${state.open_work} | ${state.ready} | ${state.running} | ${state.blocked} | ${state.ask_owner} | ${state.dispatchable} | ${dispatchedCount} |`;
+    }).join("\n")
+    : "| _none_ | none | 0 | 0 | 0 | 0 | 0 | 0 | 0 |";
+  const dispatchRows = dispatched.length
+    ? dispatched.map((item) => `- \`${item.repo}#${item.issue}\` (${item.wave}; ${item.streams.join(", ")})`).join("\n")
+    : "- No worker dispatches in this tick.";
+  const escalationRows = escalated.length
+    ? escalated.map((item) => `- \`${item.repo}#${item.issue}\` (${item.reason})`).join("\n")
+    : "- No owner escalations in this tick.";
+
+  return [
+    `<!-- ${DASHBOARD_MARKER} -->`,
+    "# DarkFactory L6 Orchestration Dashboard",
+    "",
+    `Updated: \`${updatedAt}\``,
+    `Trigger: \`${trigger}\``,
+    "",
+    "## Wave Gates",
+    "",
+    `Order: ${policy.waves.map((wave) => `\`${wave.name}\``).join(" -> ")}`,
+    `Current global gate: \`${plan.gate_wave}\``,
+    "",
+    "## Concurrency",
+    "",
+    `- Global active workers: \`${plan.active.global}/${policy.concurrency.global}\``,
+    `- Per-repository cap: \`${policy.concurrency.perRepository}\``,
+    `- Per-stream cap: \`${policy.concurrency.perStream}\``,
+    "",
+    "## Repositories",
+    "",
+    "| Repository | Gate | Open work | Ready | Running | Blocked | Ask owner | Dispatchable | Dispatched |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    rows,
+    "",
+    "## Dispatches",
+    "",
+    dispatchRows,
+    "",
+    "## Owner Escalations",
+    "",
+    escalationRows,
+    "",
+    "## Notes",
+    "",
+    "- Cross-repo waves, stream lanes, and concurrency caps are deterministic; AI tokens: 0.",
+    "- Harness migration path: this GitHub-native scheduler state becomes harness scheduler input when L0/L6 move onto the harness runtime."
+  ].join("\n");
+}
+
+export function compareReadyIssues(a, b) {
+  return priorityRank(a) - priorityRank(b) || a.number - b.number;
+}
+
+export function priorityRank(issue) {
+  const names = issueLabelNames(issue);
+  if (names.has("P0")) return 0;
+  if (names.has("P1")) return 1;
+  if (names.has("P2")) return 2;
+  return 3;
+}
+
+export function issueStreamLanes(issue) {
+  const streamLabels = [...issueLabelNames(issue)]
+    .filter((label) => /^stream:[^:\s]+$/i.test(label))
+    .sort((a, b) => a.localeCompare(b));
+  return streamLabels.length ? streamLabels : ["stream:default"];
+}
+
+function issueStreamKeys(issue) {
+  return issueStreamLanes(issue).map((lane) => lane.slice("stream:".length).toLowerCase());
+}
+
+export function blockedByIssueNumbers(body) {
+  return blockedByIssueRefs(body).map((ref) => ref.number);
+}
+
+export function blockedByIssueRefs(body, currentRepository = null) {
+  const refs = [];
+  for (const line of String(body || "").split(/\r?\n/)) {
+    const match = line.match(/^\s*Blocked-by:\s*(.+)$/i);
+    if (!match) continue;
+
+    const found = [...match[1].matchAll(/(?:(?<owner>[\w.-]+)\/(?<repo>[\w.-]+))?#(?<number>\d+)/g)];
+    if (found.length === 0) {
+      refs.push({ repository: null, number: Number.NaN, raw: match[1].trim() });
+      continue;
+    }
+
+    // A Blocked-by payload must contain nothing but issue references and
+    // separators. Leftover text (e.g. "Blocked-by: #12 or ask owner") makes
+    // the line ambiguous, so a malformed marker is emitted alongside the
+    // parsed refs and the issue escalates instead of dispatching on a
+    // partially-parsed dependency line.
+    const residue = match[1]
+      .replace(/(?:[\w.-]+\/[\w.-]+)?#\d+/g, "")
+      .replace(/[,\s]+/g, "");
+    if (residue) {
+      refs.push({ repository: null, number: Number.NaN, raw: match[1].trim() });
+    }
+
+    refs.push(...found.map((entry) => ({
+      repository: entry.groups?.owner
+        ? `${entry.groups.owner.toLowerCase()}/${entry.groups.repo.toLowerCase()}`
+        : currentRepository
+          ? normalizedRepoName(currentRepository)
+          : null,
+      number: Number(entry.groups?.number),
+      raw: entry[0]
+    })));
+  }
+  return refs;
+}
+
+function buildOpenIssueIndex(snapshots) {
+  const index = new Set();
+  for (const snapshot of snapshots) {
+    for (const issue of snapshot.openIssues || []) {
+      if (Number.isInteger(issue.number)) {
+        index.add(openIssueKey(repoName(snapshot.repository), issue.number));
+      }
+    }
+  }
+  return index;
+}
+
+function buildKnownRepositories(snapshots) {
+  const repositories = new Set();
+  for (const snapshot of snapshots) {
+    repositories.add(normalizedRepoName(snapshot.repository));
+  }
+  return repositories;
+}
+
+function openIssueKey(repositoryName, issueNumber) {
+  return `${String(repositoryName).toLowerCase()}#${issueNumber}`;
+}
+
+function issueLabelNames(issue) {
+  return new Set(
+    (issue.labels || []).map((label) => (typeof label === "string" ? label : label?.name)).filter(Boolean)
+  );
+}
+
+function setIssueLabelNames(issue, labels) {
+  issue.labels = [...new Set(labels)].sort((a, b) => a.localeCompare(b)).map((name) => ({ name }));
+}
+
+function isWorkIssue(issue) {
+  const names = issueLabelNames(issue);
+  return [...names].some((label) => label.startsWith("df:") || label === "roadmap");
+}
+
+function isWaveGateIssue(issue) {
+  const names = issueLabelNames(issue);
+  if (names.has("df:done") || names.has("df:ask-owner") || names.has("df:blocked")) return false;
+  return isWorkIssue(issue);
+}
+
+function activeConcurrencyCounts(snapshots) {
+  const byRepository = new Map();
+  const byStream = new Map();
+  let global = 0;
+
+  for (const snapshot of snapshots) {
+    const repositoryKey = repoName(snapshot.repository);
+    for (const issue of (snapshot.openIssues || [])) {
+      if (!issueLabelNames(issue).has("df:running")) continue;
+      global += 1;
+      byRepository.set(repositoryKey, (byRepository.get(repositoryKey) || 0) + 1);
+      for (const stream of issueStreamKeys(issue)) {
+        byStream.set(stream, (byStream.get(stream) || 0) + 1);
+      }
+    }
+  }
+
+  return {
+    global,
+    byRepository,
+    byStream,
+    initialGlobal: global,
+    initialByRepository: new Map(byRepository),
+    initialByStream: new Map(byStream)
+  };
+}
+
+function comparePlanCandidates(a, b) {
+  return a.waveRank - b.waveRank
+    || a.priority - b.priority
+    || repoName(a.repository).localeCompare(repoName(b.repository))
+    || a.issue.number - b.issue.number;
+}
+
+function waveRank(name, policy) {
+  const index = policy.waves.findIndex((wave) => wave.name === name);
+  return index === -1 ? policy.waves.length : index;
+}
+
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : fallback;
 }
 
 export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
   const existingPullRequest = await findOpenWorkerPullRequestForIssue(gh, repository, issueNumber);
   if (existingPullRequest) {
     await replaceIssueLabels(gh, repository, issueNumber, ["df:running"], ["df:ready"]);
-    return { dispatched: false, reason: "existing-worker-pr" };
+    return false;
   }
 
   const repo = await getRepository(gh, repository);
@@ -292,26 +1046,7 @@ export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
   const mergePolicy = await preflightMergePolicy(gh, repository, workBaseBranch, repo);
   if (mergePolicy.blocked) {
     await blockIssueBeforeDispatch(gh, repository, issueNumber, workBaseBranch, mergePolicy);
-    const ask = await ensureAskOwnerIssue(gh, repository, issueNumber, {
-      reason: "merge-policy-blocked",
-      title: "Enable auto-merge for protected DarkFactory worker dispatch",
-      details: [
-        mergePolicy.reason,
-        `Target branch: \`${workBaseBranch}\``,
-        `Repository auto-merge enabled: \`${mergePolicy.autoMergeSupported ? "yes" : "no"}\``
-      ]
-    });
-    return {
-      dispatched: false,
-      action: {
-        action: "ask-owner",
-        repo: repoName(repository),
-        issue: `#${issueNumber}`,
-        ask_owner_issue: ask.issue,
-        result: ask.result,
-        reason: "merge-policy-blocked"
-      }
-    };
+    return false;
   }
 
   // Claim the issue before dispatch so a subsequent orchestrator tick cannot
@@ -331,684 +1066,7 @@ export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
     await replaceIssueLabels(gh, repository, issueNumber, ["df:ready"], ["df:running"]);
     throw error;
   }
-  return { dispatched: true };
-}
-
-export function extractBlockedBy(body) {
-  const blockers = new Set();
-  const matches = body?.matchAll(/^\s*Blocked[-\s]*by:\s*(.+)$/gim) ?? [];
-  for (const match of matches) {
-    const refs = match[1].matchAll(/#(\d+)\b/g);
-    for (const ref of refs) blockers.add(Number(ref[1]));
-  }
-  return [...blockers].filter((number) => Number.isInteger(number) && number > 0).sort((a, b) => a - b);
-}
-
-export function dispatchCandidates(state) {
-  return state.issues
-    .filter((issue) => {
-      if (!isManagedWorkIssue(issue)) return false;
-      if (!issue.labels.has("df:ready")) return false;
-      if (issue.labels.has("df:running") || issue.labels.has("df:blocked") || issue.labels.has("df:done")) return false;
-      if (issue.labels.has("df:ask-owner")) return false;
-      if (issue.openWorkerPull) return false;
-      return blockersAreClosed(issue, state.issueByNumber);
-    })
-    .map((issue) => ({
-      issue,
-      streams: issue.streams.length ? issue.streams : ["default"]
-    }))
-    .sort(compareCandidates);
-}
-
-async function sequenceReadyIssues(gh, repository, state) {
-  const actions = [];
-  for (const issue of state.issues.filter((candidate) => isManagedWorkIssue(candidate))) {
-    if (issue.labels.has("df:done") || issue.labels.has("df:running") || issue.labels.has("df:ask-owner")) continue;
-
-    if (issue.openWorkerPull && issue.labels.has("df:ready")) {
-      await replaceIssueLabels(gh, repository, issue.number, ["df:running"], ["df:ready"]);
-      actions.push({
-        action: "mark-running-existing-pr",
-        repo: repoName(repository),
-        issue: `#${issue.number}`,
-        pull: issue.openWorkerPull.number || issue.openWorkerPull.url || "open"
-      });
-      continue;
-    }
-
-    const blockersClosed = blockersAreClosed(issue, state.issueByNumber);
-    if (blockersClosed && issue.labels.has("df:blocked") && isDependencyOnlyBlocked(issue)) {
-      await replaceIssueLabels(gh, repository, issue.number, ["df:ready"], ["df:blocked", "df:done"]);
-      actions.push({ action: "requeue-unblocked", repo: repoName(repository), issue: `#${issue.number}` });
-      continue;
-    }
-
-    if (blockersClosed && !issue.labels.has("df:ready") && !issue.labels.has("df:blocked") && issue.blockedBy.length > 0) {
-      await replaceIssueLabels(gh, repository, issue.number, ["df:ready"], ["df:done"]);
-      actions.push({ action: "mark-ready", repo: repoName(repository), issue: `#${issue.number}` });
-      continue;
-    }
-
-    if (!blockersClosed && issue.labels.has("df:ready")) {
-      await replaceIssueLabels(gh, repository, issue.number, ["df:blocked"], ["df:ready"]);
-      actions.push({
-        action: "remove-ready-blocked-by",
-        repo: repoName(repository),
-        issue: `#${issue.number}`,
-        blockers: openBlockers(issue, state.issueByNumber).map((blocker) => `#${blocker.number}`)
-      });
-    }
-  }
-  return actions;
-}
-
-async function escalateOwnerOnlyBlockers(gh, repository, state, controlRepo) {
-  const actions = [];
-  for (const issue of state.issues) {
-    if (!isManagedWorkIssue(issue)) continue;
-    if (issue.labels.has("df:ask-owner")) continue;
-
-    const repeatedWorkerFailure = issue.fixRound >= 3 || issue.blockedCommentCount >= 3;
-    if (!repeatedWorkerFailure) continue;
-
-    await markSourceIssueAskOwner(gh, repository, issue);
-    const ask = await ensureAskOwnerIssue(gh, repository, issue.number, {
-      reason: "repeated-worker-failure",
-      title: "Resolve repeated DarkFactory worker failure",
-      details: [
-        `DarkFactory found repeated worker failures for ${repoName(repository)}#${issue.number}.`,
-        "Owner input is required before L0 should keep spending worker cycles on this lane.",
-        `Control repository: \`${repoName(controlRepo)}\``
-      ]
-    });
-    actions.push({
-      action: "ask-owner",
-      repo: repoName(repository),
-      issue: `#${issue.number}`,
-      ask_owner_issue: ask.issue,
-      result: ask.result,
-      reason: "repeated-worker-failure"
-    });
-  }
-  return actions;
-}
-
-async function markSourceIssueAskOwner(gh, repository, issue) {
-  await ensureLabels(gh, repository, WORK_LABELS);
-  await replaceIssueLabels(gh, repository, issue.number, ["df:ask-owner", "df:blocked"], ["df:ready"]);
-  issue.labels.add("df:ask-owner");
-  issue.labels.add("df:blocked");
-  issue.labels.delete("df:ready");
-}
-
-async function ensureAskOwnerIssue(gh, repository, sourceIssueNumber, request) {
-  await ensureLabels(gh, repository, WORK_LABELS);
-  const marker = `${ASK_OWNER_MARKER_PREFIX} repo=${repoName(repository)} issue=${sourceIssueNumber} reason=${request.reason} -->`;
-  const existing = await findOpenIssueByMarker(gh, repository, marker);
-  const body = [
-    marker,
-    `DarkFactory needs owner input for ${repoName(repository)}#${sourceIssueNumber}.`,
-    "",
-    "## Question",
-    "",
-    request.title,
-    "",
-    "## Context",
-    "",
-    ...request.details.map((detail) => `- ${detail}`),
-    "",
-    "## Acceptance Criteria",
-    "",
-    "- Owner answers this question or changes repository policy/state so DarkFactory can continue.",
-    "- Remove `df:ask-owner` from this issue after the decision is captured in GitHub."
-  ].join("\n");
-
-  if (existing) {
-    await gh.request("PATCH", `/repos/${repoName(repository)}/issues/${existing.number}`, {
-      title: `DarkFactory owner decision: ${request.title}`,
-      body
-    });
-    return { issue: `#${existing.number}`, result: "updated" };
-  }
-
-  const created = await gh.request("POST", `/repos/${repoName(repository)}/issues`, {
-    title: `DarkFactory owner decision: ${request.title}`,
-    body,
-    labels: ["df:ask-owner"]
-  });
-  return { issue: `#${created.number}`, result: "created" };
-}
-
-async function upsertDashboardDigest(gh, controlRepo, brief) {
-  const existing = await findOpenIssueByMarker(gh, controlRepo, DASHBOARD_MARKER);
-  const body = [
-    DASHBOARD_MARKER,
-    "DarkFactory L0 orchestrator dashboard.",
-    "",
-    "```text",
-    brief,
-    "```"
-  ].join("\n");
-
-  if (existing) {
-    const updated = await gh.request("PATCH", `/repos/${repoName(controlRepo)}/issues/${existing.number}`, {
-      title: "DarkFactory Orchestrator Dashboard",
-      body
-    });
-    return { issue: `#${updated.number ?? existing.number}`, result: "updated" };
-  }
-
-  const created = await gh.request("POST", `/repos/${repoName(controlRepo)}/issues`, {
-    title: "DarkFactory Orchestrator Dashboard",
-    body
-  });
-  return { issue: `#${created.number}`, result: "created" };
-}
-
-async function findOpenIssueByMarker(gh, repository, marker) {
-  for (let page = 1; page <= 20; page += 1) {
-    const batch = await gh.request(
-      "GET",
-      `/repos/${repoName(repository)}/issues?state=open&per_page=100&page=${page}`
-    );
-    if (!Array.isArray(batch) || batch.length === 0) break;
-    const match = batch.find((issue) => !issue.pull_request && String(issue.body || "").includes(marker));
-    if (match) return match;
-    if (batch.length < 100) break;
-  }
-  return null;
-}
-
-async function listOpenWorkerPullRequestsByIssue(gh, repository) {
-  const query = `
-    query WorkerBranchPulls($owner: String!, $repo: String!, $cursor: String) {
-      repository(owner: $owner, name: $repo) {
-        pullRequests(states: OPEN, first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          nodes {
-            number
-            title
-            body
-            url
-            headRefName
-            headRepository {
-              name
-              owner { login }
-            }
-            author { login }
-          }
-        }
-      }
-    }`;
-  const pullsByIssue = new Map();
-  let cursor = null;
-
-  for (let page = 1; page <= 20; page += 1) {
-    const data = await gh.graphql(query, { owner: repository.owner, repo: repository.repo, cursor });
-    const connection = data.repository.pullRequests;
-    for (const pull of connection.nodes) {
-      const sameRepositoryHead = pull.headRepository?.owner?.login === repository.owner && pull.headRepository?.name === repository.repo;
-      const markerIssue = darkFactoryWorkerIssueNumber(pull);
-      const branchIssue = Number(pull.headRefName?.match(/^df\/(\d+)-/)?.[1]);
-      const issue = markerIssue > 0 ? markerIssue : branchIssue;
-      if (!sameRepositoryHead || !Number.isInteger(issue) || issue <= 0) continue;
-      if (!pullsByIssue.has(issue)) pullsByIssue.set(issue, pull);
-    }
-
-    if (!connection.pageInfo?.hasNextPage) break;
-    cursor = connection.pageInfo.endCursor;
-  }
-
-  return pullsByIssue;
-}
-
-function synthesizeGlobalBrief(repoStates, actions, limits) {
-  const totals = repoStates.reduce((sum, state) => {
-    sum.ready += state.backlog.ready;
-    sum.running += state.backlog.running;
-    sum.blocked += state.backlog.blocked;
-    sum.askOwner += state.backlog.ask_owner;
-    sum.managed += state.backlog.managed;
-    return sum;
-  }, { ready: 0, running: 0, blocked: 0, askOwner: 0, managed: 0 });
-  const lines = [];
-
-  lines.push(`Generated: ${new Date().toISOString()}`);
-  lines.push(`Repos assessed: ${repoStates.length}`);
-  lines.push(`Concurrency caps: global=${limits.global} per-repo=${limits.perRepo} per-stream=${limits.perStream}`);
-  lines.push(`Backlog: managed=${totals.managed} ready=${totals.ready} running=${totals.running} blocked=${totals.blocked} ask-owner=${totals.askOwner}`);
-  lines.push("");
-  lines.push("Repositories:");
-  for (const state of repoStates) {
-    lines.push(
-      `- ${state.repo}: ${state.git.branch}@${state.git.sha || "unknown"} ci=${state.ci.latest || "unknown"} prd=${state.prd.exists ? "present" : "missing"} ready=${state.backlog.ready} running=${state.backlog.running} blocked=${state.backlog.blocked} ask-owner=${state.backlog.ask_owner}`
-    );
-    const streams = Object.entries(state.streams)
-      .map(([stream, counts]) => `${stream}:ready=${counts.ready},running=${counts.running},blocked=${counts.blocked}`)
-      .join("; ");
-    if (streams) lines.push(`  streams: ${streams}`);
-    if (state.stream_ledgers.files.length) {
-      const latest = state.stream_ledgers.latest ? ` latest=${state.stream_ledgers.latest}` : "";
-      lines.push(`  stream ledgers: files=${state.stream_ledgers.files.length} entries=${state.stream_ledgers.entries}${latest}`);
-    }
-    if (state.open_blockers.length) lines.push(`  blockers: ${state.open_blockers.join(", ")}`);
-  }
-  lines.push("");
-  lines.push("Actions:");
-  if (actions.length === 0) {
-    lines.push("- no changes");
-  } else {
-    for (const action of actions.slice(0, 80)) {
-      lines.push(`- ${formatAction(action)}`);
-    }
-    if (actions.length > 80) lines.push(`- ... ${actions.length - 80} more actions`);
-  }
-  lines.push("");
-  lines.push("Token use: 0 model calls; this L0 tick used deterministic GitHub state reconstruction.");
-  lines.push("Harness migration: this state machine can move behind the harness scheduler without changing GitHub as the source of truth.");
-  return lines.join("\n");
-}
-
-function formatAction(action) {
-  const repo = action.repo ? `${action.repo} ` : "";
-  const issue = action.issue ? `${action.issue} ` : "";
-  const reason = action.reason ? ` (${action.reason})` : "";
-  const result = action.result ? ` result=${action.result}` : "";
-  return `${repo}${issue}${action.action}${reason}${result}`.trim();
-}
-
-function normalizeIssueState(issue) {
-  const labels = new Set((issue.labels || []).map((label) => typeof label === "string" ? label : label?.name).filter(Boolean));
-  const body = issue.body || "";
-  const streams = [...labels]
-    .filter((label) => label.startsWith("stream:"))
-    .map((label) => label.slice("stream:".length) || "default")
-    .sort();
-  return {
-    raw: issue,
-    number: issue.number,
-    title: issue.title || `Issue #${issue.number}`,
-    body,
-    labels,
-    streams,
-    priority: issuePriority(labels),
-    blockedBy: extractBlockedBy(body),
-    fixRound: maxFixRound(labels, body),
-    blockedCommentCount: countWorkerBlockedComments(body),
-    state: issue.state || "open"
-  };
-}
-
-async function readStreamLedgers(gh, repository, ref, warn = console.warn) {
-  const files = [];
-  const seen = new Set();
-
-  for (const filePath of STREAM_LEDGER_FILES) {
-    const content = await readOptionalLedgerFile(gh, repository, filePath, ref, warn);
-    if (content === null) continue;
-    files.push(summarizeLedgerContent(filePath, content));
-    seen.add(filePath);
-  }
-
-  for (const dirPath of STREAM_LEDGER_DIRS) {
-    const entries = await listOptionalContentDirectory(gh, repository, dirPath, ref, warn);
-    for (const entry of entries) {
-      if (entry?.type !== "file" || typeof entry.path !== "string") continue;
-      if (!/\.(json|jsonl|md|markdown)$/i.test(entry.path)) continue;
-      if (seen.has(entry.path)) continue;
-      const content = await readOptionalLedgerFile(gh, repository, entry.path, ref, warn);
-      if (content === null) continue;
-      files.push(summarizeLedgerContent(entry.path, content));
-      seen.add(entry.path);
-    }
-  }
-
-  const latest = files.map((file) => file.latest).filter(Boolean).sort().at(-1) ?? null;
-  return {
-    files,
-    entries: files.reduce((sum, file) => sum + file.entries, 0),
-    latest
-  };
-}
-
-async function readOptionalLedgerFile(gh, repository, filePath, ref, warn) {
-  try {
-    return await getOptionalFileContent(gh, repository, filePath, ref);
-  } catch (error) {
-    warn(`DarkFactory stream ledger warning for ${repoName(repository)}:${filePath}: ${error.message || String(error)}`);
-    return null;
-  }
-}
-
-async function listOptionalContentDirectory(gh, repository, dirPath, ref, warn) {
-  try {
-    const suffix = ref ? `?ref=${encodeURIComponent(ref)}` : "";
-    const data = await gh.request("GET", `/repos/${repoName(repository)}/contents/${encodeContentPath(dirPath)}${suffix}`);
-    return Array.isArray(data) ? data : [];
-  } catch (error) {
-    if (error.status === 404) return [];
-    warn(`DarkFactory stream ledger directory warning for ${repoName(repository)}:${dirPath}: ${error.message || String(error)}`);
-    return [];
-  }
-}
-
-function summarizeLedgerContent(filePath, content) {
-  const bytes = Buffer.byteLength(content, "utf8");
-  const trimmed = content.trim();
-  if (!trimmed) return { path: filePath, format: ledgerFormat(filePath), entries: 0, latest: null, bytes };
-
-  if (/\.json$/i.test(filePath)) {
-    try {
-      return summarizeJsonLedger(filePath, JSON.parse(trimmed), bytes);
-    } catch {
-      return { path: filePath, format: "json", entries: 1, latest: null, bytes };
-    }
-  }
-
-  if (/\.jsonl$/i.test(filePath)) {
-    const rows = trimmed.split("\n").filter(Boolean);
-    const latest = rows.map((row) => {
-      try {
-        return findLatestTimestamp(JSON.parse(row));
-      } catch {
-        return null;
-      }
-    }).filter(Boolean).sort().at(-1) ?? null;
-    return { path: filePath, format: "jsonl", entries: rows.length, latest, bytes };
-  }
-
-  return { path: filePath, format: ledgerFormat(filePath), entries: 1, latest: null, bytes };
-}
-
-function summarizeJsonLedger(filePath, value, bytes) {
-  if (Array.isArray(value)) {
-    return { path: filePath, format: "json", entries: value.length, latest: findLatestTimestamp(value), bytes };
-  }
-  if (value && typeof value === "object") {
-    const arrays = ["entries", "runs", "items", "actions", "events"]
-      .map((key) => Array.isArray(value[key]) ? value[key] : null)
-      .filter(Boolean);
-    const entries = arrays.length ? arrays.reduce((sum, rows) => sum + rows.length, 0) : 1;
-    return { path: filePath, format: "json", entries, latest: findLatestTimestamp(value), bytes };
-  }
-  return { path: filePath, format: "json", entries: 1, latest: null, bytes };
-}
-
-function findLatestTimestamp(value) {
-  const timestamps = [];
-  collectTimestamps(value, timestamps);
-  return timestamps.sort().at(-1) ?? null;
-}
-
-function collectTimestamps(value, timestamps) {
-  if (Array.isArray(value)) {
-    for (const item of value) collectTimestamps(item, timestamps);
-    return;
-  }
-  if (!value || typeof value !== "object") return;
-  for (const [key, nested] of Object.entries(value)) {
-    if (typeof nested === "string" && /(?:created|updated|finished|timestamp|time|at)$/i.test(key) && !Number.isNaN(Date.parse(nested))) {
-      timestamps.push(new Date(nested).toISOString());
-    } else {
-      collectTimestamps(nested, timestamps);
-    }
-  }
-}
-
-function ledgerFormat(filePath) {
-  return filePath.split(".").at(-1)?.toLowerCase() || "text";
-}
-
-function encodeContentPath(filePath) {
-  return filePath.split("/").map(encodeURIComponent).join("/");
-}
-
-function issuePriority(labels) {
-  if (labels.has("P0")) return 0;
-  if (labels.has("P1")) return 1;
-  if (labels.has("P2")) return 2;
-  return 3;
-}
-
-function maxFixRound(labels, body) {
-  let round = 0;
-  for (const label of labels) {
-    const match = label.match(/^df:fix-round:(\d+)$/);
-    if (match) round = Math.max(round, Number(match[1]));
-  }
-  for (const match of body.matchAll(/df:fix-round:(\d+)/g)) {
-    round = Math.max(round, Number(match[1]));
-  }
-  return round;
-}
-
-function countWorkerBlockedComments(body) {
-  const matches = body.match(/DarkFactory (?:worker|follow-through) blocked/gi);
-  return matches ? matches.length : 0;
-}
-
-async function countBlockedCommentsFromHistory(gh, repository, issueNumber, warn) {
-  try {
-    let total = 0;
-    for (let page = 1; page <= 20; page += 1) {
-      const comments = await gh.request(
-        "GET",
-        `/repos/${repoName(repository)}/issues/${issueNumber}/comments?per_page=100&page=${page}`
-      );
-      if (!Array.isArray(comments) || comments.length === 0) break;
-      total += comments.reduce((count, comment) => count + countWorkerBlockedComments(String(comment.body || "")), 0);
-      if (comments.length < 100) break;
-    }
-    return total;
-  } catch (error) {
-    if (error.status === 403 || error.status === 404) {
-      warn(`DarkFactory could not read issue history for ${repoName(repository)}#${issueNumber}: ${error.message || String(error)}`);
-      return 0;
-    }
-    throw error;
-  }
-}
-
-function isManagedWorkIssue(issue) {
-  if (issue.raw?.pull_request) return false;
-  if (issue.labels.has("roadmap")) return true;
-  if ([...issue.labels].some((label) => /^df:(ready|running|blocked|done|class:|prd-drift)/.test(label))) return true;
-  if ([...issue.labels].some((label) => label.startsWith("stream:"))) return true;
-  return new RegExp("df-prd:" + "[a-z0-9-]+").test(issue.body || "");
-}
-
-function blockersAreClosed(issue, issueByNumber) {
-  return openBlockers(issue, issueByNumber).length === 0;
-}
-
-function openBlockers(issue, issueByNumber) {
-  return issue.blockedBy
-    .map((issueNumber) => issueByNumber.get(issueNumber) || { number: issueNumber, state: "unknown" })
-    .filter((blocker) => blocker.state !== "closed");
-}
-
-function isDependencyOnlyBlocked(issue) {
-  if (issue.blockedBy.length > 0) return true;
-  return /Blocked[-\s]*by:/i.test(issue.body || "");
-}
-
-function issueRef(issue) {
-  return `#${issue.number}`;
-}
-
-function compareCandidates(a, b) {
-  if (a.issue.priority !== b.issue.priority) return a.issue.priority - b.issue.priority;
-  const streamCompare = a.streams.join(",").localeCompare(b.streams.join(","));
-  if (streamCompare !== 0) return streamCompare;
-  return a.issue.number - b.issue.number;
-}
-
-function summarizeStreams(issues) {
-  const streams = {};
-  for (const issue of issues) {
-    const names = issue.streams.length ? issue.streams : ["default"];
-    for (const stream of names) {
-      streams[stream] ??= { ready: 0, running: 0, blocked: 0 };
-      if (issue.labels.has("df:ready")) streams[stream].ready += 1;
-      if (issue.labels.has("df:running")) streams[stream].running += 1;
-      if (issue.labels.has("df:blocked")) streams[stream].blocked += 1;
-    }
-  }
-  return streams;
-}
-
-function applySequenceActionsToState(state, actions) {
-  for (const action of actions) {
-    if (action.repo !== repoName(state.repository)) continue;
-    const number = Number(String(action.issue || "").replace("#", ""));
-    const issue = state.issueByNumber.get(number);
-    if (!issue) continue;
-    if (action.action === "mark-ready" || action.action === "requeue-unblocked") {
-      issue.labels.add("df:ready");
-      issue.labels.delete("df:blocked");
-      issue.labels.delete("df:done");
-    }
-    if (action.action === "mark-running-existing-pr") {
-      issue.labels.add("df:running");
-      issue.labels.delete("df:ready");
-    }
-    if (action.action === "remove-ready-blocked-by") {
-      issue.labels.add("df:blocked");
-      issue.labels.delete("df:ready");
-    }
-  }
-}
-
-function newActiveCounts() {
-  return {
-    global: 0,
-    repos: new Map(),
-    streams: new Map()
-  };
-}
-
-function addExistingActiveCounts(activeCounts, state) {
-  for (const issue of state.issues) {
-    if (!issue.labels.has("df:running")) continue;
-    incrementActiveCounts(activeCounts, state.repository, issue.streams.length ? issue.streams : ["default"]);
-  }
-  for (const openWorker of state.brief.open_worker_prs) {
-    const issue = state.issueByNumber.get(openWorker.issue);
-    if (!issue || issue.labels.has("df:running")) continue;
-    incrementActiveCounts(activeCounts, state.repository, issue.streams.length ? issue.streams : ["default"]);
-  }
-}
-
-function hasDispatchCapacity(activeCounts, repository, streams, limits) {
-  if (activeCounts.global >= limits.global) return false;
-  if ((activeCounts.repos.get(repoName(repository)) || 0) >= limits.perRepo) return false;
-  for (const stream of streams) {
-    if ((activeCounts.streams.get(stream) || 0) >= limits.perStream) return false;
-  }
   return true;
-}
-
-function incrementActiveCounts(activeCounts, repository, streams) {
-  activeCounts.global += 1;
-  activeCounts.repos.set(repoName(repository), (activeCounts.repos.get(repoName(repository)) || 0) + 1);
-  for (const stream of streams) {
-    activeCounts.streams.set(stream, (activeCounts.streams.get(stream) || 0) + 1);
-  }
-}
-
-async function getDefaultBranchState(gh, repository, branch) {
-  try {
-    const data = await gh.request("GET", `/repos/${repoName(repository)}/branches/${encodeURIComponent(branch)}`);
-    return {
-      sha: data?.commit?.sha || data?.commit?.commit?.tree?.sha || "",
-      protected: data?.protected === true
-    };
-  } catch (error) {
-    if (error.status === 404 || error.status === 403) {
-      return { sha: "", protected: false };
-    }
-    throw error;
-  }
-}
-
-async function getPrdState(gh, repository, branch) {
-  const content = await getOptionalFileContent(gh, repository, "PRD.md", branch);
-  if (!content) return { exists: false };
-  return {
-    exists: true,
-    characters: content.length,
-    sha: await getContentSha(gh, repository, "PRD.md", branch)
-  };
-}
-
-async function getContentSha(gh, repository, filePath, ref) {
-  try {
-    const data = await gh.request(
-      "GET",
-      `/repos/${repoName(repository)}/contents/${encodePath(filePath)}?ref=${encodeURIComponent(ref)}`
-    );
-    return typeof data?.sha === "string" ? data.sha : "";
-  } catch (error) {
-    if (error.status === 404 || error.status === 403) return "";
-    throw error;
-  }
-}
-
-async function getRecentWorkflowRuns(gh, repository, branch, warn) {
-  try {
-    const data = await gh.request(
-      "GET",
-      `/repos/${repoName(repository)}/actions/runs?branch=${encodeURIComponent(branch)}&per_page=10`
-    );
-    return Array.isArray(data?.workflow_runs) ? data.workflow_runs : [];
-  } catch (error) {
-    if (error.status === 403 || error.status === 404) {
-      warn(`DarkFactory could not read workflow runs for ${repoName(repository)}: ${error.message || String(error)}`);
-      return [];
-    }
-    throw error;
-  }
-}
-
-function summarizeWorkflowRuns(runs) {
-  if (!runs.length) return { latest: "none", red: 0, pending: 0 };
-  const latest = runs[0];
-  return {
-    latest: `${latest.name || latest.workflow_id || "workflow"}:${latest.status || "unknown"}/${latest.conclusion || "none"}`,
-    red: runs.filter((run) => run.status === "completed" && run.conclusion && run.conclusion !== "success").length,
-    pending: runs.filter((run) => run.status !== "completed").length
-  };
-}
-
-async function getIssueState(gh, repository, issueNumber, warn) {
-  try {
-    const issue = await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
-    if (issue.pull_request) return null;
-    return normalizeIssueState(issue);
-  } catch (error) {
-    if (error.status === 404 || error.status === 410) {
-      return { number: issueNumber, title: `Issue #${issueNumber}`, body: "", labels: new Set(), streams: [], priority: 3, blockedBy: [], fixRound: 0, blockedCommentCount: 0, state: "missing", raw: null };
-    }
-    warn(`DarkFactory could not read blocker ${repoName(repository)}#${issueNumber}: ${error.message || String(error)}`);
-    return { number: issueNumber, title: `Issue #${issueNumber}`, body: "", labels: new Set(), streams: [], priority: 3, blockedBy: [], fixRound: 0, blockedCommentCount: 0, state: "unknown", raw: null };
-  }
-}
-
-function readLimitsFromEnv() {
-  return {
-    global: positiveInteger(process.env.DF_ORCHESTRATOR_GLOBAL_LIMIT, DEFAULT_LIMITS.global),
-    perRepo: positiveInteger(process.env.DF_ORCHESTRATOR_REPO_LIMIT, DEFAULT_LIMITS.perRepo),
-    perStream: positiveInteger(process.env.DF_ORCHESTRATOR_STREAM_LIMIT, DEFAULT_LIMITS.perStream)
-  };
-}
-
-function positiveInteger(value, fallback) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 async function resolveWorkBaseBranch(gh, repository, defaultBranch) {
@@ -1023,13 +1081,18 @@ async function resolveWorkBaseBranch(gh, repository, defaultBranch) {
 
 async function blockIssueBeforeDispatch(gh, repository, issueNumber, baseBranch, mergePolicy) {
   await ensureLabels(gh, repository, WORK_LABELS);
-  await replaceIssueLabels(gh, repository, issueNumber, ["df:blocked"], ["df:ready", "df:running", "df:done"]);
+  // Merge-policy blockers are owner decisions (repository setup), not code
+  // failures: apply df:ask-owner alongside df:blocked so the lane stays
+  // visible on the owner-decision queue and dashboards instead of stalling
+  // silently.
+  await replaceIssueLabels(gh, repository, issueNumber, ["df:ask-owner", "df:blocked"], ["df:ready", "df:running", "df:done"]);
   await createIssueComment(
     gh,
     repository,
     issueNumber,
     [
-      "DarkFactory blocked this issue before worker dispatch.",
+      `<!-- ${ASK_OWNER_MARKER} issue=${issueNumber} reason=merge-policy-blocked -->`,
+      "DarkFactory blocked this issue before worker dispatch and escalated it for owner input.",
       "",
       "Blocker:",
       "",
@@ -1040,7 +1103,8 @@ async function blockIssueBeforeDispatch(gh, repository, issueNumber, baseBranch,
       `Target branch: \`${baseBranch}\``,
       `Repository auto-merge enabled: \`${mergePolicy.autoMergeSupported ? "yes" : "no"}\``,
       "",
-      "This is target repository setup work, not a code implementation failure."
+      "This is target repository setup work, not a code implementation failure.",
+      "Resolve the repository merge policy, then remove `df:ask-owner`/`df:blocked` and reapply `df:ready`."
     ].join("\n")
   );
 }
@@ -1069,8 +1133,4 @@ async function writeLedger(gh, dataRepo, controlRepo, ledger, warn = console.war
   } catch (error) {
     warn(`DarkFactory ledger warning: ${error.message || String(error)}`);
   }
-}
-
-function encodePath(filePath) {
-  return filePath.split("/").map(encodeURIComponent).join("/");
 }

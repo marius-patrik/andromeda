@@ -332,6 +332,8 @@ async function detectCodeDrift(repository, ref, items, staleMarkedIssues) {
   });
   const itemText = items.map((item) => `${item.name} ${item.description}`).join("\n").toLowerCase();
 
+  findings.push(...await detectPrdArtifactDrift(repository, ref, itemText));
+
   if (itemText.includes("l4 planning")) {
     const workflow = await getOptionalFileContent(gh, repository, ".github/workflows/df-plan.yml", ref);
     if (!workflow) findings.push("PRD requires L4 Planning, but `.github/workflows/df-plan.yml` is absent.");
@@ -371,6 +373,76 @@ async function detectCodeDrift(repository, ref, items, staleMarkedIssues) {
   }
 
   return findings;
+}
+
+async function detectPrdArtifactDrift(repository, ref, itemText) {
+  const findings = [];
+  const rules = [
+    {
+      capability: "PRD editing to automatically reconcile sequenced backlog issues",
+      pattern: /\b(l4 planning|planning loop|prd enforcement|prd\W*backlog|reconciliation|editing prd\.md|prd edits?|sequenced issues)\b/i,
+      artifacts: [
+        {
+          path: ".github/workflows/df-plan.yml",
+          checks: [
+            { snippet: "PRD.md", reason: "listen for PRD file changes" },
+            { snippet: "schedule:", reason: "run recurring reconciliation" },
+            { snippet: "workflow_dispatch:", reason: "support manual reconciliation" }
+          ]
+        },
+        {
+          path: ".github/scripts/df-plan.mjs",
+          checks: [
+            { snippet: "parsePrdItems", reason: "parse PRD items deterministically" },
+            { snippet: "prdIssueBody", reason: "write PRD-backed issue bodies" },
+            { snippet: "Blocked-by", reason: "maintain sequencing references" },
+            { snippet: "df:ready", reason: "queue newly unblocked PRD issues" }
+          ]
+        }
+      ]
+    },
+    {
+      capability: "PRD drift reporting when code or backlog contradicts the PRD",
+      pattern: /\b(drift report|prd drift|code contradicts prd|contradicts the prd|not tracked by any prd item|not linked to a prd-tracked issue)\b/i,
+      artifacts: [
+        {
+          path: ".github/scripts/df-plan.mjs",
+          checks: [
+            { snippet: "detectCodeDrift", reason: "detect PRD contradictions" },
+            { snippet: "upsertDriftIssue", reason: "file or update a drift report issue" },
+            { snippet: "df-prd-drift", reason: "mark drift reports for idempotent updates" }
+          ]
+        }
+      ]
+    }
+  ];
+
+  for (const rule of rules) {
+    if (!rule.pattern.test(itemText)) continue;
+    for (const artifact of rule.artifacts) {
+      const content = await getOptionalFileContent(gh, repository, artifact.path, ref);
+      if (!content) {
+        findings.push(`PRD requires ${rule.capability}, but \`${artifact.path}\` is absent.`);
+        continue;
+      }
+      const checkContent = artifactContentForChecks(artifact.path, content);
+      for (const check of artifact.checks) {
+        if (!checkContent.includes(check.snippet)) {
+          findings.push(`PRD requires ${rule.capability}, but \`${artifact.path}\` does not ${check.reason}.`);
+        }
+      }
+    }
+  }
+
+  return findings;
+}
+
+function artifactContentForChecks(filePath, content) {
+  if (filePath !== ".github/scripts/df-plan.mjs") return content;
+  return content.replace(
+    /\nasync function detectPrdArtifactDrift[\s\S]*?\nfunction isDarkFactoryManagedIssue/,
+    "\nfunction isDarkFactoryManagedIssue"
+  );
 }
 
 function isDarkFactoryManagedIssue(labels) {

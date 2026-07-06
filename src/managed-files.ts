@@ -16,6 +16,7 @@ export const CODEX_REVIEW_WORKFLOW_PATH = ".github/workflows/codex-review.yml";
 export const CODEX_REVIEW_DOCKERFILE_PATH = ".github/codex-review.Dockerfile";
 export const CODEX_REVIEW_SCHEMA_PATH = ".github/codex-review.schema.json";
 export const CODEX_REVIEW_SCRIPT_PATH = ".github/scripts/run-codex-review.sh";
+export const CODEX_REVIEW_VALIDATE_SCRIPT_PATH = ".github/scripts/validate-codex-review.mjs";
 export const DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH = ".github/scripts/dark-factory-release-check.mjs";
 export const DARK_FACTORY_SCRIPT_LIB_PATH = ".github/scripts/df-lib.mjs";
 export const DARK_FACTORY_PLAN_SCRIPT_PATH = ".github/scripts/df-plan.mjs";
@@ -41,6 +42,7 @@ export interface ManagedRepositoryRef {
 
 const MANAGED_COMMON_DIRS = [".agents/.global", ".github", ".darkfactory"] as const;
 const MANAGED_COMMON_FILES = [AGENTS_ENTRYPOINT_PATH] as const;
+const EXCLUDED_MANAGED_FILE_PATHS = new Set([".github/workflows/df-event-forward.yml"]);
 const PACKAGE_MANAGED_FILES = [
   DARK_FACTORY_PLAN_WORKFLOW_PATH,
   DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
@@ -93,6 +95,10 @@ export function readManagedFiles(repository?: ManagedRepositoryRef, root = resol
     }
   }
 
+  for (const filePath of EXCLUDED_MANAGED_FILE_PATHS) {
+    files.delete(filePath);
+  }
+
   const missingRequired = requiredManagedFilePaths(root).filter((filePath) => !files.has(filePath));
   if (missingRequired.length > 0) {
     throw new Error(`Managed file source is missing required payloads: ${missingRequired.join(", ")}`);
@@ -118,6 +124,7 @@ export function requiredManagedFilePaths(_root = resolveManagedWorkspaceRoot()):
     CODEX_REVIEW_DOCKERFILE_PATH,
     CODEX_REVIEW_SCHEMA_PATH,
     CODEX_REVIEW_SCRIPT_PATH,
+    CODEX_REVIEW_VALIDATE_SCRIPT_PATH,
     DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH,
     DARK_FACTORY_BRANCHING_POLICY_PATH,
     DARK_FACTORY_LABELS_PATH,
