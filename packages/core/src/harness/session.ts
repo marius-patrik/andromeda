@@ -7,7 +7,7 @@ export interface SessionStateRoot {
   sessionsDir: string;
 }
 
-export type SessionMode = "chat" | "task";
+export type SessionMode = "chat" | "task" | "orchestrator" | "default";
 export type MessageRole = "system" | "user" | "assistant" | "tool";
 
 export interface TranscriptMessage {

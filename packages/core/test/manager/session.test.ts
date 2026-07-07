@@ -226,6 +226,93 @@ describe("session runtime", () => {
   });
 });
 
+describe("agents run / sessions CLI", () => {
+  test("run starts a session and prints the reply", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-run-"));
+    try {
+      const run = await runAgents(root, ["run", "--provider", "fake", "--model", "test", "hello"]);
+      expect(run.code).toBe(0);
+      expect(run.stdout.trim()).toContain("fake: hello");
+      expect(run.stderr).toContain("session:");
+
+      const list = await runAgents(root, ["sessions", "list", "--json"]);
+      expect(list.code).toBe(0);
+      const sessions = JSON.parse(list.stdout) as Array<{
+        sessionId: string;
+        provider: string;
+        model: string;
+        mode: string;
+        updated: string;
+      }>;
+      expect(sessions.length).toBe(1);
+      expect(sessions[0].provider).toBe("fake");
+      expect(sessions[0].model).toBe("test");
+      expect(sessions[0].mode).toBe("default");
+      expect(sessions[0].updated).toBeTruthy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("run uses provider/model/mode defaults from config", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-run-config-"));
+    try {
+      const configPath = path.join(root, ".agents", "config.json");
+      await mkdir(path.dirname(configPath), { recursive: true });
+      await Bun.write(
+        configPath,
+        JSON.stringify({ defaultProvider: "fake", defaultModel: "from-config", defaultMode: "orchestrator" }),
+      );
+
+      const run = await runAgents(root, ["run", "configured"]);
+      expect(run.code).toBe(0);
+      expect(run.stdout.trim()).toContain("fake: configured");
+
+      const list = await runAgents(root, ["sessions", "list", "--json"]);
+      const sessions = JSON.parse(list.stdout) as Array<{ model: string; mode: string }>;
+      expect(sessions[0].model).toBe("from-config");
+      expect(sessions[0].mode).toBe("orchestrator");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("sessions resume continues a session with the fake adapter", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-resume-"));
+    try {
+      const first = await runAgents(root, ["run", "--provider", "fake", "--model", "test", "first"]);
+      expect(first.code).toBe(0);
+      const sessionId = first.stderr.trim().replace("session: ", "");
+
+      const resumed = await runAgents(root, ["sessions", "resume", sessionId, "second"]);
+      expect(resumed.code).toBe(0);
+      expect(resumed.stdout.trim()).toContain("fake: second");
+
+      const show = await runAgents(root, ["session", "show", sessionId, "--json"]);
+      const shown = JSON.parse(show.stdout) as {
+        state: { turnCount: number };
+        transcript: { messages: Array<{ role: string; content: string }> };
+      };
+      expect(shown.state.turnCount).toBe(2);
+      expect(shown.transcript.messages.length).toBe(4);
+      expect(shown.transcript.messages[3].content).toBe("fake: second");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("run without provider, model, or config fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-run-missing-"));
+    try {
+      const run = await runAgents(root, ["run", "no-defaults"]);
+      expect(run.code).not.toBe(0);
+      expect(run.stderr).toContain("provider and model are required");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("real adapter smoke test", () => {
   test("smokes the configured provider behind an env guard", async () => {
     const provider = process.env.AGENTS_SESSION_SMOKE_PROVIDER;

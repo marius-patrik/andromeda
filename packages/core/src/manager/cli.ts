@@ -9,6 +9,7 @@ import {
   ensureSharedState,
   readCreditStore,
   readInstalls,
+  readSessionConfig,
   sharedState,
   sharedStateFromEnv,
   writeCreditStore,
@@ -53,6 +54,7 @@ import { providerSessionAdapter } from "./session-adapters";
 
 const root = process.cwd();
 const gitmodulesPath = path.join(root, ".gitmodules");
+const runModes = new Set<SessionMode>(["orchestrator", "default", "chat", "task"]);
 const defaultDataPath = path.join("data", "data-agentos");
 const packageKinds = new Map([
   ["agent", "agents"],
@@ -74,6 +76,9 @@ function help(): void {
   console.log(`agents - Bun agent package manager
 
 Usage:
+  agents run [--mode orchestrator|default] [--provider <id>] [--model <model>] <prompt>
+  agents sessions list [--json]
+  agents sessions resume <id> <prompt>
   agents list [--json]
   agents info <name-or-path> [--json]
   agents add <name> <git-url> [--kind agent|app|data|package|template|workspace|harness|cli|plugin] [--branch main] [--path path]
@@ -621,6 +626,127 @@ async function sessionCommand(args: string[], flags: Record<string, string | boo
   throw new Error(`unknown session action: ${action}`);
 }
 
+async function resolveSessionDefaults(
+  state: SharedState,
+  flags: Record<string, string | boolean>,
+): Promise<{ provider: string; model: string; mode: SessionMode }> {
+  const config = await readSessionConfig(state);
+  const provider = typeof flags.provider === "string" ? flags.provider : config.defaultProvider;
+  const model = typeof flags.model === "string" ? flags.model : config.defaultModel;
+  const modeFlag = typeof flags.mode === "string" ? flags.mode : config.defaultMode;
+  const mode = runModes.has(modeFlag as SessionMode) ? (modeFlag as SessionMode) : "default";
+  if (!provider || !model) {
+    throw new Error("provider and model are required; set defaults in config or use --provider and --model");
+  }
+  return { provider, model, mode };
+}
+
+async function runCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
+  const prompt = args.join(" ").trim();
+  if (!prompt) throw new Error("run requires a prompt");
+
+  const state = runtimeState();
+  await ensureSharedState(state);
+  const { provider, model, mode } = await resolveSessionDefaults(state, flags);
+
+  const descriptor = await createSession(state, { provider, model, mode });
+  const adapter = providerSessionAdapter(descriptor.provider);
+  const result = await runSessionTurn(state, adapter, descriptor, { prompt });
+
+  if (result.error) {
+    console.error(result.error);
+    process.exitCode = 1;
+  } else {
+    console.log(result.content);
+  }
+  console.error(`session: ${descriptor.sessionId}`);
+}
+
+interface SessionListItem {
+  sessionId: string;
+  provider: string;
+  model: string;
+  mode: SessionMode;
+  updated: string;
+}
+
+async function readSessionListItems(state: SharedState): Promise<SessionListItem[]> {
+  const descriptors = await listSessions(state);
+  const items: SessionListItem[] = [];
+  for (const descriptor of descriptors) {
+    const sessionState = await loadSessionState(state, descriptor.sessionId);
+    const transcript = await loadTranscript(state, descriptor.sessionId);
+    const updated = sessionState?.lastTurnAt ?? transcript?.updatedAt ?? transcript?.createdAt ?? "";
+    items.push({
+      sessionId: descriptor.sessionId,
+      provider: descriptor.provider,
+      model: descriptor.model,
+      mode: descriptor.mode,
+      updated,
+    });
+  }
+  return items.sort((a, b) => b.updated.localeCompare(a.updated));
+}
+
+async function sessionsCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
+  const [action = "list"] = args;
+  const state = runtimeState();
+  await ensureSharedState(state);
+
+  if (action === "list") {
+    const items = await readSessionListItems(state);
+    if (flags.json) {
+      console.log(JSON.stringify(items, null, 2));
+      return;
+    }
+    for (const item of items) {
+      console.log(
+        `${item.sessionId.padEnd(32)} ${item.provider.padEnd(10)} ${item.model.padEnd(16)} ${item.mode.padEnd(12)} ${item.updated}`,
+      );
+    }
+    return;
+  }
+
+  if (action === "resume") {
+    const sessionId = args[1];
+    if (!sessionId) throw new Error("sessions resume requires a session id");
+    const prompt = args.slice(2).join(" ").trim();
+    if (!prompt) throw new Error("sessions resume requires a prompt");
+
+    let descriptor;
+    const existing = await loadSessionState(state, sessionId);
+    if (!existing) throw new Error(`session not found: ${sessionId}`);
+
+    const provider = typeof flags.provider === "string" ? flags.provider : undefined;
+    const model = typeof flags.model === "string" ? flags.model : undefined;
+    if (provider && model) {
+      descriptor = await switchSessionProvider(state, sessionId, provider, model);
+    } else {
+      descriptor = {
+        sessionId: existing.sessionId,
+        provider: existing.provider,
+        model: existing.model,
+        mode: existing.mode,
+        workdir: existing.workdir,
+        stateDir: state.sessionsDir,
+      };
+    }
+
+    const adapter = providerSessionAdapter(descriptor.provider);
+    const result = await runSessionTurn(state, adapter, descriptor, { prompt });
+    if (result.error) {
+      console.error(result.error);
+      process.exitCode = 1;
+    } else {
+      console.log(result.content);
+    }
+    console.error(`session: ${descriptor.sessionId}`);
+    return;
+  }
+
+  throw new Error(`unknown sessions action: ${action}`);
+}
+
 async function harnessesFromState(state: SharedState): Promise<Array<{ id: string; path: string; manifest: AgentsPackageManifest }>> {
   const registrations = await readPackageRegistrations(state);
   const out: Array<{ id: string; path: string; manifest: AgentsPackageManifest }> = [];
@@ -987,6 +1113,8 @@ async function main(): Promise<void> {
   const [command = "help", ...rest] = Bun.argv.slice(2);
   const { values, flags } = parseArgs(rest);
   if (command === "help" || flags.help) return help();
+  if (command === "run") return runCommand(values, flags);
+  if (command === "sessions") return sessionsCommand(values, flags);
   if (command === "list") return list(flags);
   if (command === "info") return info(values[0], flags);
   if (command === "add") return add(values, flags);
