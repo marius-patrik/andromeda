@@ -285,6 +285,26 @@ test("Codex Review verdict validator enforces the managed schema shape", () => {
   );
 });
 
+test("Codex Review verdict validator recognizes the infra failure marker against the managed schema", async () => {
+  const schema = JSON.parse(await readFile(new URL("../.github/codex-review.schema.json", import.meta.url), "utf8"));
+
+  assert.deepEqual(
+    validateReviewAgainstSchema(
+      { approved: false, _infra_failure: true, summary: "quota", blocking_findings: ["quota exhausted"], non_blocking_notes: [] },
+      schema
+    ),
+    []
+  );
+
+  assert.deepEqual(
+    validateReviewAgainstSchema(
+      { approved: false, _infra_failure: "yes", summary: "bad", blocking_findings: [], non_blocking_notes: [] },
+      schema
+    ),
+    ["property '_infra_failure' must be boolean"]
+  );
+});
+
 test("getRequiredStatusCheckContexts treats inaccessible branch protection as no native requirements", async () => {
   const error: Error & { status?: number } = new Error("Resource not accessible by integration");
   error.status = 403;

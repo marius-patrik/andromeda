@@ -20,6 +20,7 @@ export function validateReviewAgainstSchema(review, schema) {
     if (!(property in review)) errors.push(`missing required property '${property}'`);
   }
 
+  validateBoolean(review, "_infra_failure", errors);
   validateBoolean(review, "approved", errors);
   validateString(review, "summary", errors);
   validateStringArray(review, "blocking_findings", errors);
@@ -51,10 +52,11 @@ function validateStringArray(review, property, errors) {
   });
 }
 
-function blockedVerdict(errors) {
+function infraVerdict(errors) {
   return {
     approved: false,
-    summary: "Codex autoreview did not produce a schema-valid verdict.",
+    _infra_failure: true,
+    summary: "Codex autoreview did not produce a schema-valid verdict due to an infrastructure/automation failure.",
     blocking_findings: [
       `Fix the Codex Review automation so codex-review.json matches .github/codex-review.schema.json. Validation errors: ${errors.join("; ")}`
     ],
@@ -78,17 +80,20 @@ export function validateReviewFile(reviewPath, schemaPath) {
   } catch (error) {
     review = null;
     const message = error instanceof Error ? error.message : String(error);
-    const fallback = blockedVerdict([`review file is not valid JSON: ${message}`]);
+    const fallback = infraVerdict([`review file is not valid JSON: ${message}`]);
     writeFileSync(reviewPath, `${JSON.stringify(fallback, null, 2)}\n`);
-    return { valid: false, errors: fallback.blocking_findings };
+    return { valid: false, errors: fallback.blocking_findings, infra: true };
   }
 
   const errors = validateReviewAgainstSchema(review, schema);
-  if (errors.length === 0) return { valid: true, errors: [] };
+  if (errors.length === 0) {
+    const infra = review._infra_failure === true;
+    return { valid: true, errors: [], infra };
+  }
 
-  const fallback = blockedVerdict(errors);
+  const fallback = infraVerdict(errors);
   writeFileSync(reviewPath, `${JSON.stringify(fallback, null, 2)}\n`);
-  return { valid: false, errors };
+  return { valid: false, errors, infra: true };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
