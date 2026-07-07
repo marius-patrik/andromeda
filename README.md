@@ -12,6 +12,7 @@ TypeScript GitHub App bot that receives GitHub webhooks, verifies signatures, an
 - Checks pull requests in installed repositories for shared repository setup:
   - `.agents/.global/VERSION` must match the current Dark Factory version.
   - DarkFactory installer, auto-update, release, and review workflows should exist as the baseline GitHub Actions scaffold.
+- Dispatches the orchestrator workflow immediately when an issue is labeled `df:ready` or when an owner/member/collaborator comments `/df run`, providing a low-latency path for managed repositories.
 - Installs the managed Codex Review workflow, Dockerfile, runner script, and output schema used to run `codex exec` in a container for pull request review.
 - Reads managed `.agents`, `.darkfactory`, and `.github` files from the `agentos-data` repository.
 - Opens managed setup PRs when the app is installed on a repository or when repositories are added to an installation.
@@ -33,15 +34,17 @@ Create a GitHub App and configure:
 - Webhook secret: any high-entropy random value, also used as `GITHUB_WEBHOOK_SECRET`
 - Subscribe to events:
   - `Issues`
+  - `Issue comments`
   - `Pull requests`
   - `Ping`
 - Repository permissions:
+  - Actions: Read and write
   - Contents: Read and write
   - Issues: Read and write
   - Pull requests: Read and write
   - Metadata: Read-only, granted by GitHub automatically
 
-`Contents: Read and write` is required so Dark Factory can create managed setup branches. `Pull requests: Read and write` is required so it can open setup PRs.
+`Contents: Read and write` is required so Dark Factory can create managed setup branches. `Pull requests: Read and write` is required so it can open setup PRs. `Actions: Read and write` is required so the deployed webhook server can dispatch the orchestrator workflow for low-latency `df:ready` and `/df run` handling.
 
 Generate a private key for the app and install the app on the repositories where it should run.
 
@@ -126,10 +129,28 @@ Production hosts must provide these environment variables:
 - `GITHUB_APP_ID`
 - `GITHUB_PRIVATE_KEY`
 - `GITHUB_WEBHOOK_SECRET`
+- `DARK_FACTORY_CONTROL_REPO`, optional and defaults to `marius-patrik/agent-darkfactory`
 - `DARK_FACTORY_WORKSPACE_ROOT`, optional when the image bundles `data-agentos/managed-repository`
 - `PORT`, optional and defaults to `3000`
 
 Use `GET /healthz` as the health check endpoint.
+
+### Fly.io deployment
+
+A `fly.toml` is included for deployment to Fly.io. The image is built and published to GitHub Container Registry by the release workflow, then deployed by the `Deploy Webhook Server` workflow.
+
+Required repository secrets:
+
+- `FLY_API_TOKEN`
+
+Deploy manually:
+
+```powershell
+flyctl auth login
+flyctl deploy --image ghcr.io/marius-patrik/agent-darkfactory:v0.2.0
+```
+
+After deploying, set the GitHub App webhook URL to `https://agent-darkfactory.fly.dev/webhook`.
 
 ## Managed repository setup
 
@@ -153,9 +174,12 @@ Managed files:
 - `.github/codex-review.Dockerfile`
 - `.github/codex-review.schema.json`
 - `.github/scripts/run-codex-review.sh`
+- `.github/scripts/validate-codex-review.mjs`
 - `.github/scripts/dark-factory-release-check.mjs`
 
-Managed setup does not ship `.github/workflows/df-event-forward.yml`. That workflow uses control-repository app secrets and is kept only in `marius-patrik/agent-darkfactory`; `df:ready` labels and `/df run` comments in managed repositories are picked up by the next scheduled orchestrator tick or by workflow-run chaining.
+Managed setup does not ship `.github/workflows/df-event-forward.yml`. That workflow uses control-repository app secrets and is kept only in `marius-patrik/agent-darkfactory`.
+
+When the DarkFactory webhook server is deployed, `df:ready` labels and `/df run` comments in any installed repository are dispatched immediately to the orchestrator workflow, eliminating the wait for the next scheduled tick. If the webhook server is not deployed or the dispatch fails, the schedule and workflow-run chaining still pick up the issue.
 
 The `agentos-data` repository is the single source of truth for managed setup. Keep reusable policy in `managed-repository/.agents/.global/` and `managed-repository/.darkfactory/`, and per-repository context in `managed-repository/repositories/<owner>/<repo>/.agents/.project/`.
 
@@ -206,7 +230,7 @@ npm version patch
 git push origin main --follow-tags
 ```
 
-Pushing a `v*.*.*` tag runs the release workflow. It validates the repo, builds the Docker image, publishes it to GitHub Container Registry, and creates a GitHub release.
+Pushing a `v*.*.*` tag runs the release workflow. It validates the repo, builds the Docker image, publishes it to GitHub Container Registry, and creates a GitHub release. After the release workflow succeeds, the `Deploy Webhook Server` workflow deploys the published image to Fly.io.
 
 Image tags are published under:
 

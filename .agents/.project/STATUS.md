@@ -10,7 +10,7 @@
 | Purpose | GitHub App bot for repository automation |
 | Version | `0.2.0` |
 | Managed setup | Workspace-backed `.agents/.global`, optional repo-specific `.agents/.project`, GitHub bootstrap, and Codex Review workflow PRs |
-| Release | `v0.2.0` shipped (M2 planning loop); M4 audit loop implemented |
+| Release | `v0.2.0` shipped (M2 planning loop); M4 audit loop implemented; M5 webhook server deployment added |
 | CI | GitHub Actions `validate` job |
 
 ## Validation
@@ -28,3 +28,5 @@ Run before committing:
 - Configure `CODEX_AUTH_JSON` in every managed repository where Codex Review should approve pull requests.
 - Enable GitHub repository auto-merge on dogfood target repositories before expecting protected-branch `df:ready` issues to go label-to-merged.
 - Install the GitHub App on all repositories through GitHub's installation UI.
+- Configure `FLY_API_TOKEN` and set the GitHub App webhook URL to the deployed Fly.io host to enable low-latency `df:ready` and `/df run` dispatch.
+- Grant the GitHub App `Actions: Read and write` permission so the webhook server can dispatch the orchestrator workflow.

@@ -1193,6 +1193,50 @@ test("Codex Review workflow validates verdicts before comments and enforcement",
   assert.doesNotMatch(workflow, /node \.github\/scripts\/validate-codex-review\.mjs/);
 });
 
+test("managed repository template Codex Review workflow matches control repo gate", async () => {
+  const templateWorkflow = await readFile(new URL("../templates/.github/workflows/codex-review.yml", import.meta.url), "utf8");
+  const parsedTemplateWorkflow = loadYaml(templateWorkflow);
+  const codexReviewJob = parsedTemplateWorkflow.jobs["codex-review"];
+  const validate = templateWorkflow.indexOf("Validate Codex verdict");
+  const comment = templateWorkflow.indexOf("Comment review");
+  const enforce = templateWorkflow.indexOf("Enforce Codex verdict");
+
+  assert.equal(codexReviewJob.name, CODEX_REVIEW_REQUIRED_CONTEXT);
+  assert.notEqual(validate, -1);
+  assert.notEqual(comment, -1);
+  assert.notEqual(enforce, -1);
+  assert.ok(validate < comment);
+  assert.ok(validate < enforce);
+  assert.match(templateWorkflow, /inline trusted schema/);
+  assert.match(templateWorkflow, /approved: \{ type: "boolean" \}/);
+  assert.match(templateWorkflow, /blocking_findings: \{ type: "array", items: \{ type: "string" \} \}/);
+  assert.doesNotMatch(templateWorkflow, /node \.github\/scripts\/validate-codex-review\.mjs/);
+});
+
+test("managed repository template ships the Codex Review verdict validator", async () => {
+  // @ts-ignore Template scripts are native ESM workflow files, not built TypeScript modules.
+  const templateValidator: any = await import("../templates/.github/scripts/validate-codex-review.mjs");
+  const schema = JSON.parse(await readFile(new URL("../templates/.github/codex-review.schema.json", import.meta.url), "utf8"));
+
+  assert.equal(typeof templateValidator.validateReviewAgainstSchema, "function");
+  assert.equal(typeof templateValidator.validateReviewFile, "function");
+  assert.deepEqual(
+    templateValidator.validateReviewAgainstSchema(
+      { approved: true, summary: "ok", blocking_findings: [], non_blocking_notes: [] },
+      schema
+    ),
+    []
+  );
+});
+
+test("managed repository template requires the Codex Review validator", async () => {
+  const config = JSON.parse(await readFile(new URL("../templates/.darkfactory/managed-repository.json", import.meta.url), "utf8"));
+
+  assert.ok(Array.isArray(config.requiredFiles));
+  assert.ok(config.requiredFiles.includes(".github/workflows/codex-review.yml"));
+  assert.ok(config.requiredFiles.includes(".github/scripts/validate-codex-review.mjs"));
+});
+
 test("df-sweep requires explicit allowlist before merging PRs with no checks", async () => {
   const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
 

@@ -4,24 +4,28 @@ import path from "node:path";
 import { load as loadYaml } from "js-yaml";
 
 const root = process.cwd();
-const scriptDir = path.join(root, ".github", "scripts");
-const workflowDir = path.join(root, ".github", "workflows");
+const checkDirs = [
+  { scripts: path.join(root, ".github", "scripts"), workflows: path.join(root, ".github", "workflows") },
+  { scripts: path.join(root, "templates", ".github", "scripts"), workflows: path.join(root, "templates", ".github", "workflows") }
+];
 
-for (const file of await filesWithExtension(scriptDir, ".mjs")) {
-  const result = spawnSync(process.execPath, ["--check", file], {
-    cwd: root,
-    encoding: "utf8"
-  });
-  if (result.status !== 0) {
-    process.stderr.write(result.stdout || "");
-    process.stderr.write(result.stderr || "");
-    process.exitCode = result.status || 1;
-    break;
+for (const { scripts, workflows } of checkDirs) {
+  for (const file of await filesWithExtension(scripts, ".mjs")) {
+    const result = spawnSync(process.execPath, ["--check", file], {
+      cwd: root,
+      encoding: "utf8"
+    });
+    if (result.status !== 0) {
+      process.stderr.write(result.stdout || "");
+      process.stderr.write(result.stderr || "");
+      process.exitCode = result.status || 1;
+      break;
+    }
   }
-}
 
-if (!process.exitCode) {
-  for (const file of await filesWithExtension(workflowDir, ".yml")) {
+  if (process.exitCode) break;
+
+  for (const file of await filesWithExtension(workflows, ".yml")) {
     loadYaml(await readFile(file, "utf8"), { filename: file });
   }
 }
