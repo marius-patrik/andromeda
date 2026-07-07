@@ -6,6 +6,7 @@ export interface Config {
   privateKey: string;
   webhookSecret: string;
   port: number;
+  controlRepo: RepositoryRef;
 }
 
 export interface AppCredentials {
@@ -13,17 +14,44 @@ export interface AppCredentials {
   privateKey: string;
 }
 
+export interface RepositoryRef {
+  owner: string;
+  repo: string;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const credentials = loadAppCredentials(env);
   const webhookSecret = requiredEnv(env, "GITHUB_WEBHOOK_SECRET");
   const port = parsePort(env.PORT);
+  const controlRepo = parseControlRepo(env.DARK_FACTORY_CONTROL_REPO);
 
   return {
     appId: credentials.appId,
     privateKey: credentials.privateKey,
     webhookSecret,
-    port
+    port,
+    controlRepo
   };
+}
+
+export function parseControlRepo(value: string | undefined): RepositoryRef {
+  const raw = value?.trim();
+
+  if (raw) {
+    return parseRepositoryRef(raw);
+  }
+
+  return { owner: "marius-patrik", repo: "agent-darkfactory" };
+}
+
+export function parseRepositoryRef(value: string): RepositoryRef {
+  const parts = value.split("/");
+
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error(`Control repository must be in owner/repo form: ${value}`);
+  }
+
+  return { owner: parts[0], repo: parts[1] };
 }
 
 export function loadAppCredentials(env: NodeJS.ProcessEnv = process.env): AppCredentials {

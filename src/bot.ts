@@ -15,10 +15,48 @@ import type { ManagedFile } from "./managed-files.js";
 
 export type { GitHubRequester };
 
+export interface ControlRepositoryRef {
+  owner: string;
+  repo: string;
+}
+
 export interface BotOptions {
   appId: string;
   privateKey: string;
   webhookSecret: string;
+  controlRepo?: ControlRepositoryRef;
+}
+
+interface RepositoryPayload {
+  repository: {
+    name: string;
+    owner: {
+      login: string;
+    };
+  };
+  installation?: {
+    id: number;
+  };
+}
+
+interface IssueLikePayload extends RepositoryPayload {
+  issue: {
+    number: number;
+    pull_request?: unknown;
+  };
+}
+
+interface IssuePayload extends IssueLikePayload {
+  label?: {
+    name: string;
+  };
+}
+
+interface IssueCommentPayload extends IssueLikePayload {
+  comment: {
+    body: string;
+    author_association: string;
+  };
 }
 
 interface PullRequestPayload {
@@ -60,7 +98,16 @@ interface InstallationRepositoriesPayload {
   repositories_added?: InstallationRepository[];
 }
 
+const CONTROL_REPO: ControlRepositoryRef = {
+  owner: "marius-patrik",
+  repo: "agent-darkfactory"
+};
+
+const DISPATCHABLE_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
 export function createBot(options: BotOptions): App {
+  const controlRepo = options.controlRepo ?? CONTROL_REPO;
+
   const app = new App({
     appId: options.appId,
     privateKey: options.privateKey,
@@ -80,6 +127,18 @@ export function createBot(options: BotOptions): App {
       issue_number: payload.issue.number,
       body: "Thanks for opening this issue. I am online and ready to help."
     });
+  });
+
+  app.webhooks.on("issues.labeled", async ({ octokit, payload }) => {
+    if (shouldDispatchForReadyLabel(payload)) {
+      await dispatchOrchestrator(octokit, controlRepo, payload, "issues");
+    }
+  });
+
+  app.webhooks.on("issue_comment.created", async ({ octokit, payload }) => {
+    if (shouldDispatchForRunComment(payload)) {
+      await dispatchOrchestrator(octokit, controlRepo, payload, "issue_comment");
+    }
   });
 
   app.webhooks.on("pull_request.opened", async ({ octokit, payload }) => {
@@ -114,6 +173,54 @@ export function createBot(options: BotOptions): App {
   });
 
   return app;
+}
+
+export function shouldDispatchForReadyLabel(payload: IssuePayload): boolean {
+  return payload.label?.name === "df:ready" && payload.issue.pull_request === undefined;
+}
+
+export function shouldDispatchForRunComment(payload: IssueCommentPayload): boolean {
+  if (payload.issue.pull_request !== undefined) {
+    return false;
+  }
+
+  const body = payload.comment.body.trim();
+
+  if (body !== "/df run" && !body.startsWith("/df run ")) {
+    return false;
+  }
+
+  return DISPATCHABLE_ASSOCIATIONS.has(payload.comment.author_association);
+}
+
+export async function dispatchOrchestrator(
+  octokit: GitHubRequester,
+  controlRepo: ControlRepositoryRef,
+  payload: IssueLikePayload,
+  sourceEvent: string
+): Promise<void> {
+  const targetRepo = `${payload.repository.owner.login}/${payload.repository.name}`;
+
+  try {
+    await octokit.request("POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", {
+      owner: controlRepo.owner,
+      repo: controlRepo.repo,
+      workflow_id: "df-orchestrate.yml",
+      ref: "main",
+      inputs: {
+        repo: targetRepo,
+        issue_number: String(payload.issue.number),
+        source_event: sourceEvent
+      }
+    });
+
+    console.log(`Dispatched df-orchestrate for ${targetRepo}#${payload.issue.number} (${sourceEvent})`);
+  } catch (error) {
+    console.error(
+      `Failed to dispatch df-orchestrate for ${targetRepo}#${payload.issue.number}:`,
+      error
+    );
+  }
 }
 
 async function enforceRepositorySetup(

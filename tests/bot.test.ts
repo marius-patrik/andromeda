@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { syncRepositories, type GitHubRequester } from "../src/bot.js";
+import {
+  dispatchOrchestrator,
+  shouldDispatchForReadyLabel,
+  shouldDispatchForRunComment,
+  syncRepositories,
+  type GitHubRequester
+} from "../src/bot.js";
 import { MANAGED_SETUP_BRANCH } from "../src/managed-sync.js";
 import type { ManagedFile } from "../src/managed-files.js";
 
@@ -87,6 +93,98 @@ test("syncRepositories continues when a non-control repository sync fails", asyn
     "marius-patrik/dream",
     "marius-patrik/agents-plugin"
   ]);
+});
+
+test("shouldDispatchForReadyLabel returns true only for df:ready on issues", () => {
+  const base = {
+    repository: { name: "dream", owner: { login: "marius-patrik" } },
+    issue: { number: 1 }
+  };
+
+  assert.equal(shouldDispatchForReadyLabel({ ...base, label: { name: "df:ready" } }), true);
+  assert.equal(shouldDispatchForReadyLabel({ ...base, label: { name: "P1" } }), false);
+  assert.equal(
+    shouldDispatchForReadyLabel({ ...base, label: { name: "df:ready" }, issue: { number: 1, pull_request: {} } }),
+    false
+  );
+});
+
+test("shouldDispatchForRunComment returns true only for trusted authors on issues", () => {
+  const base = {
+    repository: { name: "dream", owner: { login: "marius-patrik" } },
+    issue: { number: 1 },
+    comment: { body: "/df run", author_association: "OWNER" }
+  };
+
+  assert.equal(shouldDispatchForRunComment(base), true);
+  assert.equal(shouldDispatchForRunComment({ ...base, comment: { ...base.comment, body: "/df run extra" } }), true);
+  assert.equal(shouldDispatchForRunComment({ ...base, comment: { ...base.comment, body: "/df audit" } }), false);
+  assert.equal(
+    shouldDispatchForRunComment({ ...base, comment: { ...base.comment, author_association: "CONTRIBUTOR" } }),
+    false
+  );
+  assert.equal(
+    shouldDispatchForRunComment({
+      ...base,
+      issue: { number: 1, pull_request: {} },
+      comment: { ...base.comment }
+    }),
+    false
+  );
+});
+
+test("dispatchOrchestrator dispatches df-orchestrate.yml in the control repository", async () => {
+  const requests: { route: string; parameters: Record<string, unknown> }[] = [];
+  const requester: GitHubRequester = {
+    async request(route, parameters) {
+      requests.push({ route, parameters });
+      return { data: {} };
+    }
+  };
+
+  await dispatchOrchestrator(
+    requester,
+    { owner: "marius-patrik", repo: "agent-darkfactory" },
+    {
+      repository: { name: "dream", owner: { login: "marius-patrik" } },
+      issue: { number: 42 }
+    },
+    "issues"
+  );
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].route, "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches");
+  assert.deepEqual(requests[0].parameters, {
+    owner: "marius-patrik",
+    repo: "agent-darkfactory",
+    workflow_id: "df-orchestrate.yml",
+    ref: "main",
+    inputs: {
+      repo: "marius-patrik/dream",
+      issue_number: "42",
+      source_event: "issues"
+    }
+  });
+});
+
+test("dispatchOrchestrator swallows dispatch errors", async () => {
+  const requester: GitHubRequester = {
+    async request() {
+      throw new Error("dispatch failed");
+    }
+  };
+
+  await assert.doesNotReject(async () => {
+    await dispatchOrchestrator(
+      requester,
+      { owner: "marius-patrik", repo: "agent-darkfactory" },
+      {
+        repository: { name: "dream", owner: { login: "marius-patrik" } },
+        issue: { number: 42 }
+      },
+      "issues"
+    );
+  });
 });
 
 interface RequesterHooks {
