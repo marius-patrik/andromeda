@@ -8,7 +8,8 @@ const config = loadConfig();
 const app = createBot({
   appId: config.appId,
   privateKey: config.privateKey,
-  webhookSecret: config.webhookSecret
+  webhookSecret: config.webhookSecret,
+  controlRepo: config.controlRepo
 });
 const server = createWebhookServer(app.webhooks);
 

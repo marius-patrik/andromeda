@@ -66,3 +66,39 @@ test("loadConfig rejects invalid PORT values", () => {
     /PORT/
   );
 });
+
+test("loadConfig defaults controlRepo to marius-patrik/agent-darkfactory", () => {
+  const config = loadConfig({
+    GITHUB_APP_ID: "12345",
+    GITHUB_PRIVATE_KEY: "private-key",
+    GITHUB_WEBHOOK_SECRET: "secret"
+  });
+
+  assert.equal(config.controlRepo.owner, "marius-patrik");
+  assert.equal(config.controlRepo.repo, "agent-darkfactory");
+});
+
+test("loadConfig accepts a custom DARK_FACTORY_CONTROL_REPO", () => {
+  const config = loadConfig({
+    GITHUB_APP_ID: "12345",
+    GITHUB_PRIVATE_KEY: "private-key",
+    GITHUB_WEBHOOK_SECRET: "secret",
+    DARK_FACTORY_CONTROL_REPO: "owner/other-control"
+  });
+
+  assert.equal(config.controlRepo.owner, "owner");
+  assert.equal(config.controlRepo.repo, "other-control");
+});
+
+test("loadConfig rejects malformed DARK_FACTORY_CONTROL_REPO", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        GITHUB_APP_ID: "12345",
+        GITHUB_PRIVATE_KEY: "private-key",
+        GITHUB_WEBHOOK_SECRET: "secret",
+        DARK_FACTORY_CONTROL_REPO: "not-a-repo"
+      }),
+    /owner\/repo/
+  );
+});
