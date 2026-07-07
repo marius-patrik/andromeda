@@ -26,6 +26,7 @@ import {
 } from "./packages";
 import { listSecrets, secretPath, syncGitHubSecret, writeSecret } from "./secrets";
 import { osCommand } from "./os-lifecycle";
+import { TuiApp, configuredProviderModels } from "./tui";
 import {
   defaultAgentsHome,
   ensureSyncConfig,
@@ -48,6 +49,7 @@ import {
   loadTranscript,
   runSessionTurn,
   switchSessionProvider,
+  type SessionDescriptor,
   type SessionMode,
 } from "../harness/session";
 import { providerSessionAdapter } from "./session-adapters";
@@ -76,7 +78,8 @@ function help(): void {
   console.log(`agents - Bun agent package manager
 
 Usage:
-  agents run [--mode orchestrator|default] [--provider <id>] [--model <model>] <prompt>
+  agents run [--mode orchestrator|default] [--provider <id>] [--model <model>] [--tui] <prompt>
+  agents tui [--provider <id>] [--model <model>] [--mode <mode>]
   agents sessions list [--json]
   agents sessions resume <id> <prompt>
   agents list [--json]
@@ -641,15 +644,41 @@ async function resolveSessionDefaults(
   return { provider, model, mode };
 }
 
+async function launchTui(state: SharedState, descriptor: SessionDescriptor): Promise<void> {
+  const { providers, modelsByProvider } = configuredProviderModels();
+  const app = new TuiApp({ state, descriptor, providers, modelsByProvider });
+  await app.start();
+  console.error(`session: ${descriptor.sessionId}`);
+}
+
+async function tuiCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
+  const state = runtimeState();
+  await ensureSharedState(state);
+  const { provider, model, mode } = await resolveSessionDefaults(state, flags);
+  const descriptor = await createSession(state, { provider, model, mode });
+  await launchTui(state, descriptor);
+}
+
 async function runCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
   const prompt = args.join(" ").trim();
-  if (!prompt) throw new Error("run requires a prompt");
+  const useTui = Boolean(flags.tui);
+  if (!prompt && !useTui) throw new Error("run requires a prompt");
 
   const state = runtimeState();
   await ensureSharedState(state);
   const { provider, model, mode } = await resolveSessionDefaults(state, flags);
 
   const descriptor = await createSession(state, { provider, model, mode });
+
+  if (useTui) {
+    if (prompt) {
+      const adapter = providerSessionAdapter(descriptor.provider);
+      await runSessionTurn(state, adapter, descriptor, { prompt });
+    }
+    await launchTui(state, descriptor);
+    return;
+  }
+
   const adapter = providerSessionAdapter(descriptor.provider);
   const result = await runSessionTurn(state, adapter, descriptor, { prompt });
 
@@ -1114,6 +1143,7 @@ async function main(): Promise<void> {
   const { values, flags } = parseArgs(rest);
   if (command === "help" || flags.help) return help();
   if (command === "run") return runCommand(values, flags);
+  if (command === "tui") return tuiCommand(values, flags);
   if (command === "sessions") return sessionsCommand(values, flags);
   if (command === "list") return list(flags);
   if (command === "info") return info(values[0], flags);
