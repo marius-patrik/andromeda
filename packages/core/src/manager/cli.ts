@@ -53,9 +53,29 @@ import {
   type SessionMode,
 } from "../harness/session";
 import { providerSessionAdapter } from "./session-adapters";
+import {
+  ensureOrchestratorState,
+  initializeOrchestratorState,
+  orchestratorSystemPrompt,
+  writeOrchestratorHeartbeat,
+} from "./orchestrator";
 
 const root = process.cwd();
 const gitmodulesPath = path.join(root, ".gitmodules");
+
+function systemPromptForMode(mode: SessionMode): string | undefined {
+  return mode === "orchestrator" ? orchestratorSystemPrompt() : undefined;
+}
+
+async function prepareOrchestratorSession(state: SharedState, descriptor: SessionDescriptor): Promise<void> {
+  if (descriptor.mode !== "orchestrator") return;
+  await ensureOrchestratorState(state);
+  await initializeOrchestratorState(state, descriptor.sessionId, descriptor.provider, descriptor.model);
+  await writeOrchestratorHeartbeat(state, descriptor.sessionId, {
+    provider: descriptor.provider,
+    model: descriptor.model,
+  });
+}
 const runModes = new Set<SessionMode>(["orchestrator", "default", "chat", "task"]);
 const defaultDataPath = path.join("data", "data-agentos");
 const packageKinds = new Map([
@@ -603,17 +623,19 @@ async function sessionCommand(args: string[], flags: Record<string, string | boo
       descriptor = await createSession(state, { provider: provider!, model: model!, mode });
     }
 
+    await prepareOrchestratorSession(state, descriptor);
+    const systemPrompt = systemPromptForMode(descriptor.mode);
     const activeProvider = descriptor.provider;
     const adapter = providerSessionAdapter(activeProvider);
 
     if (stream && adapter.streamTurn) {
-      for await (const chunk of await import("../harness/session").then((m) => m.streamSessionTurn(state, adapter, descriptor, { prompt, stream }))) {
+      for await (const chunk of await import("../harness/session").then((m) => m.streamSessionTurn(state, adapter, descriptor, { prompt, stream, systemPrompt }))) {
         if (chunk.type === "text" && chunk.delta) process.stdout.write(chunk.delta);
         if (chunk.type === "error") console.error(chunk.error);
       }
       console.log();
     } else {
-      const result = await runSessionTurn(state, adapter, descriptor, { prompt });
+      const result = await runSessionTurn(state, adapter, descriptor, { prompt, systemPrompt });
       if (result.error) {
         console.error(result.error);
         process.exitCode = 1;
@@ -644,9 +666,9 @@ async function resolveSessionDefaults(
   return { provider, model, mode };
 }
 
-async function launchTui(state: SharedState, descriptor: SessionDescriptor): Promise<void> {
+async function launchTui(state: SharedState, descriptor: SessionDescriptor, systemPrompt?: string): Promise<void> {
   const { providers, modelsByProvider } = configuredProviderModels();
-  const app = new TuiApp({ state, descriptor, providers, modelsByProvider });
+  const app = new TuiApp({ state, descriptor, providers, modelsByProvider, systemPrompt });
   await app.start();
   console.error(`session: ${descriptor.sessionId}`);
 }
@@ -656,7 +678,8 @@ async function tuiCommand(args: string[], flags: Record<string, string | boolean
   await ensureSharedState(state);
   const { provider, model, mode } = await resolveSessionDefaults(state, flags);
   const descriptor = await createSession(state, { provider, model, mode });
-  await launchTui(state, descriptor);
+  await prepareOrchestratorSession(state, descriptor);
+  await launchTui(state, descriptor, systemPromptForMode(mode));
 }
 
 async function runCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
@@ -669,18 +692,20 @@ async function runCommand(args: string[], flags: Record<string, string | boolean
   const { provider, model, mode } = await resolveSessionDefaults(state, flags);
 
   const descriptor = await createSession(state, { provider, model, mode });
+  await prepareOrchestratorSession(state, descriptor);
+  const systemPrompt = systemPromptForMode(mode);
 
   if (useTui) {
     if (prompt) {
       const adapter = providerSessionAdapter(descriptor.provider);
-      await runSessionTurn(state, adapter, descriptor, { prompt });
+      await runSessionTurn(state, adapter, descriptor, { prompt, systemPrompt });
     }
     await launchTui(state, descriptor);
     return;
   }
 
   const adapter = providerSessionAdapter(descriptor.provider);
-  const result = await runSessionTurn(state, adapter, descriptor, { prompt });
+  const result = await runSessionTurn(state, adapter, descriptor, { prompt, systemPrompt });
 
   if (result.error) {
     console.error(result.error);
@@ -761,8 +786,11 @@ async function sessionsCommand(args: string[], flags: Record<string, string | bo
       };
     }
 
+    await prepareOrchestratorSession(state, descriptor);
+    const systemPrompt = systemPromptForMode(descriptor.mode);
+
     const adapter = providerSessionAdapter(descriptor.provider);
-    const result = await runSessionTurn(state, adapter, descriptor, { prompt });
+    const result = await runSessionTurn(state, adapter, descriptor, { prompt, systemPrompt });
     if (result.error) {
       console.error(result.error);
       process.exitCode = 1;
@@ -834,6 +862,7 @@ function sharedHarnessEnv(state: SharedState, harness: { id: string }): Record<s
     AGENTS_HOOKS: state.hooksDir,
     AGENTS_TEMPLATES: state.templatesDir,
     AGENTS_SECRETS: state.secretsDir,
+    AGENTS_ORCHESTRATOR: state.orchestratorDir,
     AGENTS_CREDITS: state.creditsFile,
     AGENTS_DATA_REPOS: state.dataReposFile,
     AGENTS_ENVIRONMENTS: state.environmentsFile,
@@ -857,6 +886,7 @@ function sharedPackageEnv(state: SharedState): Record<string, string> {
     AGENTS_HOOKS: state.hooksDir,
     AGENTS_TEMPLATES: state.templatesDir,
     AGENTS_SECRETS: state.secretsDir,
+    AGENTS_ORCHESTRATOR: state.orchestratorDir,
     AGENTS_CREDITS: state.creditsFile,
     AGENTS_DATA_REPOS: state.dataReposFile,
     AGENTS_ENVIRONMENTS: state.environmentsFile,

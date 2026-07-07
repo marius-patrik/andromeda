@@ -15,6 +15,7 @@ export interface TuiAppOptions {
   descriptor: SessionDescriptor;
   providers?: string[];
   modelsByProvider?: Record<string, string[]>;
+  systemPrompt?: string;
 }
 
 interface Dimensions {
@@ -39,10 +40,12 @@ export class TuiApp {
   private onKeypress: (str: string, key: readline.Key) => void;
   private resolveExit?: () => void;
   private tools = createTuiTools();
+  private systemPrompt?: string;
 
   constructor(options: TuiAppOptions) {
     this.state = options.state;
     this.descriptor = options.descriptor;
+    this.systemPrompt = options.systemPrompt;
     this.stdout = process.stdout;
     this.stderr = process.stderr;
 
@@ -276,7 +279,7 @@ export class TuiApp {
 
   private async runToolTurn(prompt: string): Promise<void> {
     const ctx = this.buildToolContext();
-    const { result } = await runSessionTurnWithTools(this.state, this.descriptor, { prompt }, {
+    const { result } = await runSessionTurnWithTools(this.state, this.descriptor, { prompt, systemPrompt: this.systemPrompt }, {
       tools: this.tools,
       ctx,
       resolveAdapter: (descriptor) => providerSessionAdapter(descriptor.provider),

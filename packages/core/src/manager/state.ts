@@ -77,6 +77,7 @@ export interface SharedState {
   templatesDir: string;
   secretsDir: string;
   sessionsDir: string;
+  orchestratorDir: string;
   creditsFile: string;
   installsFile: string;
   packagesFile: string;
@@ -106,6 +107,7 @@ export function sharedStateAt(root: string, stateDir: string): SharedState {
     templatesDir: path.join(stateDir, "templates"),
     secretsDir: path.join(stateDir, "secrets"),
     sessionsDir: path.join(stateDir, "sessions"),
+    orchestratorDir: path.join(stateDir, "orchestrator"),
     creditsFile: path.join(stateDir, "credits.json"),
     installsFile: path.join(stateDir, "installs.json"),
     packagesFile: path.join(stateDir, "packages.json"),
@@ -137,6 +139,7 @@ export function sharedStateFromEnv(cwd: string, env: Record<string, string | und
     templatesDir: env.AGENTS_TEMPLATES?.trim() || path.join(stateDir, "templates"),
     secretsDir: env.AGENTS_SECRETS?.trim() || path.join(stateDir, "secrets"),
     sessionsDir: env.AGENTS_SESSIONS?.trim() || path.join(stateDir, "sessions"),
+    orchestratorDir: env.AGENTS_ORCHESTRATOR?.trim() || path.join(stateDir, "orchestrator"),
     creditsFile: env.AGENTS_CREDITS?.trim() || path.join(stateDir, "credits.json"),
     dataReposFile: env.AGENTS_DATA_REPOS?.trim() || path.join(stateDir, "data-repos.json"),
     environmentsFile: env.AGENTS_ENVIRONMENTS?.trim() || path.join(stateDir, "environments.json"),
@@ -154,6 +157,7 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
     mkdir(state.templatesDir, { recursive: true }),
     mkdir(state.secretsDir, { recursive: true }),
     mkdir(state.sessionsDir, { recursive: true }),
+    mkdir(state.orchestratorDir, { recursive: true }),
   ]);
 
   if (!(await Bun.file(state.installsFile).exists())) {
@@ -227,6 +231,7 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
       `AGENTS_TEMPLATES=${state.templatesDir}`,
       `AGENTS_SECRETS=${state.secretsDir}`,
       `AGENTS_SESSIONS=${state.sessionsDir}`,
+      `AGENTS_ORCHESTRATOR=${state.orchestratorDir}`,
       `AGENTS_CREDITS=${state.creditsFile}`,
       `AGENTS_DATA_REPOS=${state.dataReposFile}`,
       `AGENTS_ENVIRONMENTS=${state.environmentsFile}`,
