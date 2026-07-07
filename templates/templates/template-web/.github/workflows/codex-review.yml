@@ -126,23 +126,35 @@ jobs:
           printf '%s' "${CODEX_AUTH_JSON}" > "${CODEX_HOME_DIR}/auth.json"
           chmod 600 "${CODEX_HOME_DIR}/auth.json"
 
-          docker run --rm \
-            -e CODEX_HOME=/codex-home \
-            -e HOME=/codex-home \
-            -e BASE_BRANCH \
-            -e BASE_REF=origin/${BASE_BRANCH} \
-            -e REVIEW_OUTPUT=codex-review.json \
-            -e CODEX_REVIEW_MODEL \
-            -e CODEX_REVIEW_EFFORT \
-            -e REVIEW_CONTEXT_DIR=/review-context \
-            -e PR_TITLE \
-            -e PR_BODY \
-            -v "${PWD}/pr-workspace:/workspace" \
-            -v "${PWD}/review-context:/review-context:ro" \
-            -v "${CODEX_HOME_DIR}:/codex-home" \
-            darkfactory-codex-review
+          run_review() {
+            docker run --rm \
+              -e CODEX_HOME=/codex-home \
+              -e HOME=/codex-home \
+              -e BASE_BRANCH \
+              -e BASE_REF=origin/${BASE_BRANCH} \
+              -e REVIEW_OUTPUT=codex-review.json \
+              -e CODEX_REVIEW_MODEL \
+              -e CODEX_REVIEW_EFFORT \
+              -e REVIEW_CONTEXT_DIR=/review-context \
+              -e PR_TITLE \
+              -e PR_BODY \
+              -v "${PWD}/pr-workspace:/workspace" \
+              -v "${PWD}/review-context:/review-context:ro" \
+              -v "${CODEX_HOME_DIR}:/codex-home" \
+              darkfactory-codex-review
 
-          cp pr-workspace/codex-review.json codex-review.json
+            cp pr-workspace/codex-review.json codex-review.json
+          }
+
+          is_infra_failure() {
+            node -e "const r = JSON.parse(require('fs').readFileSync('codex-review.json', 'utf8')); process.exit(r._infra_failure ? 0 : 1)" 2>/dev/null
+          }
+
+          run_review
+          if is_infra_failure; then
+            echo "Codex review reported an infrastructure failure; retrying once..."
+            run_review
+          fi
 
       - name: Comment review
         if: always()
@@ -158,8 +170,12 @@ jobs:
             const notes = review.non_blocking_notes.length
               ? review.non_blocking_notes.map((item) => `- ${item}`).join("\n")
               : "- None";
-            const verdict = review.approved ? "Approved" : "Changes required";
-            const commentBody = `${marker}\n## Codex Autoreview\n\n**Verdict:** ${verdict}\n\n${review.summary}\n\n### Blocking Findings\n\n${blocking}\n\n### Non-Blocking Notes\n\n${notes}`;
+            const infra = review._infra_failure === true;
+            const verdict = review.approved ? "Approved" : infra ? "Infrastructure failure" : "Changes required";
+            const infraNote = infra
+              ? "\n\n> ⚠️ This result is an infrastructure/automation failure, not a code review verdict. The Codex Review harness failed before producing a valid review."
+              : "";
+            const commentBody = `${marker}\n## Codex Autoreview\n\n**Verdict:** ${verdict}${infraNote}\n\n${review.summary}\n\n### Blocking Findings\n\n${blocking}\n\n### Non-Blocking Notes\n\n${notes}`;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
@@ -174,4 +190,4 @@ jobs:
         if: always()
         shell: bash
         run: |
-          node -e "const fs = require('fs'); const r = JSON.parse(fs.readFileSync('codex-review.json', 'utf8')); if (!r.approved) { console.error('Codex review did not approve this PR.'); process.exit(1); }"
+          node -e "const fs = require('fs'); const r = JSON.parse(fs.readFileSync('codex-review.json', 'utf8')); if (r._infra_failure) { console.error('Codex review failed with an infrastructure failure.'); process.exit(1); } if (!r.approved) { console.error('Codex review did not approve this PR.'); process.exit(1); }"

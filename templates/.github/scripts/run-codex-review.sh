@@ -27,6 +27,21 @@ fs.writeFileSync(process.env.REVIEW_OUTPUT, `${JSON.stringify({
 NODE
 }
 
+write_infra_review() {
+  local summary="$1"
+  local finding="$2"
+  REVIEW_SUMMARY="${summary}" REVIEW_FINDING="${finding}" REVIEW_OUTPUT="${REVIEW_OUTPUT}" node <<'NODE'
+const fs = require("node:fs");
+fs.writeFileSync(process.env.REVIEW_OUTPUT, `${JSON.stringify({
+  approved: false,
+  _infra_failure: true,
+  summary: process.env.REVIEW_SUMMARY,
+  blocking_findings: [process.env.REVIEW_FINDING],
+  non_blocking_notes: [],
+}, null, 2)}\n`);
+NODE
+}
+
 append_capped_file() {
   local file_path="$1"
   local label="$2"
@@ -41,8 +56,84 @@ append_capped_file() {
   fi
 }
 
+extract_review_json() {
+  local input_path="$1"
+  local output_path="$2"
+  REVIEW_INPUT="${input_path}" REVIEW_OUTPUT="${output_path}" node <<'NODE'
+const fs = require("node:fs");
+
+const inputPath = process.env.REVIEW_INPUT;
+const outputPath = process.env.REVIEW_OUTPUT;
+
+function tryParse(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractJsonObject(value) {
+  // Direct JSON parse.
+  const direct = tryParse(value);
+  if (direct !== undefined) return direct;
+
+  // Look for a fenced JSON code block.
+  const fenceMatch = value.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fenceMatch) {
+    const parsed = tryParse(fenceMatch[1]);
+    if (parsed !== undefined) return parsed;
+  }
+
+  // Scan for the first balanced top-level JSON object.
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      if (start === -1) start = i;
+      continue;
+    }
+    if (ch === "{") {
+      if (start === -1) start = i;
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (start !== -1 && depth === 0) {
+        const parsed = tryParse(value.slice(start, i + 1));
+        if (parsed !== undefined) return parsed;
+        start = -1;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+const content = fs.readFileSync(inputPath, "utf8");
+const extracted = extractJsonObject(content);
+if (extracted === undefined) {
+  process.exit(1);
+}
+fs.writeFileSync(outputPath, `${JSON.stringify(extracted, null, 2)}\n`);
+NODE
+}
+
 if [ ! -s "${CODEX_HOME}/auth.json" ]; then
-  write_blocked_review \
+  write_infra_review \
     "Codex autoreview could not run because CODEX_HOME/auth.json is missing." \
     "Configure CODEX_AUTH_JSON in GitHub repository secrets and mount it into the review container as CODEX_HOME/auth.json."
   exit 0
@@ -54,13 +145,13 @@ git fetch origin "${BASE_BRANCH}"
 AGENTS_CONTEXT="${REVIEW_CONTEXT_DIR}/AGENTS.md"
 ISSUE_CONTEXT="${REVIEW_CONTEXT_DIR}/linked-issues.md"
 if [ ! -s "${AGENTS_CONTEXT}" ]; then
-  write_blocked_review \
+  write_infra_review \
     "Codex autoreview could not run because repository rule context is missing." \
     "Prepare and mount ${AGENTS_CONTEXT} before running the Codex review container."
   exit 0
 fi
 if [ ! -s "${ISSUE_CONTEXT}" ]; then
-  write_blocked_review \
+  write_infra_review \
     "Codex autoreview could not run because linked issue context is missing." \
     "Prepare and mount ${ISSUE_CONTEXT} before running the Codex review container."
   exit 0
@@ -90,7 +181,7 @@ Review the PR against the linked issue/spec, the managed repository agent contex
 
 The generated review diff intentionally excludes common generated output directories such as dist/**, build/**, coverage/**, node_modules/**, packages/web/dist/**, and .codex-plugin/runtime/modules/**. Review source generators and validation logic for generated payloads instead; CI must validate generated payloads directly.
 
-Return only JSON that matches the provided schema.
+You may use tools (read files, run read-only commands, etc.) as needed to understand the change. Your FINAL message must be ONLY a JSON object matching the provided schema. Do not wrap the JSON in markdown fences or add commentary outside the JSON object.
 
 Set approved=true only when:
 - the implementation satisfies the stated PR/issue spec,
@@ -123,6 +214,14 @@ append_capped_file "${ISSUE_CONTEXT}" "linked issue context" 220000
 
 cat <<EOF
 
+Schema:
+EOF
+
+cat "${SCHEMA_PATH}"
+
+cat <<EOF
+
+PR diff:
 EOF
 
 append_capped_file "${DIFF_FILE}" "PR diff" 520000
@@ -142,31 +241,31 @@ if [ "${PROMPT_BYTES}" -gt "${MAX_PROMPT_BYTES}" ]; then
   mv "${TRUNCATED_PROMPT_FILE}" "${PROMPT_FILE}"
 fi
 
-if ! codex exec \
+CODEX_EXIT=0
+codex exec \
   --cd /workspace \
   --model "${CODEX_REVIEW_MODEL}" \
   -c "model_reasoning_effort=\"${CODEX_REVIEW_EFFORT}\"" \
   --sandbox read-only \
   --ephemeral \
-  --output-schema "${SCHEMA_PATH}" \
   --output-last-message "${REVIEW_OUTPUT}" \
-  - < "${PROMPT_FILE}"; then
-  write_blocked_review \
+  - < "${PROMPT_FILE}" || CODEX_EXIT=$?
+
+if [ "${CODEX_EXIT}" -ne 0 ] || [ ! -s "${REVIEW_OUTPUT}" ]; then
+  write_infra_review \
     "Codex autoreview command failed before producing a valid review." \
-    "Inspect the Codex Review workflow logs and fix the automation before allowing automerge."
+    "Inspect the Codex Review workflow logs and retry if the failure is transient (quota, network, Codex CLI error, or schema/tool-use conflict)."
+  exit 0
 fi
 
-if ! node -e "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))" "${REVIEW_OUTPUT}"; then
+EXTRACTED_REVIEW="$(mktemp)"
+if ! extract_review_json "${REVIEW_OUTPUT}" "${EXTRACTED_REVIEW}"; then
   RAW_REVIEW="$(cat "${REVIEW_OUTPUT}" || true)"
-  REVIEW_SUMMARY="Codex autoreview produced non-JSON output." \
-  REVIEW_FINDING="${RAW_REVIEW:-Codex review output was empty or invalid.}" \
-  REVIEW_OUTPUT="${REVIEW_OUTPUT}" node <<'NODE'
-const fs = require("node:fs");
-fs.writeFileSync(process.env.REVIEW_OUTPUT, `${JSON.stringify({
-  approved: false,
-  summary: process.env.REVIEW_SUMMARY,
-  blocking_findings: [process.env.REVIEW_FINDING],
-  non_blocking_notes: [],
-}, null, 2)}\n`);
-NODE
+  write_infra_review \
+    "Codex autoreview produced non-JSON output." \
+    "${RAW_REVIEW:-Codex review output was empty or invalid.}"
+  rm -f "${EXTRACTED_REVIEW}"
+  exit 0
 fi
+
+mv "${EXTRACTED_REVIEW}" "${REVIEW_OUTPUT}"
