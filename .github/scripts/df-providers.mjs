@@ -90,9 +90,23 @@ export async function prepareProviderAuth(provider, authJson, homeDir) {
   }
 
   if (provider.id === "kimi") {
-    const credentialsDir = path.join(homeDir, ".kimi-code", "credentials");
+    const kimiHome = path.join(homeDir, ".kimi-code");
+    const credentialsDir = path.join(kimiHome, "credentials");
     await mkdir(credentialsDir, { recursive: true });
     await writeFile(path.join(credentialsDir, "kimi-code.json"), authJson, { mode: 0o600 });
+    // kimi-code refuses --model ids that are not declared in config.toml.
+    const model = provider.models?.default || "kimi-code/kimi-for-coding";
+    const configToml = [
+      `default_model = "${model}"`,
+      "",
+      `[models."${model}"]`,
+      'provider = "managed:kimi-code"',
+      `model = "${model.split("/").pop()}"`,
+      "max_context_size = 262144",
+      'capabilities = [ "thinking", "always_thinking", "image_in", "video_in", "tool_use" ]',
+      "",
+    ].join("\n");
+    await writeFile(path.join(kimiHome, "config.toml"), configToml, { mode: 0o600 });
     return;
   }
 

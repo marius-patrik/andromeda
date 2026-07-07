@@ -11,11 +11,11 @@
         "version": "latest"
       },
       "models": {
-        "default": "kimi-k2",
+        "default": "kimi-code/kimi-for-coding",
         "byTaskClass": {
-          "mechanical": "kimi-k2",
-          "standard": "kimi-k2",
-          "hard": "kimi-k2"
+          "mechanical": "kimi-code/kimi-for-coding",
+          "standard": "kimi-code/kimi-for-coding",
+          "hard": "kimi-code/kimi-for-coding"
         }
       },
       "maxConcurrency": 2

@@ -218,10 +218,14 @@ test("prepareProviderAuth writes codex auth without echoing secret", async () =>
 test("prepareProviderAuth writes kimi credentials to expected path", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-auth-"));
   try {
-    const provider = { id: "kimi", enabled: true, secret: "KIMI_AUTH_JSON" };
+    const provider = { id: "kimi", enabled: true, secret: "KIMI_AUTH_JSON", models: { default: "kimi-code/kimi-for-coding" } };
     await prepareProviderAuth(provider, '{"credential":"secret"}', root);
     const content = await readFile(join(root, ".kimi-code", "credentials", "kimi-code.json"), "utf8");
     assert.equal(content, '{"credential":"secret"}');
+    const config = await readFile(join(root, ".kimi-code", "config.toml"), "utf8");
+    assert.ok(config.includes('default_model = "kimi-code/kimi-for-coding"'));
+    assert.ok(config.includes('[models."kimi-code/kimi-for-coding"]'));
+    assert.ok(config.includes("max_context_size"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
