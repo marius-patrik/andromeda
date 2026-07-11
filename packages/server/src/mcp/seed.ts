@@ -2,26 +2,53 @@ import type { KnowledgeBase } from "@okf-agent/core";
 import type { TreeNode } from "@okf-agent/core";
 
 const MAX_SEED_CHARS = 3000;
+const MAX_DESCRIPTIONS_PER_SEGMENT = 10;
 
 /**
  * Seed memory: a compact overview of what the knowledge base contains,
  * loaded into the client LLM at session start (via MCP `instructions` and
  * the memory_query tool description). Without it the model has no signal
  * that memory might hold an answer, so it never thinks to look.
+ *
+ * Unlike the on-disk index.md (navigation: titles + links), the seed lists
+ * concept DESCRIPTIONS per segment — semantic hooks beat filenames for
+ * igniting the "memory might know this" instinct.
  */
 export async function buildSeedMemory(kb: KnowledgeBase): Promise<string> {
   const [tree, types, log] = await Promise.all([kb.listTree(), kb.listTypes(), kb.readLog()]);
 
-  const lines: string[] = [];
-  renderTree(tree, "", lines);
+  const segments: string[] = [];
+  const rootDescriptions: string[] = [];
 
-  const recent = log
-    .slice(0, 3)
-    .map((e) => `- ${e.date} ${e.action}: ${e.summary}`);
+  for (const child of tree.children ?? []) {
+    if (child.kind === "directory") {
+      const collected = collectConcepts(child);
+      if (collected.count === 0) continue;
+      const typeList = [...collected.types].sort().join(", ");
+      const shown = collected.descriptions.slice(0, MAX_DESCRIPTIONS_PER_SEGMENT);
+      const more = collected.count - shown.length;
+      segments.push(
+        `* ${child.name}/ — ${collected.count} concept${collected.count === 1 ? "" : "s"}` +
+          `${typeList ? ` (${typeList})` : ""}:\n` +
+          shown.map((d) => `    * ${d}`).join("\n") +
+          (more > 0 ? `\n    * …and ${more} more` : "")
+      );
+    } else if (child.kind === "concept") {
+      rootDescriptions.push(child.description ?? child.title ?? child.name);
+    }
+  }
+  if (rootDescriptions.length > 0) {
+    segments.push(
+      `* (root) — ${rootDescriptions.length} concept${rootDescriptions.length === 1 ? "" : "s"}:\n` +
+        rootDescriptions.map((d) => `    * ${d}`).join("\n")
+    );
+  }
+
+  const recent = log.slice(0, 3).map((e) => `- ${e.date} ${e.action}: ${e.summary}`);
 
   const sections = [
     `Concept types in use: ${types.join(", ") || "(none yet)"}`,
-    `Contents:\n${lines.join("\n") || "(empty — nothing stored yet)"}`,
+    `Memory segments:\n${segments.join("\n") || "(empty — nothing stored yet)"}`,
   ];
   if (recent.length > 0) sections.push(`Recent activity:\n${recent.join("\n")}`);
 
@@ -34,16 +61,26 @@ export async function buildSeedMemory(kb: KnowledgeBase): Promise<string> {
   return seed;
 }
 
-function renderTree(node: TreeNode, indent: string, out: string[]): void {
+/** Recursively gather concept descriptions (falling back to title/filename) and types. */
+function collectConcepts(node: TreeNode): {
+  count: number;
+  types: Set<string>;
+  descriptions: string[];
+} {
+  const out = { count: 0, types: new Set<string>(), descriptions: [] as string[] };
   for (const child of node.children ?? []) {
     if (child.kind === "directory") {
-      out.push(`${indent}${child.name}/`);
-      renderTree(child, indent + "  ", out);
+      const nested = collectConcepts(child);
+      out.count += nested.count;
+      nested.types.forEach((t) => out.types.add(t));
+      out.descriptions.push(...nested.descriptions);
     } else if (child.kind === "concept") {
-      const desc = child.description ?? child.title ?? "";
-      out.push(`${indent}${child.name} [${child.type ?? "?"}]${desc ? ` — ${desc}` : ""}`);
+      out.count++;
+      if (child.type) out.types.add(child.type);
+      out.descriptions.push(child.description ?? child.title ?? child.name);
     }
   }
+  return out;
 }
 
 /** The initialize `instructions` block — seed plus the instinct-igniting rules. */
