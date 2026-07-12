@@ -29,6 +29,17 @@ test("blocking findings always force a failed normalized verdict", () => {
   assert.deepEqual(review.blocking_findings, ["unsafe"]);
 });
 
+test("invalid review shapes report the missing contract without echoing model content", () => {
+  assert.throws(
+    () => parseReview('{"verdict":"approved","private":"do not echo"}'),
+    (error) => {
+      assert.match(error.message, /review\.approved must be boolean/);
+      assert.doesNotMatch(error.message, /do not echo/);
+      return true;
+    },
+  );
+});
+
 test("takeover dispatch uses only the trusted automation exit code", () => {
   assert.equal(shouldTakeOver(42), true);
   assert.equal(shouldTakeOver(0), false);
@@ -45,6 +56,20 @@ test("workflow isolates Codex and Kimi credentials in separate provider steps", 
   assert.match(kimiStep, /KIMI_AUTH_JSON:/);
   assert.doesNotMatch(kimiStep, /CODEX_AUTH_JSON:/);
   assert.match(kimiStep, /steps\.review\.outputs\.takeover == 'true'/);
+});
+
+test("review prompt budgets generated payloads as a file summary", async () => {
+  const runner = await readFile(".github/scripts/run-codex-review.sh", "utf8");
+  for (const path of [
+    "packages/core/src/core/contracts-go/gen/**",
+    "packages/core/src/core/clients/shared-ts/src/gen/**",
+    "packages/core/src/gateway/agent_os/**",
+    "packages/core/src/inference/python-agent/agent/gen/**",
+  ]) {
+    assert.match(runner, new RegExp(path.replaceAll("/", "\\/").replaceAll("*", "\\*")));
+  }
+  assert.match(runner, /git diff --name-status/);
+  assert.match(runner, /Generated payload file summary/);
 });
 
 test("persists rotated credentials through an in-memory gh stdin pipe", async () => {
@@ -207,6 +232,8 @@ test("uses the review API without placing credentials in model input", async () 
   assert.equal(request.init.headers.authorization, "Bearer top-secret");
   assert.doesNotMatch(request.init.body, /top-secret/);
   assert.match(request.init.body, /review this diff/);
+  assert.match(request.init.body, /blocking_findings/);
+  assert.match(request.init.body, /non_blocking_notes/);
   assert.equal(JSON.parse(request.init.body).temperature, 1);
 });
 
