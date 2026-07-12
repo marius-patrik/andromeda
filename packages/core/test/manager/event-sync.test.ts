@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { ensureSharedState, sharedState } from "../../src/manager/state";
 import { writeSecret } from "../../src/manager/secrets";
-import { rebuildMemoryProjections, rememberMemory } from "../../src/manager/memory";
+import { rebuildMemoryProjections, rememberMemory, supersedeMemory } from "../../src/manager/memory";
 import {
   createSession,
   inspectSessionIntegrity,
@@ -476,6 +476,49 @@ describe("encrypted cross-machine event exchange", () => {
       await expect(
         exportEventBundle(sourceMetadataSecret, path.join(root, "source-metadata-secret.bundle.json")),
       ).rejects.toThrow("canonical non-secret identifier");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("canonical repository paths and Git commits are not mistaken for secrets", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-safe-identifiers-"));
+    try {
+      const source = await exchangeState(path.join(root, "source"));
+      await rememberMemory(source, {
+        scope: "project",
+        subject: "Andromeda",
+        predicate: "canonical-remote",
+        value: "https://github.com/marius-patrik/andromeda-platform (renamed from marius-patrik/agents-manager-platform)",
+        evidence,
+      });
+      const original = await rememberMemory(source, {
+        scope: "project",
+        subject: "Andromeda",
+        predicate: "release-commit",
+        value: "0123456789abcdef0123456789abcdef01234567",
+        evidence,
+      });
+      await supersedeMemory(source, original.id, {
+        value: "89abcdef0123456789abcdef0123456789abcdef",
+        evidence,
+      });
+      await rememberMemory(source, {
+        scope: "project",
+        subject: "task-board",
+        predicate: "location",
+        value: "canonical owner-facing board",
+        evidence: { ...evidence, uri: "file:///C:/Users/patrik/marius-patrik/Andromeda/data/agent-os/context/TASK.md" },
+      });
+      await rememberMemory(source, {
+        scope: "project",
+        subject: "session",
+        predicate: "identifier",
+        value: "canonical machine 906f1326-7ced-41f3-97d5-69df9dd6ad2f",
+        evidence,
+      });
+      const exported = await exportEventBundle(source, path.join(root, "safe-identifiers.bundle.json"));
+      expect(exported.entries).toBe(5);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

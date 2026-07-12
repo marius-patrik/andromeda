@@ -227,6 +227,7 @@ const STRUCTURAL_STRING_FIELDS = new Set([
   "machineId",
   "sessionId",
   "turnId",
+  "supersedes",
   "eventHash",
   "previousEventHash",
   "contentHash",
@@ -255,8 +256,11 @@ function secretLikeText(value: string): boolean {
   ) {
     return true;
   }
-  for (const candidate of value.match(/[A-Za-z0-9_+\/-]{32,}={0,2}/g) ?? []) {
-    if (/^[a-f0-9]{64}$/.test(candidate)) continue;
+  const entropyInput = value.replace(/\bfile:\/\/[^\s)]+/gi, "");
+  for (const candidate of entropyInput.match(/[A-Za-z0-9_+\/-]{32,}={0,2}/g) ?? []) {
+    if (UUID.test(candidate)) continue;
+    if (/^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(candidate)) continue;
+    if (candidate.includes("/") && /^[a-z0-9\/-]+$/.test(candidate)) continue;
     if (/[A-Za-z]/.test(candidate) && (/[0-9]/.test(candidate) || /[_+\/-]/.test(candidate))) return true;
     if (/[a-z]/.test(candidate) && /[A-Z]/.test(candidate)) {
       const counts = new Map<string, number>();
@@ -271,24 +275,32 @@ function secretLikeText(value: string): boolean {
   return false;
 }
 
-function containsSecretField(value: unknown, field = ""): boolean {
+function secretFieldPath(value: unknown, field = "", path = ""): string | null {
   if (typeof value === "string") {
-    if (STRUCTURAL_STRING_FIELDS.has(field) && (UUID.test(value) || CANONICAL_HASH_OR_ID.test(value))) return false;
-    return secretLikeText(value);
+    if (STRUCTURAL_STRING_FIELDS.has(field) && (UUID.test(value) || CANONICAL_HASH_OR_ID.test(value))) return null;
+    return secretLikeText(value) ? path || field || "<root>" : null;
   }
-  if (Array.isArray(value)) return value.some((item) => containsSecretField(item, field));
-  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const found = secretFieldPath(item, field, `${path}[${index}]`);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    const nestedPath = path ? `${path}.${key}` : key;
     if (
       /(?:password|passwd|pwd|secret|token|api.?key|credential|authorization|private.?key|connection.?string|dsn)/i.test(key) &&
       typeof nested === "string" &&
       nested.length > 0
     ) {
-      return true;
+      return nestedPath;
     }
-    if (containsSecretField(nested, key)) return true;
+    const found = secretFieldPath(nested, key, nestedPath);
+    if (found) return found;
   }
-  return false;
+  return null;
 }
 
 function assertSourceMetadata(source: { installId: string; machineId: string }): void {
@@ -311,8 +323,9 @@ function assertNoPlantedSecret(relativePath: string, content: string): unknown {
   if (record?.sensitivity === "secret") {
     throw new Error(`secret memory events are local-only and cannot roam: ${relativePath}`);
   }
-  if (containsSecretField(parsed)) {
-    throw new Error(`event exchange payload contains a secret-like field: ${relativePath}`);
+  const plantedSecret = secretFieldPath(parsed);
+  if (plantedSecret) {
+    throw new Error(`event exchange payload contains a secret-like field at ${plantedSecret}: ${relativePath}`);
   }
   return parsed;
 }
