@@ -9,7 +9,8 @@ import {
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { TextDecoder } from "node:util";
 
 const root = resolve(import.meta.dir, "..");
 const core = join(root, "packages/core/src/core");
@@ -41,6 +42,23 @@ function filesUnder(directory: string): string[] {
   return files.sort();
 }
 
+// Extend this allowlist when a pinned generator adds another text format.
+const GENERATED_TEXT_EXTENSIONS = new Set([".go", ".py", ".pyi", ".ts"]);
+
+function comparableGeneratedContent(file: string): Buffer {
+  const content = readFileSync(file);
+  if (!GENERATED_TEXT_EXTENSIONS.has(extname(file))) return content;
+  // Git may materialize generated text as CRLF on Windows while the pinned
+  // generators emit LF. Codegen freshness is a content invariant, so compare
+  // one canonical newline representation. Unknown and future binary artifacts
+  // remain byte-exact.
+  try {
+    return Buffer.from(new TextDecoder("utf-8", { fatal: true }).decode(content).replaceAll("\r\n", "\n"));
+  } catch {
+    return content;
+  }
+}
+
 function assertTreesEqual(expected: string, actual: string, label: string): void {
   const expectedFiles = filesUnder(expected);
   const actualFiles = filesUnder(actual);
@@ -50,7 +68,7 @@ function assertTreesEqual(expected: string, actual: string, label: string): void
     throw new Error(`${label} file set differs; missing after generation: ${missing.join(", ") || "none"}; stale in checkout: ${stale.join(", ") || "none"}`);
   }
   for (const file of expectedFiles) {
-    if (!readFileSync(join(expected, file)).equals(readFileSync(join(actual, file)))) {
+    if (!comparableGeneratedContent(join(expected, file)).equals(comparableGeneratedContent(join(actual, file)))) {
       throw new Error(`${label} differs from clean generation: ${file}`);
     }
   }
