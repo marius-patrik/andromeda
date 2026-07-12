@@ -111,6 +111,38 @@ test("a valid primary changes-required review wins despite nonzero Codex exit", 
   }
 });
 
+test("missing Codex auth exports the immutable prompt before requesting takeover", { skip: process.platform === "win32" }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "andromeda-review-takeover-"));
+  const home = path.join(root, "codex-home");
+  const context = path.join(root, "context");
+  const output = path.join(root, "review.json");
+  const prompt = path.join(root, "review-prompt.txt");
+  await Promise.all([mkdir(home), mkdir(context)]);
+  await writeFile(path.join(context, "AGENTS.md"), "rules\n");
+  await writeFile(path.join(context, "linked-issues.md"), "issue\n");
+  try {
+    const result = spawnSync("bash", [".github/scripts/run-codex-review.sh"], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: root,
+        CODEX_HOME: home,
+        REVIEW_CONTEXT_DIR: context,
+        REVIEW_OUTPUT: output,
+        PROMPT_EXPORT: prompt,
+        BASE_BRANCH: "dev",
+        BASE_REF: "HEAD",
+      },
+    });
+    assert.equal(result.status, 42, result.stderr);
+    assert.match(await readFile(prompt, "utf8"), /Managed repository agent context:\nrules/);
+    assert.equal(JSON.parse(await readFile(output, "utf8")).approved, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects malformed credential envelopes", () => {
   assert.throws(() => parseCredential('{"refresh_token":"secret"}'), /access_token/);
   assert.equal(parseCredential('{"kimi-code":{"access_token":"token"}}').access_token, "token");

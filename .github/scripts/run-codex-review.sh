@@ -40,19 +40,12 @@ append_capped_file() {
   fi
 }
 
-if [ ! -s "${CODEX_HOME}/auth.json" ]; then
-  write_blocked_review \
-    "Codex autoreview could not run because CODEX_HOME/auth.json is missing." \
-    "Configure CODEX_AUTH_JSON in GitHub repository secrets and mount it into the review container as CODEX_HOME/auth.json."
-  exit 42
-fi
-
 git config --global --add safe.directory /workspace
 if ! git rev-parse --verify "${BASE_REF}^{commit}" >/dev/null 2>&1; then
   write_blocked_review \
     "Codex autoreview could not resolve the configured base ref." \
     "Ensure the PR checkout includes ${BASE_REF} before running the read-only review container."
-  exit 42
+  exit 1
 fi
 
 AGENTS_CONTEXT="${REVIEW_CONTEXT_DIR}/AGENTS.md"
@@ -61,13 +54,13 @@ if [ ! -s "${AGENTS_CONTEXT}" ]; then
   write_blocked_review \
     "Codex autoreview could not run because repository rule context is missing." \
     "Prepare and mount ${AGENTS_CONTEXT} before running the Codex review container."
-  exit 42
+  exit 1
 fi
 if [ ! -s "${ISSUE_CONTEXT}" ]; then
   write_blocked_review \
     "Codex autoreview could not run because linked issue context is missing." \
     "Prepare and mount ${ISSUE_CONTEXT} before running the Codex review container."
-  exit 42
+  exit 1
 fi
 
 DIFF_FILE="$(mktemp)"
@@ -147,6 +140,13 @@ fi
 
 if [ -n "${PROMPT_EXPORT}" ]; then
   cp "${PROMPT_FILE}" "${PROMPT_EXPORT}"
+fi
+
+if [ ! -s "${CODEX_HOME}/auth.json" ]; then
+  write_blocked_review \
+    "Codex autoreview could not run because CODEX_HOME/auth.json is missing." \
+    "Configure CODEX_AUTH_JSON in GitHub repository secrets and mount it into the review container as CODEX_HOME/auth.json."
+  exit 42
 fi
 
 CODEX_EXIT=0
