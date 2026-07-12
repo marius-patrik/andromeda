@@ -15,6 +15,6 @@
 	url = https://github.com/marius-patrik/SkyAgent.git
 	branch = main
 [submodule "data"]
-	path = data
-	url = https://github.com/marius-patrik/Rommie.git
+	path = data/agent-os
+	url = https://github.com/marius-patrik/Andromeda-data.git
 	branch = main
