@@ -3,7 +3,7 @@ import path from "node:path";
 import { chmod, link, lstat, mkdir, open, readFile, readdir, rm } from "node:fs/promises";
 import type { SharedState } from "./state";
 import { withRenewableStateLock } from "./state-lock";
-import { writeTextAtomic } from "./state-v2";
+import { retryWindowsFileOperation, writeTextAtomic } from "./state-v2";
 
 export interface OrchestratorHeartbeat {
   lastBeatAt: string;
@@ -214,16 +214,16 @@ async function tryCreatePrivateFile(filePath: string, content: string): Promise<
   const directory = path.dirname(filePath);
   await ensurePrivateDirectory(directory);
   const temporary = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  const handle = await open(temporary, "wx", 0o600);
   try {
-    await handle.writeFile(content, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
+    const handle = await open(temporary, "wx", 0o600);
     try {
-      await link(temporary, filePath);
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      await retryWindowsFileOperation(() => link(temporary, filePath));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
       throw error;
@@ -232,7 +232,7 @@ async function tryCreatePrivateFile(filePath: string, content: string): Promise<
     await syncDirectory(directory);
     return true;
   } finally {
-    await rm(temporary, { force: true });
+    await retryWindowsFileOperation(() => rm(temporary, { force: true }));
   }
 }
 
