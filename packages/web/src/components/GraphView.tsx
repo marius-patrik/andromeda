@@ -189,8 +189,14 @@ export function GraphView({
 
   const onPointerDown = (e: React.PointerEvent, node?: SimNode) => {
     e.preventDefault();
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+    // Engage the drag FIRST — capture is an enhancement and may throw
+    // (e.g. for synthetic pointers); it must never kill the pan.
     dragRef.current = { mode: node ? "node" : "pan", node, lastX: e.clientX, lastY: e.clientY };
+    try {
+      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    } catch {
+      // Fine — events still bubble to the svg handlers.
+    }
     if (node) {
       node.fx = node.x;
       node.fy = node.y;
@@ -206,9 +212,14 @@ export function GraphView({
       drag.node.fx = w.x;
       drag.node.fy = w.y;
     } else {
-      setView((v) => ({ ...v, x: v.x + e.clientX - drag.lastX, y: v.y + e.clientY - drag.lastY }));
+      // Compute the delta EAGERLY. React runs state updaters lazily at render
+      // time — if the updater read drag.lastX itself, the mutation below would
+      // already have overwritten it and the delta would always be zero.
+      const dx = e.clientX - drag.lastX;
+      const dy = e.clientY - drag.lastY;
       drag.lastX = e.clientX;
       drag.lastY = e.clientY;
+      setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
     }
   };
 
@@ -231,6 +242,19 @@ export function GraphView({
       return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k };
     });
   };
+
+  /** Zoom by a factor around the viewport center (camera buttons). */
+  const zoomBy = (factor: number) => {
+    const rect = containerRef.current!.getBoundingClientRect();
+    const mx = rect.width / 2;
+    const my = rect.height / 2;
+    setView((v) => {
+      const k = Math.min(4, Math.max(0.25, v.k * factor));
+      return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k };
+    });
+  };
+
+  const resetCamera = () => setView({ x: 0, y: 0, k: 1 });
 
   const showAllLabels = nodes.length <= 60;
   const pathColor = activeTrace ? KIND_COLOR[activeTrace.kind] : "#64c8ff";
@@ -359,9 +383,34 @@ export function GraphView({
 
       {!activeTrace && (
         <div className="absolute bottom-3 left-3 z-10 text-[11px] text-zinc-600">
-          {nodes.length} concepts · {links.length} links — drag nodes · scroll to zoom · click to open
+          {nodes.length} concepts · {links.length} links — drag background to pan · scroll to zoom · click to open
         </div>
       )}
+
+      {/* Camera controls */}
+      <div className="absolute bottom-3 right-3 z-10 flex flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/90 text-sm">
+        <button
+          onClick={() => zoomBy(1.3)}
+          title="Zoom in"
+          className="px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+        >
+          +
+        </button>
+        <button
+          onClick={() => zoomBy(1 / 1.3)}
+          title="Zoom out"
+          className="border-t border-zinc-800 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+        >
+          −
+        </button>
+        <button
+          onClick={resetCamera}
+          title="Reset camera"
+          className="border-t border-zinc-800 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+        >
+          ⌖
+        </button>
+      </div>
 
       <svg
         className="h-full w-full cursor-grab active:cursor-grabbing"
