@@ -19,11 +19,37 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: Create repository checkout token
+        if: github.event_name == 'push'
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DARKFACTORY_APP_ID }}
+          private-key: ${{ secrets.DARKFACTORY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            Andromeda
+            Andromeda-data
+            DarkFactory
+            life-support
+            singularity
+            SkyAgent
+
+      - name: Check out repository with private components
+        if: github.event_name == 'push'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           submodules: recursive
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Check out pull request without private components
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2

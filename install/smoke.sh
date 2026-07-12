@@ -26,6 +26,14 @@ within_sandbox() {
   esac
 }
 
+runtime_path() {
+  local value="$1"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) cygpath -w "$value" ;;
+    *) printf '%s\n' "$value" ;;
+  esac
+}
+
 for name in AGENTS_SMOKE_SANDBOX AGENTS_HOME AGENTS_USER_HOME AGENTS_ROOT; do
   value="${!name:-}"
   [ -n "$value" ] || die "$name is required"
@@ -91,12 +99,12 @@ mkdir -p "$hostile_home"
 [ ! -e "$hostile_home/.agents" ] || die "launcher wrote state below an inherited HOME"
 
 env_file="$AGENTS_HOME/env"
-grep -Fqx "AGENTS_HOME=$AGENTS_HOME" "$env_file"
-grep -Fqx "AGENTS_USER_HOME=$AGENTS_USER_HOME" "$env_file"
-grep -Fqx "AGENTS_ROOT=$AGENTS_ROOT" "$env_file"
-grep -Fqx "AGENTS_CLIS=$AGENTS_HOME/clis" "$env_file"
-grep -Fqx "AGENTS_IDENTITY=$AGENTS_HOME/identity" "$env_file"
-grep -Fqx "AGENTS_MEMORY=$AGENTS_HOME/memory" "$env_file"
+grep -Fqx "AGENTS_HOME=$(runtime_path "$AGENTS_HOME")" "$env_file"
+grep -Fqx "AGENTS_USER_HOME=$(runtime_path "$AGENTS_USER_HOME")" "$env_file"
+grep -Fqx "AGENTS_ROOT=$(runtime_path "$AGENTS_ROOT")" "$env_file"
+grep -Fqx "AGENTS_CLIS=$(runtime_path "$AGENTS_HOME/clis")" "$env_file"
+grep -Fqx "AGENTS_IDENTITY=$(runtime_path "$AGENTS_HOME/identity")" "$env_file"
+grep -Fqx "AGENTS_MEMORY=$(runtime_path "$AGENTS_HOME/memory")" "$env_file"
 
 [ "$(find "$AGENTS_HOME/skills" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d '[:space:]')" = "12" ] ||
   die "the canonical 12-skill floor is not installed"

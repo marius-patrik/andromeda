@@ -13,4 +13,6 @@ Historical product names, provider-home paths, launchers, and variables are
 recovery evidence only. Do not add aliases, bridges, forwarding shims, or
 fallback loaders.
 
-Branch policy: active work uses a feature branch and a PR into `dev`.
+Branch policy: active implementation uses a feature branch and a PR into `dev`.
+Release synchronization then propagates the tested `dev` tip to `main` through a
+dedicated `dev` to `main` PR; feature work never targets `main` directly.

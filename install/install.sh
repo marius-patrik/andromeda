@@ -3,9 +3,9 @@ set -euo pipefail
 
 umask 077
 
-readonly REPO_URL="https://github.com/marius-patrik/agents-manager.git"
-readonly SOURCE_URL="${AGENTS_MANAGER_SOURCE:-$REPO_URL}"
-readonly SOURCE_BRANCH="${AGENTS_MANAGER_BRANCH:-dev}"
+readonly REPO_URL="https://github.com/marius-patrik/Andromeda.git"
+readonly SOURCE_URL="${ANDROMEDA_SOURCE:-$REPO_URL}"
+readonly SOURCE_BRANCH="${ANDROMEDA_BRANCH:-dev}"
 
 die() {
   echo "error: $*" >&2
@@ -46,7 +46,7 @@ check_dependencies() {
 prepare_paths() {
   AGENTS_USER_HOME="$(real_user_home)"
   AGENTS_HOME="${AGENTS_HOME:-$AGENTS_USER_HOME/.agents}"
-  AGENTS_ROOT="${AGENTS_ROOT:-$AGENTS_USER_HOME/Projects/agents-manager}"
+  AGENTS_ROOT="${AGENTS_ROOT:-$AGENTS_USER_HOME/marius-patrik/Andromeda}"
 
   require_absolute "AGENTS_HOME" "$AGENTS_HOME"
   require_absolute "AGENTS_ROOT" "$AGENTS_ROOT"
@@ -64,10 +64,13 @@ prepare_paths() {
 }
 
 install_or_update_checkout() {
-  if [ -d "$AGENTS_ROOT/.git" ]; then
-    local current_source current_branch
+  if git -C "$AGENTS_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local current_source current_branch worktree_root
+    worktree_root="$(git -C "$AGENTS_ROOT" rev-parse --show-toplevel)"
+    [ "$(source_identity "$worktree_root")" = "$(source_identity "$AGENTS_ROOT")" ] ||
+      die "AGENTS_ROOT is inside another Git worktree instead of being its root: $AGENTS_ROOT (top-level $worktree_root)"
     current_source="$(git -C "$AGENTS_ROOT" remote get-url origin 2>/dev/null || true)"
-    [ "$current_source" = "$SOURCE_URL" ] ||
+    [ "$(source_identity "$current_source")" = "$(source_identity "$SOURCE_URL")" ] ||
       die "canonical checkout origin is $current_source, expected $SOURCE_URL"
     current_branch="$(git -C "$AGENTS_ROOT" branch --show-current)"
     [ "$current_branch" = "$SOURCE_BRANCH" ] ||
@@ -101,7 +104,24 @@ install_or_update_checkout() {
 write_export() {
   local name="$1"
   local value="$2"
-  printf 'export %s=%q\n' "$name" "$value"
+  local escaped="${value//\'/\'\\\'\'}"
+  printf "export %s='%s'\n" "$name" "$escaped"
+}
+
+native_path() {
+  local value="$1"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) cygpath -w "$value" ;;
+    *) printf '%s\n' "$value" ;;
+  esac
+}
+
+source_identity() {
+  local value="$1"
+  case "$(uname -s):$value" in
+    MINGW*:/*|MSYS*:/*|CYGWIN*:/*) cygpath -m "$value" ;;
+    *) printf '%s\n' "$value" ;;
+  esac
 }
 
 install_launcher() {
@@ -132,28 +152,30 @@ install_launcher() {
     echo 'for name in $(compgen -e); do'
     echo '  case "$name" in ROMMIE_*|AGENTOS_*) unset "$name" ;; esac'
     echo 'done'
-    write_export HOME "$AGENTS_USER_HOME"
-    write_export AGENTS_HOME "$AGENTS_HOME"
-    write_export AGENTS_USER_HOME "$AGENTS_USER_HOME"
-    write_export AGENTS_ROOT "$AGENTS_ROOT"
-    write_export AGENTS_WORKSPACE "$AGENTS_HOME/runtime/workspaces"
-    write_export AGENTS_CLIS "$AGENTS_HOME/clis"
-    write_export AGENTS_HARNESSES "$AGENTS_HOME/harnesses"
-    write_export AGENTS_SKILLS "$AGENTS_HOME/skills"
-    write_export AGENTS_PLUGINS "$AGENTS_HOME/plugins"
-    write_export AGENTS_HOOKS "$AGENTS_HOME/hooks"
-    write_export AGENTS_TEMPLATES "$AGENTS_HOME/templates"
-    write_export AGENTS_SECRETS "$AGENTS_HOME/secrets"
-    write_export AGENTS_SESSIONS "$AGENTS_HOME/sessions"
-    write_export AGENTS_IDENTITY "$AGENTS_HOME/identity"
-    write_export AGENTS_MEMORY "$AGENTS_HOME/memory"
-    write_export AGENTS_ORCHESTRATOR "$AGENTS_HOME/orchestrator"
-    write_export AGENTS_CREDITS "$AGENTS_HOME/credits.json"
-    write_export AGENTS_DATA_REPOS "$AGENTS_HOME/data-repos.json"
-    write_export AGENTS_ENVIRONMENTS "$AGENTS_HOME/environments.json"
-    write_export AGENTS_CONFIG "$AGENTS_HOME/config.json"
-    write_export AGENTS_SYSTEM_DATA_ROOT "$AGENTS_ROOT/data/agent-os"
-    printf 'exec %q %q "$@"\n' "$bun_bin" "$AGENTS_ROOT/packages/core/src/manager/cli.ts"
+    write_export HOME "$(native_path "$AGENTS_USER_HOME")"
+    write_export AGENTS_HOME "$(native_path "$AGENTS_HOME")"
+    write_export AGENTS_USER_HOME "$(native_path "$AGENTS_USER_HOME")"
+    write_export AGENTS_ROOT "$(native_path "$AGENTS_ROOT")"
+    write_export AGENTS_WORKSPACE "$(native_path "$AGENTS_HOME/runtime/workspaces")"
+    write_export AGENTS_CLIS "$(native_path "$AGENTS_HOME/clis")"
+    write_export AGENTS_HARNESSES "$(native_path "$AGENTS_HOME/harnesses")"
+    write_export AGENTS_SKILLS "$(native_path "$AGENTS_HOME/skills")"
+    write_export AGENTS_PLUGINS "$(native_path "$AGENTS_HOME/plugins")"
+    write_export AGENTS_HOOKS "$(native_path "$AGENTS_HOME/hooks")"
+    write_export AGENTS_TEMPLATES "$(native_path "$AGENTS_HOME/templates")"
+    write_export AGENTS_SECRETS "$(native_path "$AGENTS_HOME/secrets")"
+    write_export AGENTS_SESSIONS "$(native_path "$AGENTS_HOME/sessions")"
+    write_export AGENTS_IDENTITY "$(native_path "$AGENTS_HOME/identity")"
+    write_export AGENTS_MEMORY "$(native_path "$AGENTS_HOME/memory")"
+    write_export AGENTS_ORCHESTRATOR "$(native_path "$AGENTS_HOME/orchestrator")"
+    write_export AGENTS_CREDITS "$(native_path "$AGENTS_HOME/credits.json")"
+    write_export AGENTS_DATA_REPOS "$(native_path "$AGENTS_HOME/data-repos.json")"
+    write_export AGENTS_ENVIRONMENTS "$(native_path "$AGENTS_HOME/environments.json")"
+    write_export AGENTS_CONFIG "$(native_path "$AGENTS_HOME/config.json")"
+    write_export AGENTS_SYSTEM_DATA_ROOT "$(native_path "$AGENTS_ROOT/data/agent-os")"
+    write_export AGENTS_BUN "$(native_path "$bun_bin")"
+    write_export AGENTS_ENTRYPOINT "$(native_path "$AGENTS_ROOT/packages/core/src/manager/cli.ts")"
+    echo 'exec "$AGENTS_BUN" "$AGENTS_ENTRYPOINT" "$@"'
   } >"$temporary"
   chmod 700 "$temporary"
   mv -f "$temporary" "$launcher"
@@ -182,7 +204,7 @@ pin_installed_providers() {
     for candidate in "$AGENTS_HOME/clis/$provider/bin"/*; do
       [ -x "$candidate" ] || continue
       case "$provider:$(basename "$candidate")" in
-        codex:codex|claude:claude|kimi:kimi|agy:agy)
+        codex:codex|codex:codex.exe|claude:claude|claude:claude.exe|kimi:kimi|kimi:kimi.exe|agy:agy|agy:agy.exe)
           "$launcher" cli pin "$provider"
           break
           ;;

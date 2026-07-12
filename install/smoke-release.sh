@@ -13,9 +13,10 @@ trap 'rm -rf "$SANDBOX"' EXIT
 SOURCE_DIR="$SANDBOX/source"
 AGENTS_USER_HOME="$SANDBOX/home"
 AGENTS_HOME="$AGENTS_USER_HOME/.agents"
-AGENTS_ROOT="$AGENTS_USER_HOME/Projects/agents-manager"
+AGENTS_ROOT="$AGENTS_USER_HOME/marius-patrik/Andromeda"
 FAKE_BIN="$SANDBOX/bin"
 REAL_BUN="$(command -v bun)"
+REAL_GIT="$(command -v git)"
 
 mkdir -p "$AGENTS_USER_HOME" "$FAKE_BIN"
 
@@ -90,7 +91,12 @@ for provider_binary in codex/codex claude/claude kimi/kimi agy/agy; do
   binary="${provider_binary#*/}"
   mkdir -p "$AGENTS_HOME/clis/$provider/bin"
   chmod 700 "$AGENTS_HOME/clis/$provider" "$AGENTS_HOME/clis/$provider/bin"
-  cat >"$AGENTS_HOME/clis/$provider/bin/$binary" <<EOF
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      cp "$REAL_GIT" "$AGENTS_HOME/clis/$provider/bin/$binary.exe"
+      ;;
+    *)
+      cat >"$AGENTS_HOME/clis/$provider/bin/$binary" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 if [ "\${1:-}" = "--version" ]; then
@@ -99,15 +105,17 @@ if [ "\${1:-}" = "--version" ]; then
 fi
 exit 64
 EOF
-  chmod 700 "$AGENTS_HOME/clis/$provider/bin/$binary"
+      chmod 700 "$AGENTS_HOME/clis/$provider/bin/$binary"
+      ;;
+  esac
 done
 
 run_installer() {
   env \
     PATH="$FAKE_BIN:$PATH" \
     HOME="$AGENTS_USER_HOME" \
-    AGENTS_MANAGER_SOURCE="$SOURCE_DIR" \
-    AGENTS_MANAGER_BRANCH=dev \
+    ANDROMEDA_SOURCE="$SOURCE_DIR" \
+    ANDROMEDA_BRANCH=dev \
     AGENTS_HOME="$AGENTS_HOME" \
     AGENTS_USER_HOME="$AGENTS_USER_HOME" \
     AGENTS_ROOT="$AGENTS_ROOT" \
@@ -117,6 +125,67 @@ run_installer() {
 
 run_installer
 run_installer
+
+# A submodule or linked worktree stores .git as a file. It is still a valid
+# canonical checkout when its origin and branch agree with the installer.
+EDGE_USER_HOME="$SANDBOX/edge-home"
+EDGE_AGENTS_HOME="$EDGE_USER_HOME/.agents"
+EDGE_ROOT="$EDGE_USER_HOME/marius-patrik/Andromeda"
+mkdir -p "$(dirname "$EDGE_ROOT")" "$SANDBOX/edge-git"
+git clone --quiet --branch dev --separate-git-dir="$SANDBOX/edge-git/repository" "$SOURCE_DIR" "$EDGE_ROOT"
+test -f "$EDGE_ROOT/.git"
+env \
+  PATH="$FAKE_BIN:$PATH" \
+  HOME="$EDGE_USER_HOME" \
+  ANDROMEDA_SOURCE="$SOURCE_DIR" \
+  ANDROMEDA_BRANCH=dev \
+  AGENTS_HOME="$EDGE_AGENTS_HOME" \
+  AGENTS_USER_HOME="$EDGE_USER_HOME" \
+  AGENTS_ROOT="$EDGE_ROOT" \
+  GIT_ALLOW_PROTOCOL=file \
+  bash "$SOURCE_DIR/install/install.sh"
+
+# An existing worktree with the wrong origin must remain a hard failure.
+DENIED_USER_HOME="$SANDBOX/denied-home"
+DENIED_ROOT="$DENIED_USER_HOME/marius-patrik/Andromeda"
+mkdir -p "$(dirname "$DENIED_ROOT")"
+git clone --quiet --branch dev "$SOURCE_DIR" "$DENIED_ROOT"
+git -C "$DENIED_ROOT" remote set-url origin https://example.invalid/not-andromeda.git
+if env \
+  PATH="$FAKE_BIN:$PATH" \
+  HOME="$DENIED_USER_HOME" \
+  ANDROMEDA_SOURCE="$SOURCE_DIR" \
+  ANDROMEDA_BRANCH=dev \
+  AGENTS_HOME="$DENIED_USER_HOME/.agents" \
+  AGENTS_USER_HOME="$DENIED_USER_HOME" \
+  AGENTS_ROOT="$DENIED_ROOT" \
+  GIT_ALLOW_PROTOCOL=file \
+  bash "$SOURCE_DIR/install/install.sh" >"$SANDBOX/denied.log" 2>&1; then
+  echo "error: installer accepted a checkout with the wrong origin" >&2
+  exit 1
+fi
+grep -F "canonical checkout origin is https://example.invalid/not-andromeda.git, expected $SOURCE_DIR" "$SANDBOX/denied.log"
+
+# A nested directory must not inherit the enclosing repository's identity.
+NESTED_USER_HOME="$SANDBOX/nested-home"
+NESTED_PARENT="$NESTED_USER_HOME/marius-patrik"
+NESTED_ROOT="$NESTED_PARENT/nested/Andromeda"
+git clone --quiet --branch dev "$SOURCE_DIR" "$NESTED_PARENT"
+mkdir -p "$NESTED_ROOT"
+if env \
+  PATH="$FAKE_BIN:$PATH" \
+  HOME="$NESTED_USER_HOME" \
+  ANDROMEDA_SOURCE="$SOURCE_DIR" \
+  ANDROMEDA_BRANCH=dev \
+  AGENTS_HOME="$NESTED_USER_HOME/.agents" \
+  AGENTS_USER_HOME="$NESTED_USER_HOME" \
+  AGENTS_ROOT="$NESTED_ROOT" \
+  GIT_ALLOW_PROTOCOL=file \
+  bash "$SOURCE_DIR/install/install.sh" >"$SANDBOX/nested.log" 2>&1; then
+  echo "error: installer accepted a nested directory as the canonical worktree" >&2
+  exit 1
+fi
+grep -F "AGENTS_ROOT is inside another Git worktree instead of being its root" "$SANDBOX/nested.log"
 
 env \
   PATH="$FAKE_BIN:$PATH" \

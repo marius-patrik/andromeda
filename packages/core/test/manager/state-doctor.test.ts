@@ -13,6 +13,7 @@ import { createSession, rebuildSessionProjections, sessionPaths } from "../../sr
 
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const cliPath = path.join(repoRoot, "src", "manager", "cli.ts");
+const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 function tempState(root: string) {
   const userHome = path.join(root, "user");
@@ -45,7 +46,7 @@ async function ensureDoctorProduct(state: ReturnType<typeof tempState>): Promise
   const launcher = path.join(bin, "agents");
   await writeFile(
     launcher,
-    `#!/usr/bin/env bash\nexport AGENTS_HOME=${state.stateDir}\nexport AGENTS_USER_HOME=${state.userHome}\nexport AGENTS_ROOT=${state.root}\nexport AGENTS_WORKSPACE=${state.workspaceDir}\nexport AGENTS_SYSTEM_DATA_ROOT=${systemDataPath(state.root)}\nexec bun ${path.join(state.root, "packages", "core", "src", "manager", "cli.ts")} "$@"\n`,
+    `#!/usr/bin/env bash\nexport AGENTS_HOME=${shellQuote(state.stateDir)}\nexport AGENTS_USER_HOME=${shellQuote(state.userHome)}\nexport AGENTS_ROOT=${shellQuote(state.root)}\nexport AGENTS_WORKSPACE=${shellQuote(state.workspaceDir)}\nexport AGENTS_SYSTEM_DATA_ROOT=${shellQuote(systemDataPath(state.root))}\nexport AGENTS_ENTRYPOINT=${shellQuote(path.join(state.root, "packages", "core", "src", "manager", "cli.ts"))}\nexec bun "$AGENTS_ENTRYPOINT" "$@"\n`,
     { mode: 0o700 },
   );
   if (process.platform !== "win32") {
