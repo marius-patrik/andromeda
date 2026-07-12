@@ -456,6 +456,18 @@ describe("encrypted cross-machine event exchange", () => {
         exportEventBundle(alphabeticOrchestrator, path.join(root, "alphabetic-orchestrator.bundle.json")),
       ).rejects.toThrow("secret-like");
 
+      const slashSecret = await exchangeState(path.join(root, "slash-secret"));
+      await rememberMemory(slashSecret, {
+        scope: "project",
+        subject: "Andromeda",
+        predicate: "opaque-value",
+        value: "aaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        evidence,
+      });
+      await expect(exportEventBundle(slashSecret, path.join(root, "slash-secret.bundle.json"))).rejects.toThrow(
+        "secret-like",
+      );
+
       const structuralSecret = await exchangeState(path.join(root, "structural-secret"));
       await createSession(structuralSecret, {
         sessionId: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
