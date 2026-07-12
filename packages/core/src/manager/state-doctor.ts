@@ -239,6 +239,8 @@ async function permissionsCheck(state: SharedState, tools: ToolStatus[], stateRo
 async function syncSafetyCheck(state: SharedState): Promise<StateDoctorCheck> {
   const paths = stateV2Paths(state);
   const configPath = path.join(paths.syncDir, "config.json");
+  const importsPath = path.join(paths.syncDir, "imports");
+  const syncKeyPath = path.join(state.secretsDir, "AGENTS_SYNC_KEY.secret");
   const retiredConfigPath = path.join(state.stateDir, "state-sync.json");
   const retiredRepoPath = path.join(state.stateDir, "state-repo");
   const [configKind, retiredConfigKind, retiredRepoKind] = await Promise.all([
@@ -249,35 +251,74 @@ async function syncSafetyCheck(state: SharedState): Promise<StateDoctorCheck> {
 
   let schemaVersion: number | null = null;
   let enabled: boolean | null = null;
+  let transport: string | null = null;
   let parseError: string | null = null;
   if (configKind === "file") {
     try {
-      const parsed = JSON.parse(await readFile(configPath, "utf8")) as { schemaVersion?: unknown; enabled?: unknown };
+      const parsed = JSON.parse(await readFile(configPath, "utf8")) as { schemaVersion?: unknown; enabled?: unknown; transport?: unknown };
       schemaVersion = typeof parsed.schemaVersion === "number" ? parsed.schemaVersion : null;
       enabled = typeof parsed.enabled === "boolean" ? parsed.enabled : null;
+      transport = typeof parsed.transport === "string" ? parsed.transport : null;
     } catch (error) {
       parseError = (error as Error).message;
     }
   }
 
-  const disabled = configKind === "file" && parseError === null && schemaVersion === 2 && enabled === false;
+  const disabled = configKind === "file" && parseError === null && schemaVersion === 2 && enabled === false && transport === null;
+  const [keyKind, importsKind] = await Promise.all([pathKind(syncKeyPath), pathKind(importsPath)]);
+  let keyValid = false;
+  if (keyKind === "file") {
+    try {
+      keyValid = /^[a-fA-F0-9]{64}$/.test((await readFile(syncKeyPath, "utf8")).trim());
+    } catch {
+      keyValid = false;
+    }
+  }
+  let preparedImports = 0;
+  if (importsKind === "directory") {
+    for (const entry of await readdir(importsPath, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      try {
+        const journal = JSON.parse(await readFile(path.join(importsPath, entry.name), "utf8")) as { state?: unknown };
+        if (journal.state === "prepared") preparedImports += 1;
+      } catch {
+        preparedImports += 1;
+      }
+    }
+  }
+  const enabledSafely =
+    configKind === "file" &&
+    parseError === null &&
+    schemaVersion === 2 &&
+    enabled === true &&
+    transport === "encrypted-bundle" &&
+    keyValid &&
+    importsKind === "directory" &&
+    preparedImports === 0;
   const retiredArtifacts = [retiredConfigKind !== "missing" ? "state-sync.json" : null, retiredRepoKind !== "missing" ? "state-repo" : null].filter(
     (item): item is string => item !== null,
   );
-  const ok = disabled && retiredArtifacts.length === 0;
+  const ok = (disabled || enabledSafely) && retiredArtifacts.length === 0;
   return {
     id: "sync_safety",
     ok,
     message: ok
-      ? "event exchange is disabled and no retired sync artifacts exist"
+      ? enabledSafely
+        ? "encrypted event exchange is enabled with local key material and no interrupted imports"
+        : "event exchange is disabled and no retired sync artifacts exist"
       : retiredArtifacts.length > 0
         ? `retired sync artifacts are present: ${retiredArtifacts.join(", ")}`
-        : "event exchange safety cannot be verified as disabled",
+        : "event exchange safety cannot be verified",
     details: {
       configPresent: configKind === "file",
       configValid: configKind === "file" && parseError === null && schemaVersion === 2 && enabled !== null,
       schemaVersion,
       enabled,
+      transport,
+      keyPresent: keyKind === "file",
+      keyValid,
+      importsDirectoryPresent: importsKind === "directory",
+      preparedImports,
       retiredConfigPresent: retiredConfigKind !== "missing",
       retiredRepoPresent: retiredRepoKind !== "missing",
       parseError,
