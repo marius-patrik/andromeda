@@ -73,8 +73,12 @@ async function serializeAtomicPublication(filePath: string, operation: () => Pro
   }
 }
 
-export async function retryWindowsFileOperation<T>(operation: () => Promise<T>): Promise<T> {
-  if (process.platform !== "win32") {
+export async function retryWindowsFileOperation<T>(
+  operation: () => Promise<T>,
+  platform = process.platform,
+  wait: (milliseconds: number) => Promise<void> = delay,
+): Promise<T> {
+  if (platform !== "win32") {
     return await operation();
   }
   const attempts = 8;
@@ -84,17 +88,68 @@ export async function retryWindowsFileOperation<T>(operation: () => Promise<T>):
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code ?? "";
       if (!TRANSIENT_WINDOWS_PUBLICATION_ERRORS.has(code) || attempt === attempts - 1) throw error;
-      await delay(Math.min(80, 5 * 2 ** attempt));
+      await wait(Math.min(80, 5 * 2 ** attempt));
     }
   }
   throw new Error("unreachable Windows file-operation retry state");
 }
 
-async function publishAtomicReplacement(temporary: string, filePath: string): Promise<void> {
-  // Never remove the previous complete projection to force a replacement.
-  // If bounded rename retries exhaust, the caller fails with the old value
-  // still published and the outer cleanup removes only the unpublished temp.
-  await retryWindowsFileOperation(() => rename(temporary, filePath));
+interface AtomicReplacementOperations {
+  platform: NodeJS.Platform;
+  rename: typeof rename;
+  rm: typeof rm;
+  stat: typeof stat;
+  wait: (milliseconds: number) => Promise<void>;
+  randomId: () => string;
+}
+
+export async function publishAtomicReplacement(
+  temporary: string,
+  filePath: string,
+  overrides: Partial<AtomicReplacementOperations> = {},
+): Promise<void> {
+  const operations: AtomicReplacementOperations = {
+    platform: process.platform,
+    rename,
+    rm,
+    stat,
+    wait: delay,
+    randomId: randomUUID,
+    ...overrides,
+  };
+  const retry = <T>(operation: () => Promise<T>) => (
+    retryWindowsFileOperation(operation, operations.platform, operations.wait)
+  );
+  try {
+    await retry(() => operations.rename(temporary, filePath));
+    return;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "";
+    if (operations.platform !== "win32" || !TRANSIENT_WINDOWS_PUBLICATION_ERRORS.has(code)) throw error;
+  }
+
+  // Windows can refuse rename-over-existing even after bounded retries. Keep
+  // the prior complete projection recoverable instead of deleting it.
+  await operations.stat(filePath);
+  const backup = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${operations.randomId()}.bak`,
+  );
+  await retry(() => operations.rename(filePath, backup));
+  try {
+    await retry(() => operations.rename(temporary, filePath));
+  } catch (replacementError) {
+    try {
+      await retry(() => operations.rename(backup, filePath));
+    } catch (restoreError) {
+      throw new AggregateError(
+        [replacementError, restoreError],
+        `failed to publish or restore complete projection: ${filePath}`,
+      );
+    }
+    throw replacementError;
+  }
+  await retry(() => operations.rm(backup, { force: true }));
 }
 
 export async function writeTextAtomic(filePath: string, content: string, mode = 0o600): Promise<void> {
