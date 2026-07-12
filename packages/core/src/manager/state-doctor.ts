@@ -452,15 +452,22 @@ async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
       issues.push(`agents launcher mode is ${modeString(launcherInfo.mode)}, expected 0o700`);
     }
     const content = await readFile(launcher, "utf8");
-    for (const required of [
-      `export AGENTS_HOME=${state.stateDir}`,
-      `export AGENTS_USER_HOME=${state.userHome}`,
-      `export AGENTS_ROOT=${state.root}`,
-      `export AGENTS_WORKSPACE=${state.workspaceDir}`,
-      `export AGENTS_SYSTEM_DATA_ROOT=${systemDataPath(state.root)}`,
-      path.join(state.root, "packages", "core", "src", "manager", "cli.ts"),
-    ]) {
-      if (!content.includes(required)) issues.push(`agents launcher is missing canonical binding: ${required}`);
+    const escaped = (value: string): string => value.replaceAll("\\", "\\\\").replaceAll(" ", "\\ ");
+    for (const [name, value] of [
+      ["AGENTS_HOME", state.stateDir],
+      ["AGENTS_USER_HOME", state.userHome],
+      ["AGENTS_ROOT", state.root],
+      ["AGENTS_WORKSPACE", state.workspaceDir],
+      ["AGENTS_SYSTEM_DATA_ROOT", systemDataPath(state.root)],
+    ] as const) {
+      const bindings = [`export ${name}=${value}`, `export ${name}=${escaped(value)}`];
+      if (!bindings.some((binding) => content.includes(binding))) {
+        issues.push(`agents launcher is missing canonical binding: export ${name}=${value}`);
+      }
+    }
+    const cliPath = path.join(state.root, "packages", "core", "src", "manager", "cli.ts");
+    if (![cliPath, escaped(cliPath)].some((candidate) => content.includes(candidate))) {
+      issues.push(`agents launcher is missing canonical binding: ${cliPath}`);
     }
     if (content.includes("export AGENTS_DATA=")) issues.push("agents launcher exports the removed AGENTS_DATA parent path");
   } catch (error) {
