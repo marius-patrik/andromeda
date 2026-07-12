@@ -17,14 +17,16 @@ import type { SharedState } from "./state";
 import { sharedStateAt } from "./state";
 import { readSecret, secretPath, writeSecret } from "./secrets";
 import { stateV2Paths, writeTextAtomic, writeTextExclusive } from "./state-v2";
-import { inspectMemoryIntegrity, rebuildMemoryProjections } from "./memory";
+import { inspectMemoryIntegrity, rebuildMemoryProjections, withMemoryEventWriteLock } from "./memory";
 import {
   inspectSessionIntegrity,
   rebuildSessionProjections,
+  withSessionWriteLock,
 } from "../harness/session";
 import {
   inspectOrchestratorIntegrity,
   readOrchestratorState,
+  withOrchestratorEventWriteLock,
 } from "./orchestrator";
 import { withStateFileLock } from "./state-lock";
 
@@ -318,13 +320,35 @@ async function projectionHash(state: SharedState): Promise<string> {
 }
 
 async function rebuildImportedProjections(state: SharedState, incoming: Map<string, string>): Promise<string> {
-  await rebuildMemoryProjections(state);
+  if ([...incoming.keys()].some((item) => item.startsWith("memory/"))) await rebuildMemoryProjections(state);
   const sessionIds = new Set(
     [...incoming.keys()].filter((item) => item.startsWith("sessions/")).map((item) => item.split("/")[1]),
   );
   for (const sessionId of [...sessionIds].sort()) await rebuildSessionProjections(state, sessionId);
   if ([...incoming.keys()].some((item) => item.startsWith("orchestrator/"))) await readOrchestratorState(state);
   return projectionHash(state);
+}
+
+async function withAffectedEventLocks<T>(
+  state: SharedState,
+  incoming: Map<string, string>,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const lockOrchestrator = [...incoming.keys()].some((item) => item.startsWith("orchestrator/"));
+  const lockMemory = [...incoming.keys()].some((item) => item.startsWith("memory/"));
+  const sessionIds = [...new Set(
+    [...incoming.keys()].filter((item) => item.startsWith("sessions/")).map((item) => item.split("/")[1]),
+  )].sort();
+  const afterSessions = (): Promise<T> => {
+    const afterMemory = () => lockOrchestrator ? withOrchestratorEventWriteLock(state, callback) : callback();
+    return lockMemory ? withMemoryEventWriteLock(state, "event-sync-import", afterMemory) : afterMemory();
+  };
+  const lockSessions = async (index: number): Promise<T> => {
+    const sessionId = sessionIds[index];
+    if (!sessionId) return afterSessions();
+    return withSessionWriteLock(state, sessionId, () => lockSessions(index + 1));
+  };
+  return lockSessions(0);
 }
 
 export async function enableEventSync(state: SharedState, generateKey = false): Promise<void> {
@@ -429,20 +453,23 @@ export async function importEventBundle(
     ) {
       throw new Error("invalid event exchange envelope");
     }
+    const payloadHash = envelope.payloadHash;
     const key = await keyMaterial(state);
-    let plaintext: string;
+    let plaintextBytes: Buffer;
     try {
       const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.nonce, "base64"));
-      decipher.setAAD(Buffer.from(`${AAD_PREFIX}${envelope.payloadHash}`));
+      decipher.setAAD(Buffer.from(`${AAD_PREFIX}${payloadHash}`));
       decipher.setAuthTag(Buffer.from(envelope.authTag, "base64"));
-      plaintext = Buffer.concat([
+      plaintextBytes = Buffer.concat([
         decipher.update(Buffer.from(envelope.ciphertext, "base64")),
         decipher.final(),
-      ]).toString("utf8");
+      ]);
     } catch {
       throw new Error("event exchange authentication failed");
     }
-    if (sha256(plaintext) !== envelope.payloadHash) throw new Error("event exchange payload hash mismatch");
+    if (plaintextBytes.byteLength > MAX_BUNDLE_BYTES) throw new Error("event exchange payload is too large");
+    const plaintext = plaintextBytes.toString("utf8");
+    if (sha256(plaintext) !== payloadHash) throw new Error("event exchange payload hash mismatch");
     const payload = JSON.parse(plaintext) as Partial<BundlePayload>;
     if (
       payload.schemaVersion !== 1 ||
@@ -454,82 +481,89 @@ export async function importEventBundle(
       throw new Error("invalid event exchange payload");
     }
     const incoming = decodeEntries(payload.entries);
-    const journalPath = path.join(importsDirectory(state), `${envelope.payloadHash}.json`);
-    let journal: ImportJournal | null = null;
-    try {
-      journal = JSON.parse(await readFile(journalPath, "utf8")) as ImportJournal;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (journal?.state === "committed") {
-      let complete = true;
-      for (const [relativePath, content] of incoming) {
-        try {
-          if ((await readFile(path.join(state.stateDir, ...relativePath.split("/")), "utf8")) !== content) {
-            throw new Error(`immutable event collision: ${relativePath}`);
-          }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") complete = false;
-          else throw error;
-        }
-      }
-      if (complete) {
-        await validateMergedEvents(state, incoming);
-        return {
-          payloadHash: envelope.payloadHash,
-          entries: incoming.size,
-          imported: 0,
-          skipped: incoming.size,
-          projectionHash: await rebuildImportedProjections(state, incoming),
-          idempotent: true,
-        };
-      }
-    }
-
-    await validateMergedEvents(state, incoming);
-    let imported = 0;
-    let skipped = 0;
-    for (const [relativePath, content] of incoming) {
+    const journalPath = path.join(importsDirectory(state), `${payloadHash}.json`);
+    const publication = await withAffectedEventLocks(state, incoming, async () => {
+      let journal: ImportJournal | null = null;
       try {
-        const current = await readFile(path.join(state.stateDir, ...relativePath.split("/")), "utf8");
-        if (current !== content) throw new Error(`immutable event collision: ${relativePath}`);
-        skipped += 1;
+        journal = JSON.parse(await readFile(journalPath, "utf8")) as ImportJournal;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-    }
-    await mkdir(importsDirectory(state), { recursive: true });
-    const prepared: ImportJournal = {
-      schemaVersion: 1,
-      payloadHash: envelope.payloadHash,
-      state: "prepared",
-      paths: [...incoming.keys()],
-      imported: 0,
-      skipped,
-    };
-    await writeTextAtomic(journalPath, `${JSON.stringify(prepared, null, 2)}\n`);
+      if (journal?.state === "committed") {
+        let complete = true;
+        for (const [relativePath, content] of incoming) {
+          try {
+            if ((await readFile(path.join(state.stateDir, ...relativePath.split("/")), "utf8")) !== content) {
+              throw new Error(`immutable event collision: ${relativePath}`);
+            }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") complete = false;
+            else throw error;
+          }
+        }
+        if (complete) {
+          await validateMergedEvents(state, incoming);
+          return { imported: 0, skipped: incoming.size, idempotent: true, prepared: journal };
+        }
+      }
 
-    for (const [relativePath, content] of incoming) {
-      const target = path.join(state.stateDir, ...relativePath.split("/"));
-      if (await writeTextExclusive(target, content)) imported += 1;
-      else if ((await readFile(target, "utf8")) !== content) throw new Error(`immutable event collision: ${relativePath}`);
-      if (options.failAfter !== undefined && imported >= options.failAfter) throw new Error("simulated interrupted event import");
-    }
+      await validateMergedEvents(state, incoming);
+      let imported = 0;
+      let skipped = 0;
+      for (const [relativePath, content] of incoming) {
+        try {
+          const current = await readFile(path.join(state.stateDir, ...relativePath.split("/")), "utf8");
+          if (current !== content) throw new Error(`immutable event collision: ${relativePath}`);
+          skipped += 1;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      await mkdir(importsDirectory(state), { recursive: true });
+      const prepared: ImportJournal = {
+        schemaVersion: 1,
+        payloadHash,
+        state: "prepared",
+        paths: [...incoming.keys()],
+        imported: 0,
+        skipped,
+      };
+      await writeTextAtomic(journalPath, `${JSON.stringify(prepared, null, 2)}\n`);
 
+      for (const [relativePath, content] of incoming) {
+        const target = path.join(state.stateDir, ...relativePath.split("/"));
+        if (await writeTextExclusive(target, content)) imported += 1;
+        else if ((await readFile(target, "utf8")) !== content) throw new Error(`immutable event collision: ${relativePath}`);
+        if (options.failAfter !== undefined && imported >= options.failAfter) {
+          throw new Error("simulated interrupted event import");
+        }
+      }
+      return { imported, skipped: incoming.size - imported, idempotent: false, prepared };
+    });
     const finalProjectionHash = await rebuildImportedProjections(state, incoming);
+    if (publication.idempotent) {
+      return {
+        payloadHash,
+        entries: incoming.size,
+        imported: 0,
+        skipped: incoming.size,
+        projectionHash: finalProjectionHash,
+        idempotent: true,
+      };
+    }
     const committed: ImportJournal = {
-      ...prepared,
+      ...publication.prepared,
       state: "committed",
-      imported,
-      skipped: incoming.size - imported,
+      imported: publication.imported,
+      skipped: publication.skipped,
       projectionHash: finalProjectionHash,
     };
     await writeTextAtomic(journalPath, `${JSON.stringify(committed, null, 2)}\n`);
     return {
-      payloadHash: envelope.payloadHash,
+      payloadHash,
       entries: incoming.size,
-      imported,
-      skipped: incoming.size - imported,
+      imported: publication.imported,
+      skipped: publication.skipped,
       projectionHash: finalProjectionHash,
       idempotent: false,
     };

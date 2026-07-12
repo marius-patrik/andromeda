@@ -4,6 +4,7 @@ import { chmod, link, lstat, mkdir, open, readFile, readdir, rm } from "node:fs/
 import type { SharedState } from "./state";
 import {
   ensureStateV2,
+  readStateManifest,
   stateV2Paths,
   writeTextAtomic,
   type AgentStateManifest,
@@ -933,13 +934,22 @@ async function withMemoryLock<T>(
   now: Date,
   callback: (manifest: AgentStateManifest) => Promise<T>,
 ): Promise<T> {
-  const manifest = await ensureStateV2(state, now);
+  const manifest = (await readStateManifest(state)) ?? await ensureStateV2(state, now);
   const release = await acquireMemoryLock(state, manifest, operation);
   try {
-    return await callback(manifest);
+    return await callback(await ensureStateV2(state, now));
   } finally {
     await release();
   }
+}
+
+export async function withMemoryEventWriteLock<T>(
+  state: SharedState,
+  operation: string,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const now = new Date();
+  return withMemoryLock(state, operation, now, callback);
 }
 
 async function loadCanonicalMemoryUnlocked(

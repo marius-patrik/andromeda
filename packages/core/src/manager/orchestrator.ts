@@ -582,6 +582,13 @@ async function withOrchestratorLock<T>(
   );
 }
 
+export async function withOrchestratorEventWriteLock<T>(
+  state: SharedState,
+  callback: () => Promise<T>,
+): Promise<T> {
+  return withOrchestratorLock(state, "event-sync-import", () => callback());
+}
+
 async function readAndProjectUnlocked(state: SharedState): Promise<OrchestratorStateDoc | null> {
   const projection = replayEvents(await readEventsUnlocked(state));
   if (projection) await writeProjections(state, projection);

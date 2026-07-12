@@ -4,8 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { ensureSharedState, sharedState } from "../../src/manager/state";
 import { writeSecret } from "../../src/manager/secrets";
-import { rememberMemory } from "../../src/manager/memory";
-import { createSession, inspectSessionIntegrity, withSessionWriteTransaction } from "../../src/harness/session";
+import { rebuildMemoryProjections, rememberMemory } from "../../src/manager/memory";
+import {
+  createSession,
+  inspectSessionIntegrity,
+  withSessionWriteLock,
+  withSessionWriteTransaction,
+} from "../../src/harness/session";
 import { doctorState } from "../../src/manager/state-doctor";
 import {
   enableEventSync,
@@ -54,7 +59,18 @@ describe("encrypted cross-machine event exchange", () => {
 
       const bundle = path.join(root, "events.bundle.json");
       const exported = await exportEventBundle(source, bundle);
-      const imported = await importEventBundle(target, bundle);
+      let importSettled = false;
+      let pendingImport: ReturnType<typeof importEventBundle> | undefined;
+      await withSessionWriteLock(target, "exchange-session", async () => {
+        pendingImport = importEventBundle(target, bundle);
+        void pendingImport.finally(() => {
+          importSettled = true;
+        });
+        await rebuildMemoryProjections(target);
+        await Bun.sleep(75);
+        expect(importSettled).toBe(false);
+      });
+      const imported = await pendingImport!;
 
       expect(imported.imported).toBe(2);
       expect(imported.projectionHash).toBe(exported.projectionHash);
