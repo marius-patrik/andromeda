@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseCredential, parseReview, requestReview } from "./run-kimi-review.mjs";
+import { parseCredential, parseReview, requestReview, shouldTakeOver } from "./run-kimi-review.mjs";
 
 const validReview = {
   approved: true,
@@ -15,6 +15,19 @@ test("parses fenced review JSON into the canonical result shape", () => {
   assert.equal(review.approved, true);
   assert.match(review.summary, /^Kimi quota-takeover review:/);
   assert.deepEqual(Object.keys(review), ["approved", "summary", "blocking_findings", "non_blocking_notes"]);
+});
+
+test("blocking findings always force a failed normalized verdict", () => {
+  const review = parseReview(JSON.stringify({ ...validReview, approved: true, blocking_findings: ["unsafe"] }));
+  assert.equal(review.approved, false);
+  assert.deepEqual(review.blocking_findings, ["unsafe"]);
+});
+
+test("takeover dispatch uses only the trusted automation exit code", () => {
+  assert.equal(shouldTakeOver(42), true);
+  assert.equal(shouldTakeOver(0), false);
+  assert.equal(shouldTakeOver(1), false);
+  assert.equal(shouldTakeOver("42"), true);
 });
 
 test("rejects malformed credential envelopes", () => {
@@ -50,7 +63,7 @@ test("refreshes an expired OAuth token before the review request", async () => {
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
     if (url.endsWith("/api/oauth/token")) {
-      return new Response(JSON.stringify({ access_token: "fresh", refresh_token: "next", expires_in: 3600 }), { status: 200 });
+      return new Response(JSON.stringify({ access_token: "fresh", expires_in: 3600 }), { status: 200 });
     }
     return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validReview) } }] }), { status: 200 });
   };
@@ -67,5 +80,6 @@ test("refreshes an expired OAuth token before the review request", async () => {
   assert.match(String(calls[0].init.body), /grant_type=refresh_token/);
   assert.equal(calls[1].init.headers.authorization, "Bearer fresh");
   assert.equal(rotated.access_token, "fresh");
+  assert.equal(rotated.refresh_token, "refresh");
   assert.ok(rotated.expires_at > Math.floor(Date.now() / 1000));
 });

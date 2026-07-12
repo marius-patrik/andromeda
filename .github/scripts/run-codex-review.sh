@@ -52,7 +52,7 @@ if ! git rev-parse --verify "${BASE_REF}^{commit}" >/dev/null 2>&1; then
   write_blocked_review \
     "Codex autoreview could not resolve the configured base ref." \
     "Ensure the PR checkout includes ${BASE_REF} before running the read-only review container."
-  exit 0
+  exit 42
 fi
 
 AGENTS_CONTEXT="${REVIEW_CONTEXT_DIR}/AGENTS.md"
@@ -61,13 +61,13 @@ if [ ! -s "${AGENTS_CONTEXT}" ]; then
   write_blocked_review \
     "Codex autoreview could not run because repository rule context is missing." \
     "Prepare and mount ${AGENTS_CONTEXT} before running the Codex review container."
-  exit 0
+  exit 42
 fi
 if [ ! -s "${ISSUE_CONTEXT}" ]; then
   write_blocked_review \
     "Codex autoreview could not run because linked issue context is missing." \
     "Prepare and mount ${ISSUE_CONTEXT} before running the Codex review container."
-  exit 0
+  exit 42
 fi
 
 DIFF_FILE="$(mktemp)"
@@ -149,6 +149,7 @@ if [ -n "${PROMPT_EXPORT}" ]; then
   cp "${PROMPT_FILE}" "${PROMPT_EXPORT}"
 fi
 
+AUTOMATION_FAILED=0
 if ! codex exec \
   --cd /workspace \
   --sandbox read-only \
@@ -159,6 +160,7 @@ if ! codex exec \
   write_blocked_review \
     "Codex autoreview command failed before producing a valid review." \
     "Inspect the Codex Review workflow logs and fix the automation before allowing automerge."
+  AUTOMATION_FAILED=1
 fi
 
 if ! node -e "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8'))" "${REVIEW_OUTPUT}"; then
@@ -174,4 +176,9 @@ fs.writeFileSync(process.env.REVIEW_OUTPUT, `${JSON.stringify({
   non_blocking_notes: [],
 }, null, 2)}\n`);
 NODE
+  AUTOMATION_FAILED=1
+fi
+
+if [ "${AUTOMATION_FAILED}" -eq 1 ]; then
+  exit 42
 fi

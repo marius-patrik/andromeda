@@ -16,10 +16,11 @@ function reviewShape(value) {
       throw new Error(`review.${key} must be a string array`);
     }
   }
+  const blockingFindings = value.blocking_findings;
   return {
-    approved: value.approved,
+    approved: value.approved && blockingFindings.length === 0,
     summary: `Kimi quota-takeover review: ${value.summary}`,
-    blocking_findings: value.blocking_findings,
+    blocking_findings: blockingFindings,
     non_blocking_notes: value.non_blocking_notes,
   };
 }
@@ -68,9 +69,15 @@ async function refreshCredential(credential, fetchImpl, env) {
   if (!refreshed?.access_token) throw new Error("Kimi OAuth refresh returned no access_token");
   const expiresIn = Number(refreshed.expires_in || 0);
   return {
+    ...credential,
     ...refreshed,
+    refresh_token: refreshed.refresh_token || credential.refresh_token,
     expires_at: expiresIn > 0 ? Math.floor(Date.now() / 1000) + expiresIn : 0,
   };
+}
+
+export function shouldTakeOver(exitCode) {
+  return Number(exitCode) === 42;
 }
 
 export async function requestReview({ prompt, credential, fetchImpl = fetch, env = process.env, onCredentialRefresh }) {
@@ -143,5 +150,9 @@ export async function main(env = process.env) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
+  if (process.argv[2] === "--should-takeover") {
+    process.exitCode = shouldTakeOver(process.argv[3]) ? 0 : 1;
+  } else {
+    await main();
+  }
 }

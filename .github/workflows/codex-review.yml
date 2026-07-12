@@ -94,6 +94,7 @@ jobs:
 
       - name: Create secret-rotation token
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.DARKFACTORY_APP_ID }}
@@ -134,6 +135,7 @@ jobs:
           printf '%s' "${CODEX_AUTH_JSON}" > "${CODEX_HOME_DIR}/auth.json"
           chmod 600 "${CODEX_HOME_DIR}/auth.json"
 
+          set +e
           docker run --rm \
             -e CODEX_HOME=/codex-home \
             -e HOME=/codex-home \
@@ -149,16 +151,24 @@ jobs:
             -v "${CODEX_HOME_DIR}:/codex-home" \
             -v "${REVIEW_OUTPUT_DIR}:/review-output" \
             darkfactory-codex-review
+          REVIEW_EXIT_CODE=$?
+          set -e
 
-          cp "${REVIEW_OUTPUT_DIR}/codex-review.json" codex-review.json
+          if [ -s "${REVIEW_OUTPUT_DIR}/codex-review.json" ]; then
+            cp "${REVIEW_OUTPUT_DIR}/codex-review.json" codex-review.json
+          else
+            node -e "const fs=require('fs'); fs.writeFileSync('codex-review.json', JSON.stringify({approved:false,summary:'The primary review container produced no result.',blocking_findings:['Inspect the Codex Review workflow infrastructure before allowing merge.'],non_blocking_notes:[]},null,2)+'\\n')"
+          fi
 
-          if node -e "const r=require('./codex-review.json'); process.exit(r.summary.includes('command failed before producing') ? 0 : 1)"; then
+          if node .github/scripts/run-kimi-review.mjs --should-takeover "${REVIEW_EXIT_CODE}"; then
             if [ -n "${KIMI_AUTH_JSON:-}" ]; then
               KIMI_REVIEW_PROMPT="${REVIEW_OUTPUT_DIR}/review-prompt.txt" \
               KIMI_REVIEW_OUTPUT="${PWD}/codex-review.json" \
               KIMI_REFRESHED_AUTH_OUTPUT="${RUNNER_TEMP}/kimi-auth-refreshed.json" \
               node .github/scripts/run-kimi-review.mjs
             fi
+          elif [ "${REVIEW_EXIT_CODE}" -ne 0 ]; then
+            node -e "const fs=require('fs'); fs.writeFileSync('codex-review.json', JSON.stringify({approved:false,summary:'The primary review container failed outside the provider-takeover contract.',blocking_findings:['Inspect the Codex Review workflow infrastructure before allowing merge.'],non_blocking_notes:[]},null,2)+'\\n')"
           fi
 
           if [ -s "${RUNNER_TEMP}/kimi-auth-refreshed.json" ]; then
@@ -182,7 +192,7 @@ jobs:
             const notes = review.non_blocking_notes.length
               ? review.non_blocking_notes.map((item) => `- ${item}`).join("\n")
               : "- None";
-            const verdict = review.approved ? "Approved" : "Changes required";
+            const verdict = review.approved && review.blocking_findings.length === 0 ? "Approved" : "Changes required";
             const commentBody = `${marker}\n## Agent Autoreview\n\n**Verdict:** ${verdict}\n\n${review.summary}\n\n### Blocking Findings\n\n${blocking}\n\n### Non-Blocking Notes\n\n${notes}`;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
@@ -198,4 +208,4 @@ jobs:
         if: always()
         shell: bash
         run: |
-          node -e "const fs = require('fs'); const r = JSON.parse(fs.readFileSync('codex-review.json', 'utf8')); if (!r.approved) { console.error('Automated review did not approve this PR.'); process.exit(1); }"
+          node -e "const fs = require('fs'); const r = JSON.parse(fs.readFileSync('codex-review.json', 'utf8')); if (!r.approved || r.blocking_findings.length) { console.error('Automated review did not approve this PR.'); process.exit(1); }"
