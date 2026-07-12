@@ -36,9 +36,8 @@ for (const retired of ["packages/core/src", "packages/core/test", "packages/core
 }
 
 const nestedRepositoryMetadata = [
-  /^packages\/[^/]+\/(?:\.agents|\.darkfactory|docs)(?:\/|$)/,
-  /^packages\/[^/]+\/(?:AGENTS|README|PRD)\.md$/,
-  /^packages\/[^/]+\/clients\/[^/]+\/PRD\.md$/,
+  /^packages\/(?:.*\/)?(?:\.agents|\.darkfactory|docs)(?:\/|$)/i,
+  /^packages\/(?:.*\/)?(?:AGENTS|README|PRD)\.md$/i,
 ];
 for (const relative of tracked) {
   if (nestedRepositoryMetadata.some((pattern) => pattern.test(relative))) {
