@@ -1,8 +1,8 @@
-# Agent OS
+# Andromeda
 
-Agent OS is one personal agent identity and one authoritative state and memory
+Andromeda is one personal agent identity and one authoritative state and memory
 system across models, provider CLIs, harnesses, machines, and execution
-surfaces. This `agents-manager` repository contains the implementation, and
+surfaces. This repository contains the implementation, and
 `agents` is its management and runtime CLI.
 
 The accepted state contract is documented in

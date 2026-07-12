@@ -16,5 +16,5 @@
 	branch = main
 [submodule "data"]
 	path = data/agent-os
-	url = https://github.com/marius-patrik/Rommie.git
+	url = https://github.com/marius-patrik/Andromeda-data.git
 	branch = main
