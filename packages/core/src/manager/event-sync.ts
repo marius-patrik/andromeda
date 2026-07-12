@@ -260,7 +260,7 @@ function secretLikeText(value: string): boolean {
   // Evidence fields can embed local file URIs; explicit secret signatures above
   // still scan the full value, while URI path material is excluded only from the
   // generic high-entropy fallback.
-  const entropyInput = value.replace(/\b(?:file|https?):\/\/[^\s)]+/gi, "");
+  const entropyInput = value.replace(/\bfile:\/\/[^\s)]+/gi, "");
   for (const candidate of entropyInput.match(/[A-Za-z0-9_+\/-]{32,}={0,2}/g) ?? []) {
     if (UUID.test(candidate)) continue;
     if (/^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(candidate)) continue;

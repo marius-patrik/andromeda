@@ -468,6 +468,18 @@ describe("encrypted cross-machine event exchange", () => {
         "secret-like",
       );
 
+      const urlPathSecret = await exchangeState(path.join(root, "url-path-secret"));
+      await rememberMemory(urlPathSecret, {
+        scope: "project",
+        subject: "Andromeda",
+        predicate: "opaque-value",
+        value: "https://example.invalid/dQwErTyUiOpAsDfGhJkLzXcVbNmQwErTyUiOpAsD",
+        evidence,
+      });
+      await expect(exportEventBundle(urlPathSecret, path.join(root, "url-path-secret.bundle.json"))).rejects.toThrow(
+        "secret-like",
+      );
+
       const structuralSecret = await exchangeState(path.join(root, "structural-secret"));
       await createSession(structuralSecret, {
         sessionId: "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef",
