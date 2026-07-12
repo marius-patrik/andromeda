@@ -13,6 +13,7 @@ from starlette.websockets import WebSocketDisconnect
 from agent_os.v1.common_pb import Fabric, SwitcherAxis, SwitcherScope, SwitcherState, Task
 from agent_os.v1.session_frames_pb import ClientFrame, ServerFrame, Status, UserInput
 from agent_os.v1.sessions_pb import CreateSessionRequest
+import llm_gateway.main as gateway_main
 from llm_gateway.control_plane import SessionControlPlane
 from llm_gateway.main import app
 from llm_gateway.quota import QuotaTracker
@@ -20,6 +21,7 @@ from llm_gateway.registry import ModelRegistry
 from llm_gateway.router import Router, RoutingError
 from llm_gateway.sessions import DuplicateClientError, SessionHub
 from llm_gateway.switchers import SwitcherStore
+from llm_gateway.task_routing import TaskRouter, TaskRoutingPolicy
 from llm_gateway.trace import TraceLogger
 
 
@@ -92,6 +94,16 @@ def test_switcher_update_preserves_unrelated_axes(monkeypatch, tmp_path):
     assert alternate.model == "alternate-local"
     assert {option.value for option in store.options(SwitcherAxis.MODEL)} == {"alternate-local"}
 
+    store.set(SwitcherAxis.AGENT, "codex", SwitcherScope.SESSION, "session-a")
+    store.set(SwitcherAxis.FABRIC, "cluster", SwitcherScope.PROJECT, "session-a")
+    assert store.state("session-a").fabric is Fabric.CLUSTER
+    assert store.state("session-a").agent == "codex"
+    assert store.state("session-b").fabric is Fabric.CLUSTER
+    assert store.state("session-b").agent == "rommie"
+    store.set(SwitcherAxis.AGENT, "claude", SwitcherScope.GLOBAL, "session-a")
+    assert store.state("session-a").agent == "codex"
+    assert store.state("session-b").agent == "claude"
+
 
 @pytest.mark.asyncio
 async def test_create_session_applies_task_and_switcher_seed(tmp_path):
@@ -123,6 +135,7 @@ async def test_create_session_applies_task_and_switcher_seed(tmp_path):
 
 
 def test_binary_websocket_relay_supports_multiple_clients(client):
+    gateway_main.session_hub.create(session_id="relay")
     with client.websocket_connect("/v1/sessions/relay/ws?client_id=a") as first:
         assert ServerFrame.from_binary(first.receive_bytes()).seq == 1
         with client.websocket_connect("/v1/sessions/relay/ws?client_id=b") as second:
@@ -142,6 +155,7 @@ def test_websocket_mtls_rejects_spoofed_identity_header(monkeypatch, tmp_path):
     monkeypatch.setenv("GATEWAY_MTLS_MODE", "require")
     monkeypatch.setenv("GATEWAY_MTLS_EDGE_TOKEN", "trusted-edge-secret")
     with TestClient(app) as client:
+        gateway_main.session_hub.create(session_id="secure")
         assert client.get("/health", headers={"x-client-cert-verified": "SUCCESS"}).status_code == 401
         with pytest.raises(WebSocketDisconnect) as rejected:
             with client.websocket_connect(
@@ -155,6 +169,14 @@ def test_websocket_mtls_rejects_spoofed_identity_header(monkeypatch, tmp_path):
             headers={"x-client-cert-verified": "SUCCESS", "x-gateway-edge-token": "trusted-edge-secret"},
         ) as websocket:
             assert ServerFrame.from_binary(websocket.receive_bytes()).seq == 1
+
+
+def test_websocket_rejects_unknown_session_without_creating_it(client):
+    with pytest.raises(WebSocketDisconnect) as rejected:
+        with client.websocket_connect("/v1/sessions/not-created/ws"):
+            pass
+    assert rejected.value.code == 4404
+    assert gateway_main.session_hub.get("not-created") is None
 
 
 @pytest.mark.asyncio
@@ -185,7 +207,9 @@ async def test_relay_drops_broken_or_slow_client_without_blocking_healthy_delive
     )
     assert delivered == 1
     assert list(record.clients) == ["healthy"]
-    assert len(healthy.payloads) == 1
+    assert len(healthy.payloads) == 3
+    detach_frames = [ServerFrame.from_binary(payload) for payload in healthy.payloads[1:]]
+    assert all(frame.frame is not None and frame.frame.field == "session_event" for frame in detach_frames)
 
 
 @pytest.mark.asyncio
@@ -260,6 +284,8 @@ async def test_attach_replay_uses_one_total_deadline(monkeypatch):
 
 def test_durable_budget_exhaustion_degrades_cloud_to_local(monkeypatch, tmp_path):
     registry = _registry(tmp_path)
+    registry._definitions = {"cluster-general": _cluster_general(), **registry._definitions}
+    registry.refresh_runtime_status(force=True)
     budget_path = tmp_path / "credits.json"
     budget_path.write_text(
         json.dumps(
@@ -283,6 +309,24 @@ def test_durable_budget_exhaustion_degrades_cloud_to_local(monkeypatch, tmp_path
         assert router.resolve_model("cloud-general", allow_cloud=True).id == "local-general"
     finally:
         tracer.close()
+
+
+def test_task_cloud_fallback_skips_cluster_and_selects_local(tmp_path):
+    registry = _registry(tmp_path)
+    registry._definitions = {"cluster-general": _cluster_general(), **registry._definitions}
+    registry.refresh_runtime_status(force=True)
+    policy_path = tmp_path / "routing.yaml"
+    policy_path.write_text(
+        "schema_version: gateway-routing-v1\nclasses:\n  fallback:\n    candidates:\n"
+        "      - {provider: claude, model_id: cloud-general}\n"
+        "      - {provider: local, model_id: cluster-general}\n"
+        "      - {provider: local, model_id: local-general}\n",
+        encoding="utf-8",
+    )
+    route = TaskRouter(registry, policy=TaskRoutingPolicy(policy_path)).resolve("fallback")
+    assert route.model_id == "local-general"
+    statuses = {item["model_id"]: item["unavailable_reason"] for item in route.candidates}
+    assert statuses["cluster-general"] == "local_fallback_required"
 
 
 def test_cloud_route_requires_opt_in_and_fails_closed_on_bad_budget(monkeypatch, tmp_path):
@@ -321,6 +365,19 @@ def test_cloud_fallback_never_selects_disabled_local_model(tmp_path):
             router.resolve_model("cloud-general", allow_cloud=False)
     finally:
         tracer.close()
+
+
+def _cluster_general() -> dict[str, object]:
+    return {
+        "id": "cluster-general",
+        "provider": "local",
+        "model": "cluster-general",
+        "api_base": "http://s002:8001/v1",
+        "role": "general",
+        "context_length": 4096,
+        "enabled": True,
+        "extra": {"node_id": "s002"},
+    }
 
 
 def _registry(tmp_path) -> ModelRegistry:

@@ -239,9 +239,12 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     if mtls_required() and not has_verified_client(websocket.headers):
         await websocket.close(code=4401, reason="verified client certificate required")
         return
-    await websocket.accept()
     client_id = websocket.query_params.get("client_id") or f"client-{uuid.uuid4().hex[:12]}"
-    record = session_hub.get_or_create(session_id)
+    record = session_hub.get(session_id)
+    if record is None:
+        await websocket.close(code=4404, reason="session does not exist")
+        return
+    await websocket.accept()
     attached = False
     try:
         try:

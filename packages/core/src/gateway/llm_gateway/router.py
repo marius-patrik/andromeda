@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import httpx
 from llm_gateway.quota import QuotaTracker
-from llm_gateway.registry import ModelEntry, ModelRegistry, generate_request_id, ROLE_NAMES
+from llm_gateway.registry import ModelEntry, ModelRegistry, generate_request_id, is_local_entry, ROLE_NAMES
 from llm_gateway.trace import TraceLogger
 
 ROLE_ALIASES = ROLE_NAMES
@@ -60,7 +60,7 @@ class Router:
                 (
                     candidate
                     for candidate in self.registry.list_by_role(entry.role)
-                    if candidate.enabled and not candidate.cloud
+                    if candidate.enabled and is_local_entry(candidate)
                 ),
                 None,
             )

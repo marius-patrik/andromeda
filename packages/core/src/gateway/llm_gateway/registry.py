@@ -58,6 +58,11 @@ class ModelEntry:
         }
 
 
+def is_local_entry(entry: ModelEntry) -> bool:
+    """Return true only for an on-host local backend, never cloud or cluster."""
+    return not entry.cloud and not (entry.extra.get("node_id") or entry.extra.get("backend_node_id"))
+
+
 class ModelRegistry:
     def __init__(
         self,

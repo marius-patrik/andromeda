@@ -153,6 +153,15 @@ class SessionHub:
         broken = [client_id for (client_id, _), result in zip(targets, results, strict=True) if isinstance(result, BaseException)]
         for client_id in broken:
             record.clients.pop(client_id, None)
+        for client_id in broken:
+            event = SessionEvent(
+                kind=SessionEventKind.ATTACH,
+                payload=Oneof(
+                    "attach",
+                    AttachState(client_id=client_id, action="detached", attached_clients=len(record.clients)),
+                ),  # type: ignore[arg-type]
+            )
+            await self._publish_locked(record, ServerFrame(frame=Oneof("session_event", event)))  # type: ignore[arg-type]
         return len(targets) - len(broken)
 
     @staticmethod

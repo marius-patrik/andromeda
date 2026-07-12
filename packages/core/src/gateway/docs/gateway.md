@@ -54,6 +54,11 @@ clients; every WebSocket exit detaches in a `finally` boundary. Configure
 `GATEWAY_SESSION_HISTORY_FRAMES` and `GATEWAY_WS_MAX_FRAME_BYTES` to bound the
 runtime log and input frames.
 
+Attachment only accepts session IDs already created through the control plane.
+Switcher scopes are per-axis overlays (`session > project > global`), so a
+narrow override does not freeze unrelated broader selections or leak a session
+value into project/global state.
+
 ## Edge mTLS
 
 Set `GATEWAY_MTLS_MODE=require` only behind an edge that strips untrusted

@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 
 from llm_gateway.quota import QuotaTracker
-from llm_gateway.registry import ModelEntry, ModelRegistry, generate_request_id
+from llm_gateway.registry import ModelEntry, ModelRegistry, generate_request_id, is_local_entry
 from llm_gateway.trace import TraceLogger
 
 DEFAULT_ROUTING_POLICY_PATH = Path(__file__).resolve().parent.parent / "registry" / "routing.yaml"
@@ -144,9 +144,14 @@ class TaskRouter:
         candidates = self.policy.candidates_for(task_class)
         inspected: list[dict[str, Any]] = []
         selected: tuple[RouteCandidate, ModelEntry] | None = None
+        local_fallback_required = False
         for candidate in candidates:
             entry = self.registry.get(candidate.model_id)
             status = self._candidate_status(candidate, entry, allow_cloud)
+            if entry is not None and entry.cloud and status in {"cloud_disabled", "budget_exhausted"}:
+                local_fallback_required = True
+            elif status is None and local_fallback_required and entry is not None and not is_local_entry(entry):
+                status = "local_fallback_required"
             inspected.append(
                 {
                     "provider": candidate.provider,

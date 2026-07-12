@@ -9,7 +9,7 @@ from agent_os.v1.switchers_pb import SwitcherOption
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 
-from llm_gateway.registry import ModelEntry, ModelRegistry
+from llm_gateway.registry import ModelEntry, ModelRegistry, is_local_entry
 
 
 def cluster_hosts(registry: ModelRegistry) -> dict[str, bool]:
@@ -28,9 +28,7 @@ def cluster_hosts(registry: ModelRegistry) -> dict[str, bool]:
 def entry_fabric(entry: ModelEntry) -> Fabric:
     if entry.extra.get("node_id") or entry.extra.get("backend_node_id"):
         return Fabric.CLUSTER
-    if entry.cloud:
-        return Fabric.CLOUD
-    return Fabric.LOCAL
+    return Fabric.LOCAL if is_local_entry(entry) else Fabric.CLOUD
 
 
 class SwitcherStore:
@@ -47,19 +45,17 @@ class SwitcherStore:
             agent=os.environ.get("GATEWAY_DEFAULT_AGENT", "rommie"),
             scope_source=SwitcherScope.GLOBAL,
         )
-        self._project: SwitcherState | None = None
-        self._sessions: dict[str, SwitcherState] = {}
+        self._project: dict[str, object] = {}
+        self._sessions: dict[str, dict[str, object]] = {}
 
     def state(self, session_id: str = "") -> SwitcherState:
-        source = self._sessions.get(session_id) if session_id else None
-        source = source or self._project or self._global
-        return _copy_state(source)
+        return self._resolved_state(include_project=True, session_id=session_id)
 
     def clear_session(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
     def seed_session(self, session_id: str, desired: SwitcherState) -> SwitcherState:
-        previous = self._sessions.get(session_id)
+        previous = dict(self._sessions[session_id]) if session_id in self._sessions else None
         try:
             updates = (
                 (SwitcherAxis.FABRIC, desired.fabric.name.lower() if desired.fabric is not Fabric.UNSPECIFIED else ""),
@@ -87,47 +83,39 @@ class SwitcherStore:
             raise ConnectError(Code.INVALID_ARGUMENT, "switcher scope is required")
         if scope is SwitcherScope.SESSION and not session_id:
             raise ConnectError(Code.INVALID_ARGUMENT, "session_id is required for session scope")
-        valid = {option.value for option in self.options(axis, session_id) if option.available}
+        current = self._state_for_scope(scope, session_id)
+        valid = {option.value for option in self._options_for_state(axis, current) if option.available}
         if value not in valid:
             raise ConnectError(Code.INVALID_ARGUMENT, f"{value!r} is not an available {axis.name.lower()} option")
 
-        current = self.state(session_id)
-        values = _state_values(current)
+        changes: dict[str, object] = {}
         if axis is SwitcherAxis.FABRIC:
             fabric = _fabric(value)
             candidates = self._route_entries(fabric)
             if not candidates:
                 raise ConnectError(Code.INVALID_ARGUMENT, f"no enabled route is available for fabric {value!r}")
-            values["fabric"] = fabric
-            values["provider"] = candidates[0].provider
-            values["model"] = candidates[0].id
+            changes.update(fabric=fabric, provider=candidates[0].provider, model=candidates[0].id)
         elif axis is SwitcherAxis.PROVIDER:
             candidates = self._route_entries(current.fabric, value)
             if not candidates:
                 raise ConnectError(Code.INVALID_ARGUMENT, f"no enabled model is available for provider {value!r}")
-            values["provider"] = value
-            values["model"] = candidates[0].id
+            changes.update(provider=value, model=candidates[0].id)
         else:
-            values[_axis_field(axis)] = value
-        values["scope_source"] = scope
-        updated = SwitcherState(
-            host=str(values["host"]),
-            fabric=values["fabric"],  # type: ignore[arg-type]
-            provider=str(values["provider"]),
-            model=str(values["model"]),
-            agent=str(values["agent"]),
-            scope_source=values["scope_source"],  # type: ignore[arg-type]
-        )
+            changes[_axis_field(axis)] = value
         if scope is SwitcherScope.SESSION:
-            self._sessions[session_id] = updated
+            self._sessions.setdefault(session_id, {}).update(changes)
         elif scope is SwitcherScope.PROJECT:
-            self._project = updated
+            self._project.update(changes)
         else:
-            self._global = updated
-        return _copy_state(updated)
+            values = _state_values(self._global)
+            values.update(changes)
+            self._global = self._make_state(values, SwitcherScope.GLOBAL)
+        return self._state_for_scope(scope, session_id)
 
     def options(self, axis: SwitcherAxis, session_id: str = "") -> list[SwitcherOption]:
-        state = self.state(session_id)
+        return self._options_for_state(axis, self.state(session_id))
+
+    def _options_for_state(self, axis: SwitcherAxis, state: SwitcherState) -> list[SwitcherOption]:
         if axis is SwitcherAxis.HOST:
             hosts = [SwitcherOption(value="gateway", label="gateway", available=True)]
             hosts.extend(
@@ -162,6 +150,49 @@ class SwitcherStore:
             agents = [item.strip() for item in os.environ.get("GATEWAY_AGENTS", "rommie,claude,codex,kimi,agy").split(",") if item.strip()]
             return [SwitcherOption(value=value, label=value, available=True) for value in agents]
         raise ConnectError(Code.INVALID_ARGUMENT, "switcher axis is required")
+
+    def _state_for_scope(self, scope: SwitcherScope, session_id: str) -> SwitcherState:
+        if scope is SwitcherScope.GLOBAL:
+            return _copy_state(self._global)
+        if scope is SwitcherScope.PROJECT:
+            return self._resolved_state(include_project=True)
+        return self.state(session_id)
+
+    def _resolved_state(self, *, include_project: bool, session_id: str = "") -> SwitcherState:
+        values = _state_values(self._global)
+        source = SwitcherScope.GLOBAL
+        if include_project and self._project:
+            values.update(self._project)
+            source = SwitcherScope.PROJECT
+        session = self._sessions.get(session_id) if session_id else None
+        if session:
+            values.update(session)
+            source = SwitcherScope.SESSION
+        return self._make_state(values, source)
+
+    def _make_state(self, values: dict[str, object], source: SwitcherScope) -> SwitcherState:
+        fabric = values["fabric"]
+        assert isinstance(fabric, Fabric)
+        provider = str(values["provider"])
+        model = str(values["model"])
+        matching = [
+            entry
+            for entry in self._route_entries(fabric, provider)
+            if entry.id == model
+        ]
+        if not matching:
+            candidates = self._route_entries(fabric, provider) or self._route_entries(fabric)
+            if candidates:
+                provider = candidates[0].provider
+                model = candidates[0].id
+        return SwitcherState(
+            host=str(values["host"]),
+            fabric=fabric,
+            provider=provider,
+            model=model,
+            agent=str(values["agent"]),
+            scope_source=source,
+        )
 
     def _route_entries(self, fabric: Fabric, provider: str | None = None) -> list[ModelEntry]:
         return [
