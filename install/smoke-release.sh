@@ -166,6 +166,27 @@ if env \
 fi
 grep -F "canonical checkout origin is https://example.invalid/not-andromeda.git, expected $SOURCE_DIR" "$SANDBOX/denied.log"
 
+# A nested directory must not inherit the enclosing repository's identity.
+NESTED_USER_HOME="$SANDBOX/nested-home"
+NESTED_PARENT="$NESTED_USER_HOME/marius-patrik"
+NESTED_ROOT="$NESTED_PARENT/nested/Andromeda"
+git clone --quiet --branch dev "$SOURCE_DIR" "$NESTED_PARENT"
+mkdir -p "$NESTED_ROOT"
+if env \
+  PATH="$FAKE_BIN:$PATH" \
+  HOME="$NESTED_USER_HOME" \
+  ANDROMEDA_SOURCE="$SOURCE_DIR" \
+  ANDROMEDA_BRANCH=dev \
+  AGENTS_HOME="$NESTED_USER_HOME/.agents" \
+  AGENTS_USER_HOME="$NESTED_USER_HOME" \
+  AGENTS_ROOT="$NESTED_ROOT" \
+  GIT_ALLOW_PROTOCOL=file \
+  bash "$SOURCE_DIR/install/install.sh" >"$SANDBOX/nested.log" 2>&1; then
+  echo "error: installer accepted a nested directory as the canonical worktree" >&2
+  exit 1
+fi
+grep -F "AGENTS_ROOT is inside another Git worktree instead of being its root" "$SANDBOX/nested.log"
+
 env \
   PATH="$FAKE_BIN:$PATH" \
   AGENTS_SMOKE_SANDBOX="$SANDBOX" \

@@ -19,10 +19,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Create repository checkout token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DARKFACTORY_APP_ID }}
+          private-key: ${{ secrets.DARKFACTORY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            Andromeda
+            Andromeda-data
+            DarkFactory
+            life-support
+            singularity
+            SkyAgent
+
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          submodules: recursive
+          token: ${{ steps.app-token.outputs.token }}
           persist-credentials: false
 
       - name: Set up Bun

@@ -65,7 +65,10 @@ prepare_paths() {
 
 install_or_update_checkout() {
   if git -C "$AGENTS_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    local current_source current_branch
+    local current_source current_branch worktree_root
+    worktree_root="$(git -C "$AGENTS_ROOT" rev-parse --show-toplevel)"
+    [ "$(source_identity "$worktree_root")" = "$(source_identity "$AGENTS_ROOT")" ] ||
+      die "AGENTS_ROOT is inside another Git worktree instead of being its root: $AGENTS_ROOT (top-level $worktree_root)"
     current_source="$(git -C "$AGENTS_ROOT" remote get-url origin 2>/dev/null || true)"
     [ "$(source_identity "$current_source")" = "$(source_identity "$SOURCE_URL")" ] ||
       die "canonical checkout origin is $current_source, expected $SOURCE_URL"
