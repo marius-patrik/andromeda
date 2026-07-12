@@ -47,6 +47,20 @@ test("workflow isolates Codex and Kimi credentials in separate provider steps", 
   assert.match(kimiStep, /steps\.review\.outputs\.takeover == 'true'/);
 });
 
+test("review prompt budgets generated payloads as a file summary", async () => {
+  const runner = await readFile(".github/scripts/run-codex-review.sh", "utf8");
+  for (const path of [
+    "packages/core/src/core/contracts-go/gen/**",
+    "packages/core/src/core/clients/shared-ts/src/gen/**",
+    "packages/core/src/gateway/agent_os/**",
+    "packages/core/src/inference/python-agent/agent/gen/**",
+  ]) {
+    assert.match(runner, new RegExp(path.replaceAll("/", "\\/").replaceAll("*", "\\*")));
+  }
+  assert.match(runner, /git diff --name-status/);
+  assert.match(runner, /Generated payload file summary/);
+});
+
 test("persists rotated credentials through an in-memory gh stdin pipe", async () => {
   let invocation;
   let piped = "";
