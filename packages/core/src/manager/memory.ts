@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { chmod, link, lstat, mkdir, open, readFile, readdir, rm } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import type { SharedState } from "./state";
 import {
   ensureStateV2,
@@ -836,21 +836,32 @@ async function writeProjectionFileIfChanged(filePath: string, content: string): 
 async function removeStaleProjectionEntries(directory: string, expected: Set<string>): Promise<void> {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (expected.has(entry.name)) continue;
+    const entryPath = path.join(directory, entry.name);
     // State-v2 publishers prepare complete bytes beside the destination and
-    // then publish with an atomic link/rename. Concurrent projection cleanup
-    // must not delete another writer's unpublished source file.
-    const publication = entry.name.match(/^\..+\.(\d+)\.[0-9a-f-]{36}\.tmp$/i);
+    // then publish with an atomic link/rename or a Windows backup swap.
+    // Concurrent cleanup must not delete another live writer's source/backup.
+    const publication = entry.name.match(/^\.(.+)\.(\d+)\.[0-9a-f-]{36}\.(tmp|bak)$/i);
     if (publication) {
       try {
-        process.kill(Number(publication[1]), 0);
+        process.kill(Number(publication[2]), 0);
         continue;
       } catch {
-        // The publishing process is gone; clean its abandoned temp below.
+        // The publishing process is gone. Restore an expected backup only
+        // when its destination is absent; otherwise remove the artifact.
+      }
+      if (publication[3].toLowerCase() === "bak" && expected.has(publication[1])) {
+        const destination = path.join(directory, publication[1]);
+        try {
+          await lstat(destination);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          await retryWindowsFileOperation(() => rename(entryPath, destination));
+          continue;
+        }
       }
     }
-    const entryPath = path.join(directory, entry.name);
     if (entry.isDirectory()) throw new Error(`unexpected memory projection directory: ${entryPath}`);
-    await rm(entryPath, { force: true });
+    await retryWindowsFileOperation(() => rm(entryPath, { force: true }));
   }
 }
 
