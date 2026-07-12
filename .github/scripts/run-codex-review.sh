@@ -64,6 +64,7 @@ if [ ! -s "${ISSUE_CONTEXT}" ]; then
 fi
 
 DIFF_FILE="$(mktemp)"
+GENERATED_FILE="$(mktemp)"
 PROMPT_FILE="$(mktemp)"
 PR_BODY_FILE="$(mktemp)"
 printf '%s\n' "${PR_BODY}" > "${PR_BODY_FILE}"
@@ -73,10 +74,21 @@ DIFF_EXCLUDES=(
   ':!coverage/**'
   ':!node_modules/**'
   ':!packages/web/dist/**'
+  ':!packages/core/src/core/contracts-go/gen/**'
+  ':!packages/core/src/core/clients/shared-ts/src/gen/**'
+  ':!packages/core/src/gateway/agent_os/**'
+  ':!packages/core/src/inference/python-agent/agent/gen/**'
+)
+GENERATED_PATHS=(
+  'packages/core/src/core/contracts-go/gen/**'
+  'packages/core/src/core/clients/shared-ts/src/gen/**'
+  'packages/core/src/gateway/agent_os/**'
+  'packages/core/src/inference/python-agent/agent/gen/**'
 )
 git diff --stat "${BASE_REF}...HEAD" -- . "${DIFF_EXCLUDES[@]}" > "${DIFF_FILE}"
 printf '\n--- FULL DIFF ---\n' >> "${DIFF_FILE}"
 git diff --find-renames "${BASE_REF}...HEAD" -- . "${DIFF_EXCLUDES[@]}" >> "${DIFF_FILE}"
+git diff --name-status "${BASE_REF}...HEAD" -- "${GENERATED_PATHS[@]}" > "${GENERATED_FILE}"
 
 {
 cat <<EOF
@@ -116,6 +128,13 @@ Linked issue/spec context:
 EOF
 
 append_capped_file "${ISSUE_CONTEXT}" "linked issue context" 220000
+
+cat <<EOF
+
+Generated payload file summary (bodies omitted; review generators and CI verification):
+EOF
+
+append_capped_file "${GENERATED_FILE}" "generated payload file summary" 40000
 
 cat <<EOF
 
