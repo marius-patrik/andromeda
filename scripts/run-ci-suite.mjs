@@ -7,16 +7,26 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+export function discoverBunTests(relativeDirectory, repositoryRoot = root) {
+  const files = [];
+  const visit = (relative) => {
+    for (const entry of readdirSync(path.join(repositoryRoot, relative), { withFileTypes: true })) {
+      const child = path.join(relative, entry.name);
+      if (entry.isDirectory()) visit(child);
+      else if (/\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/.test(entry.name)) files.push(child);
+    }
+  };
+  visit(relativeDirectory);
+  return files.sort();
+}
+
 function managerTests() {
-  return readdirSync(path.join(root, "packages", "manager", "test"))
-    .filter((name) => name.endsWith(".test.ts"))
-    .sort()
-    .map((name) => path.join("packages", "manager", "test", name));
+  return discoverBunTests(path.join("packages", "manager", "test"));
 }
 
 function harnessTests() {
   return [
-    path.join("packages", "harness", "test", "tools.test.ts"),
+    ...discoverBunTests(path.join("packages", "harness", "test")),
     path.join("packages", "manager", "test", "session.test.ts"),
     path.join("packages", "manager", "test", "session-adapters.test.ts"),
     path.join("packages", "manager", "test", "tui-tools.test.ts"),
@@ -81,7 +91,7 @@ const suites = {
   core() {
     run("core TypeScript types", "bun", ["./node_modules/typescript/bin/tsc", "--noEmit", "-p", "packages/core/tsconfig.json"]);
     run("core TypeScript import smoke", "bun", ["packages/core/tests/ts-import-smoke.ts"]);
-    run("core codegen retry regression", "bun", ["test", "packages/core/tests/codegen-retry.test.ts"]);
+    run("core TypeScript tests", "bun", ["test", ...discoverBunTests(path.join("packages", "core", "tests"))]);
     run("generated contract freshness", "bun", ["scripts/verify-codegen.ts"]);
     run("core Python import smoke", "bun", ["packages/core/scripts/python-smoke.mjs"]);
     run("core Go contracts", "go", ["test", "./..."], {

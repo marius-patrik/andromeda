@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { discoverBunTests } from "./run-ci-suite.mjs";
 import { inventoryIssues } from "./verify-test-inventory.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -36,6 +37,22 @@ function requireText(file) {
 
 test("success: the checked-in component inventory and workflow are complete", () => {
   assert.deepEqual(inventoryIssues(root), []);
+});
+
+test("success: new core and harness Bun tests join their suites automatically", () => {
+  const target = fixture();
+  try {
+    const coreTest = path.join(target, "packages", "core", "tests", "new-contract.spec.ts");
+    const harnessTest = path.join(target, "packages", "harness", "test", "nested", "new-tool.test.js");
+    mkdirSync(path.dirname(coreTest), { recursive: true });
+    mkdirSync(path.dirname(harnessTest), { recursive: true });
+    writeFileSync(coreTest, "fixture\n");
+    writeFileSync(harnessTest, "fixture\n");
+    assert.ok(discoverBunTests(path.join("packages", "core", "tests"), target).includes(path.relative(target, coreTest)));
+    assert.ok(discoverBunTests(path.join("packages", "harness", "test"), target).includes(path.relative(target, harnessTest)));
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
 });
 
 test("edge input: a missing manager-coupled harness test fails the inventory", () => {

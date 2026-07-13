@@ -16,6 +16,12 @@ succeeds. The same commands run locally through
 | `packages/manager` | `manager` | Ubuntu, Windows | TypeScript types, all manager tests, compact-capsule regression |
 | `plugins/darkfactory` | `darkfactory` | Ubuntu | pinned public submodule, npm clean install, full check including templates and build |
 
+Inventory `requiredPaths` are durable coverage anchors, not an exhaustive test
+allowlist. Core, harness, and manager recursively discover every Bun
+`*.test.*`/`*.spec.*` file under their owned test roots; pytest and Go keep their
+native suite discovery. Adding a test under an active component therefore adds
+it to `Validate` without another hand-maintained path entry.
+
 Harness has an explicit test-location exemption. Its session implementation
 depends on manager-owned canonical state and CLI adapters, so the exhaustive
 session tests remain under `packages/manager/test`. The inventory names those
