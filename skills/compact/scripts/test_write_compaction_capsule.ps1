@@ -64,11 +64,14 @@ if ($CommandArgs[0] -eq "state" -and $CommandArgs[1] -eq "sync") {
     $syncCalls = @((Get-Content -LiteralPath $env:FAKE_AGENTS_LOG) | Where-Object { $_ -eq "state sync --json" }).Count
     $pushed = -not ($env:FAKE_SYNC_FAIL_ON_CALL -and $syncCalls -eq [int]$env:FAKE_SYNC_FAIL_ON_CALL)
     $committed = $env:FAKE_BACKUP_COMMITTED -ne "false"
-    $backup = @{ bundle = "backups/events/fake/bundle.json"; payloadHash = ("a" * 64); entries = 1; committed = $committed }
+    $payloadHash = "a" * 64
+    $bundle = if ($env:FAKE_SYNC_INVALID_BUNDLE -eq "true") { "invalid/bundle.json" } else { "backups/events/fake/$payloadHash.bundle.json" }
+    $projectionHash = if ($env:FAKE_SYNC_PROJECTION_HASH -eq "null") { $null } elseif ($env:FAKE_SYNC_PROJECTION_HASH -eq "empty") { "" } else { "b" * 64 }
+    $backup = @{ bundle = $bundle; payloadHash = $payloadHash; entries = 1; committed = $committed }
     if ($env:FAKE_SYNC_INVALID_BACKUP -eq "true") { $backup.Remove("payloadHash") }
     @{
         pushed = $pushed
-        restored = @{ bundles = 1; imported = 0; skipped = 1; projectionHash = "projection-hash" }
+        restored = @{ bundles = 1; imported = 0; skipped = 1; projectionHash = $projectionHash }
         backup = $backup
     } | ConvertTo-Json -Compress
     exit 0
@@ -114,6 +117,8 @@ try {
     $env:FAKE_POST_ACTIVE_IDS = ""
     $env:FAKE_BACKUP_COMMITTED = ""
     $env:FAKE_PREFLIGHT_ACTIVE_ID = ""
+    $env:FAKE_SYNC_PROJECTION_HASH = ""
+    $env:FAKE_SYNC_INVALID_BUNDLE = ""
     $result = & $scriptUnderTest -Objective "resume board" -State "ready" -Next "start planned 1" -Validation "green" -Blockers "None" -Repos "repo@abc" -AgentsCommand $primary.Fake -UserHome $primary.Root -ClearCache | ConvertFrom-Json
     Assert-True ($result.ok -eq $true) "primary: expected ok result"
     Assert-True ($result.recordId -eq "record-new") "primary: expected remembered record"
@@ -378,6 +383,38 @@ try {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidEvidence.MemoryRoot "snapshots/compaction"))) "invalid-evidence: snapshot was created before healthy preflight"
     $env:FAKE_SYNC_INVALID_BACKUP = ""
 
+    foreach ($invalidProjectionHash in @("null", "empty")) {
+        $invalidProjection = Initialize-Case -Name "invalid-projection-$invalidProjectionHash"
+        $env:FAKE_AGENTS_HOME = $invalidProjection.AgentsHome
+        $env:FAKE_AGENTS_MEMORY = $invalidProjection.MemoryRoot
+        $env:FAKE_AGENTS_LOG = $invalidProjection.Log
+        $env:FAKE_SYNC_PROJECTION_HASH = $invalidProjectionHash
+        $invalidProjectionMessage = ""
+        try {
+            & $scriptUnderTest -Objective "must fail" -State "invalid evidence" -Next "none" -AgentsCommand $invalidProjection.Fake -CompatibilityRoot $invalidProjection.CompatibilityRoot | Out-Null
+        } catch {
+            $invalidProjectionMessage = $_.Exception.Message
+        }
+        Assert-True ($invalidProjectionMessage -match "invalid projection hash") "invalid-projection: $invalidProjectionHash hash was accepted"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidProjection.MemoryRoot "snapshots/compaction"))) "invalid-projection: snapshot was created before healthy preflight"
+    }
+    $env:FAKE_SYNC_PROJECTION_HASH = ""
+
+    $invalidBundle = Initialize-Case -Name "invalid-bundle"
+    $env:FAKE_AGENTS_HOME = $invalidBundle.AgentsHome
+    $env:FAKE_AGENTS_MEMORY = $invalidBundle.MemoryRoot
+    $env:FAKE_AGENTS_LOG = $invalidBundle.Log
+    $env:FAKE_SYNC_INVALID_BUNDLE = "true"
+    $invalidBundleMessage = ""
+    try {
+        & $scriptUnderTest -Objective "must fail" -State "invalid evidence" -Next "none" -AgentsCommand $invalidBundle.Fake -CompatibilityRoot $invalidBundle.CompatibilityRoot | Out-Null
+    } catch {
+        $invalidBundleMessage = $_.Exception.Message
+    }
+    Assert-True ($invalidBundleMessage -match "backup evidence is invalid") "invalid-bundle: unauthenticated bundle path was accepted"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidBundle.MemoryRoot "snapshots/compaction"))) "invalid-bundle: snapshot was created before healthy preflight"
+    $env:FAKE_SYNC_INVALID_BUNDLE = ""
+
     # Concurrent remote convergence cannot turn a stale capsule into success.
     $convergenceRace = Initialize-Case -Name "convergence-race"
     $env:FAKE_AGENTS_HOME = $convergenceRace.AgentsHome
@@ -449,5 +486,7 @@ try {
     Remove-Item Env:FAKE_POST_ACTIVE_IDS -ErrorAction SilentlyContinue
     Remove-Item Env:FAKE_BACKUP_COMMITTED -ErrorAction SilentlyContinue
     Remove-Item Env:FAKE_PREFLIGHT_ACTIVE_ID -ErrorAction SilentlyContinue
+    Remove-Item Env:FAKE_SYNC_PROJECTION_HASH -ErrorAction SilentlyContinue
+    Remove-Item Env:FAKE_SYNC_INVALID_BUNDLE -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

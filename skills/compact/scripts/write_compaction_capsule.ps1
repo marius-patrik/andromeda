@@ -253,6 +253,9 @@ function Assert-StateSyncSucceeded {
             throw "agents state sync restore evidence contains an invalid count."
         }
     }
+    if ([string]$Result.restored.projectionHash -notmatch '^[a-fA-F0-9]{64}$') {
+        throw "agents state sync restore evidence contains an invalid projection hash."
+    }
 
     $backupProperties = @($Result.backup.PSObject.Properties.Name)
     foreach ($required in @("bundle", "payloadHash", "entries", "committed")) {
@@ -260,9 +263,13 @@ function Assert-StateSyncSucceeded {
             throw "agents state sync backup evidence is missing $required."
         }
     }
+    $bundle = [string]$Result.backup.bundle
+    $payloadHash = [string]$Result.backup.payloadHash
+    $bundleMatch = [regex]::Match($bundle, '^backups/events/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/([a-fA-F0-9]{64})\.bundle\.json$')
     if (
-        [string]::IsNullOrWhiteSpace([string]$Result.backup.bundle) -or
-        [string]$Result.backup.payloadHash -notmatch '^[a-fA-F0-9]{64}$' -or
+        -not $bundleMatch.Success -or
+        $payloadHash -notmatch '^[a-fA-F0-9]{64}$' -or
+        $bundleMatch.Groups[1].Value -ne $payloadHash -or
         $Result.backup.entries -isnot [ValueType] -or
         [int64]$Result.backup.entries -lt 0 -or
         $Result.backup.committed -isnot [bool]

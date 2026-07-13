@@ -42,8 +42,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\skills\compact\scripts\write_com
    sufficient: sync JSON must confirm the push and include restore and backup
    evidence. `backup.committed=false` is valid when the content-addressed bundle
    was already tracked; `pushed=true` plus the complete bundle evidence is the
-   publication contract. After sync, the script must rerender memory and prove
-   its exact record is still the sole active compaction scalar.
+   publication contract. Restore evidence requires a SHA-256 projection hash;
+   backup evidence requires an authenticated `backups/events/` bundle whose
+   filename matches its payload hash. After sync, the script must rerender
+   memory and prove its exact record is still the sole active compaction scalar.
 5. If the script detects authority drift, multiple active compaction records,
    projection-integrity failure, or state-sync failure, stop. Repair this skill
    and add a regression case before compacting; do not work around the defect.
