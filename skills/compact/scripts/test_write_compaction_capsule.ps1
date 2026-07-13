@@ -263,6 +263,35 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $authorityDescendantProjection)) "authority-descendant: projection directory was created in canonical memory"
     Assert-True (-not ((Get-Content -Raw $authorityDescendant.Log) -match "state sync")) "authority-descendant: repository mutated before overlap rejection"
 
+    # Ancestor aliases are resolved before authority-disjointness decisions.
+    $aliasedRoot = Join-Path $testRoot "aliased-root"
+    $aliasedPhysicalHome = Join-Path $aliasedRoot "physical-home"
+    $aliasedAgentsHome = Join-Path $aliasedPhysicalHome ".agents"
+    $aliasedMemoryRoot = Join-Path $aliasedAgentsHome "memory"
+    $aliasedHome = Join-Path $aliasedRoot "home-alias"
+    $aliasedCompatibility = Join-Path $aliasedAgentsHome "projections"
+    New-Item -ItemType Directory -Path $aliasedMemoryRoot -Force | Out-Null
+    if ($env:OS -eq "Windows_NT") {
+        New-Item -ItemType Junction -Path $aliasedHome -Target $aliasedPhysicalHome | Out-Null
+    } else {
+        New-Item -ItemType SymbolicLink -Path $aliasedHome -Target $aliasedPhysicalHome | Out-Null
+    }
+    $aliasedLog = Join-Path $aliasedRoot "agents.log"
+    New-Item -ItemType File -Path $aliasedLog -Force | Out-Null
+    $aliasedFake = New-FakeAgents -Root $aliasedRoot
+    $env:FAKE_AGENTS_HOME = Join-Path $aliasedHome ".agents"
+    $env:FAKE_AGENTS_MEMORY = Join-Path $env:FAKE_AGENTS_HOME "memory"
+    $env:FAKE_AGENTS_LOG = $aliasedLog
+    $aliasedMessage = ""
+    try {
+        & $scriptUnderTest -Objective "must fail" -State "physical overlap" -Next "none" -AgentsCommand $aliasedFake -UserHome $aliasedPhysicalHome -CompatibilityRoot $aliasedCompatibility | Out-Null
+    } catch {
+        $aliasedMessage = $_.Exception.Message
+    }
+    Assert-True ($aliasedMessage -match "physically disjoint") "aliased-root: physical authority overlap was accepted"
+    Assert-True (-not (Test-Path -LiteralPath $aliasedCompatibility)) "aliased-root: projection was written through an ancestor alias"
+    Assert-True (-not ((Get-Content -Raw $aliasedLog) -match "state sync")) "aliased-root: repository mutated before physical overlap rejection"
+
     # Physical escape: a lexically contained link or junction cannot redirect writes.
     $linked = Initialize-Case -Name "linked"
     $linkedOutside = Join-Path $linked.Root "linked-outside"
