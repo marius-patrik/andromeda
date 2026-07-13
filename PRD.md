@@ -26,12 +26,13 @@ dashboards, and escalates only via ask-owner issues. The full backlog drains
 through DarkFactory lanes: issue → branch (from `dev`) → PR → CI + Codex Review
 gates → automerge → release. Zero orchestrator terminal sessions.
 
-The consolidated program plan that sequences work toward this end state lives
-in the Andromeda-data authority at `context/PLAN.md`. Precedence when artifacts
-disagree: owner instruction > program plan > this PRD > issues. The program's
-end-state demo — the full system running in one container from an agents-os
-image — is parked with all custom distro/distribution work until the owner
-reopens it.
+This PRD is the repository's specification source of truth. The consolidated
+program plan in the Andromeda-data authority at `context/PLAN.md` sequences
+execution across lanes: it orders work and records parked scopes, and it does
+not supersede repository-owned specification. Owner instruction outranks both;
+issues implement this PRD. The program's end-state demo — the full system
+running in one container from an agents-os image — is parked with all custom
+distro/distribution work until the owner reopens it.
 
 ## Naming and authority
 
@@ -50,16 +51,18 @@ retire. They are not supported aliases or compatibility contracts.
 
 | Component | Role |
 | --- | --- |
-| `packages/core` | Shared state, memory, provenance, and contract primitives |
-| `packages/manager` | Package/state/secrets substrate and the single local management surface; implementation home for local system operations |
-| `packages/harness` | Orchestration engine (long-term home of brains, workers, streams, scheduling); disposition decision pending — roadmap or documented dormancy, no silent limbo |
-| `packages/gateway` | Model routing substrate: registry, switcher control plane, cloud OAuth dispatch |
-| `packages/inference` | Local engine substrate: discovery, serve profiles, engine contract |
+| `packages/core` | Protobuf sources and generated Go, TypeScript, and Python contracts |
+| `packages/manager` | `agents` CLI, state, providers, sessions, memory, orchestration, package/capability registries, and lifecycle operations — the single local management surface |
+| `packages/harness` | Canonical session event handling and tool execution; growth disposition pending — roadmap or documented dormancy, no silent limbo |
+| `packages/gateway` | Local model registry, routing, health, quota, and transient control-plane relay; switcher control plane and cloud OAuth dispatch |
+| `packages/inference` | Gateway-backed Python agent loop, status, persistence, redaction, and package validation; engine discovery and serve profiles |
 | `plugins/darkfactory` | Thin GitHub control-plane adapter: issues/PRs/labels ↔ work units, enforcement sync, review gates. No second brain. |
 
-Binding architecture rule: anything executable locally lives in the manager and
-is invoked by DarkFactory; DarkFactory keeps only the GitHub-facing adapter.
-GitHub is the remote control plane; the `agents` CLI is the local one.
+Binding architecture rule: local system management operations are implemented
+in the manager and consumed by DarkFactory — no parallel implementations in the
+control plane — while gateway and inference own their assigned local runtime
+responsibilities. GitHub is the remote control plane; the `agents` CLI is the
+local one.
 
 ## Goals
 
@@ -391,10 +394,13 @@ secret/symlink rejection.
 
 ## Delivery milestones
 
-Milestones 1–6 of the state/memory reconciliation are delivered and folded into
+Milestones 1–5 of the state/memory reconciliation are delivered and folded into
 release history (v0.2.x): v2 bootstrap/doctor, journalled migration, canonical
-event replay, capability content-addressing, two-machine encrypted event
-exchange, and release-backed installation with daily-use activation.
+event replay, capability content-addressing, and two-machine encrypted event
+exchange. Milestone 6 is partially delivered: the reconciled Agent OS is
+installed and in daily use on both machines via the source install, while
+release-backed distribution and the repaired global launcher remain active
+work (program lane 4 below, issue #217).
 
 The active program (sequenced in the Andromeda-data `context/PLAN.md`):
 
