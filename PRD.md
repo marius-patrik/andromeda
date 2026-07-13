@@ -9,9 +9,10 @@ identity, memory, session, or configuration authorities. The
 single management and runtime surface.
 
 Andromeda is one program, not a collection of adjacent tools. Every component
-in this repository — state/manager core, orchestration harness, model/execution
-substrate, and GitHub control plane — is a layer of the same system and is
-specified, validated, and released as such.
+in this repository — the manager core (state, sessions, orchestration), the
+session-event and tool-execution harness, the model/execution substrate, and
+the GitHub control plane — is a layer of the same system and is specified,
+validated, and released as such.
 
 [Canonical State and Memory v2](docs/state-memory-v2.md) is the authoritative
 state specification. This PRD defines the product boundary, the system
@@ -28,13 +29,15 @@ gates → automerge → release. Zero orchestrator terminal sessions. "GitHub-on
 control" means autonomous orchestration operates exclusively through the GitHub
 control plane; the `agents` CLI remains the local operator surface.
 
-This PRD is the repository's specification source of truth. The consolidated
-program plan in the Andromeda-data authority at `context/PLAN.md` sequences
-execution across lanes: it orders work and records parked scopes, and it does
-not supersede repository-owned specification. Owner instruction outranks both;
-issues implement this PRD. The program's end-state demo — the full system
-running in one container from an agents-os image — is parked with all custom
-distro/distribution work until the owner reopens it.
+This PRD is the repository's specification source of truth. The owner-facing
+task board in the Andromeda-data authority at `context/TASK.md` remains the
+canonical authorization and sequencing surface; the consolidated program plan
+at `context/PLAN.md` records the detailed execution lanes and parked scopes
+under that board and supersedes neither the board nor repository-owned
+specification. Owner instruction outranks all of them; issues implement this
+PRD. The program's end-state demo — the full system running in one container
+from an agents-os image — is parked with all custom distro/distribution work
+until the owner reopens it.
 
 ## Naming and authority
 
@@ -415,7 +418,9 @@ source-install activation and two-machine acceptance (recorded in the v0.2.x
 release history), while release-backed distribution and the repaired global
 launcher remain active work (program lane 4 below, issue #217).
 
-The active program (sequenced in the Andromeda-data `context/PLAN.md`):
+The active program below is derived detail: authorization and high-level
+sequencing stay with the owner board (Andromeda-data `context/TASK.md`), and
+the lane breakdown lives in the program plan (`context/PLAN.md`):
 
 1. **Enforcement and CI truth** — managed enforcement baseline (delivered,
    issue #203) and the full-coverage CI gate (issue #206).
