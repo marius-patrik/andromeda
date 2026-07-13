@@ -649,7 +649,7 @@ async function sessionCommand(args: string[], flags: Record<string, string | boo
         };
       }
     } else {
-      descriptor = await createSession(state, { provider: provider!, model: model!, mode });
+      descriptor = await createSession(state, { provider: provider!, model: model!, mode, workdir: root });
     }
 
     const orchestrator = await prepareOrchestratorSession(state, descriptor);
@@ -727,7 +727,7 @@ async function tuiCommand(args: string[], flags: Record<string, string | boolean
   const state = runtimeState();
   await ensureSharedState(state);
   const { provider, model, mode } = await resolveSessionDefaults(state, flags);
-  const descriptor = await createSession(state, { provider, model, mode });
+  const descriptor = await createSession(state, { provider, model, mode, workdir: root });
   const orchestrator = await prepareOrchestratorSession(state, descriptor);
   try {
     await launchTui(state, descriptor, systemPromptForMode(mode), orchestrator);
@@ -746,7 +746,7 @@ async function runCommand(args: string[], flags: Record<string, string | boolean
   await ensureSharedState(state);
   const { provider, model, mode } = await resolveSessionDefaults(state, flags);
 
-  const descriptor = await createSession(state, { provider, model, mode });
+  const descriptor = await createSession(state, { provider, model, mode, workdir: root });
   const orchestrator = await prepareOrchestratorSession(state, descriptor);
   const systemPrompt = systemPromptForMode(mode);
 

@@ -508,6 +508,33 @@ describe("session runtime", () => {
     }
   });
 
+  test("CLI session run records the invocation cwd instead of the distribution root", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-cli-session-workdir-"));
+    const invocationRoot = path.join(root, "task");
+    const distributionRoot = path.join(root, "distribution");
+    const stateRoot = path.join(root, "state");
+    try {
+      await Promise.all([mkdir(invocationRoot), mkdir(distributionRoot)]);
+      const env = { AGENTS_HOME: stateRoot, AGENTS_ROOT: distributionRoot };
+
+      const run = await runAgents(
+        invocationRoot,
+        ["session", "run", "--provider", "fake", "--model", "test", "hello"],
+        env,
+      );
+      expect(run.code).toBe(0);
+      const sessionId = run.stderr.trim().replace("session: ", "");
+
+      const show = await runAgents(invocationRoot, ["session", "show", sessionId, "--json"], env);
+      expect(show.code).toBe(0);
+      const shown = JSON.parse(show.stdout) as { state: { workdir: string } };
+      expect(shown.state.workdir).toBe(invocationRoot);
+      expect(shown.state.workdir).not.toBe(distributionRoot);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("CLI session run continues existing session", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-cli-session-cont-"));
     try {
@@ -557,6 +584,29 @@ describe("agents run / sessions CLI", () => {
     }
   });
 
+  test("run records the invocation cwd instead of the distribution root", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-run-workdir-"));
+    const invocationRoot = path.join(root, "task");
+    const distributionRoot = path.join(root, "distribution");
+    const stateRoot = path.join(root, "state");
+    try {
+      await Promise.all([mkdir(invocationRoot), mkdir(distributionRoot)]);
+      const env = { AGENTS_HOME: stateRoot, AGENTS_ROOT: distributionRoot };
+
+      const run = await runAgents(invocationRoot, ["run", "--provider", "fake", "--model", "test", "hello"], env);
+      expect(run.code).toBe(0);
+      const sessionId = run.stderr.trim().replace("session: ", "");
+
+      const show = await runAgents(invocationRoot, ["session", "show", sessionId, "--json"], env);
+      expect(show.code).toBe(0);
+      const shown = JSON.parse(show.stdout) as { state: { workdir: string } };
+      expect(shown.state.workdir).toBe(invocationRoot);
+      expect(shown.state.workdir).not.toBe(distributionRoot);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("run uses provider/model/mode defaults from config", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-run-config-"));
     try {
@@ -599,6 +649,38 @@ describe("agents run / sessions CLI", () => {
       expect(shown.state.turnCount).toBe(2);
       expect(shown.transcript.messages.length).toBe(4);
       expect(shown.transcript.messages[3].content).toBe("fake: second");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("sessions resume preserves the original workdir from another invocation cwd", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-resume-workdir-"));
+    const firstInvocation = path.join(root, "first-task");
+    const secondInvocation = path.join(root, "second-task");
+    const distributionRoot = path.join(root, "distribution");
+    const stateRoot = path.join(root, "state");
+    try {
+      await Promise.all([mkdir(firstInvocation), mkdir(secondInvocation), mkdir(distributionRoot)]);
+      const env = { AGENTS_HOME: stateRoot, AGENTS_ROOT: distributionRoot };
+
+      const first = await runAgents(
+        firstInvocation,
+        ["run", "--provider", "fake", "--model", "test", "first"],
+        env,
+      );
+      expect(first.code).toBe(0);
+      const sessionId = first.stderr.trim().replace("session: ", "");
+
+      const resumed = await runAgents(secondInvocation, ["sessions", "resume", sessionId, "second"], env);
+      expect(resumed.code).toBe(0);
+
+      const show = await runAgents(secondInvocation, ["session", "show", sessionId, "--json"], env);
+      expect(show.code).toBe(0);
+      const shown = JSON.parse(show.stdout) as { state: { workdir: string; turnCount: number } };
+      expect(shown.state.workdir).toBe(firstInvocation);
+      expect(shown.state.workdir).not.toBe(secondInvocation);
+      expect(shown.state.turnCount).toBe(2);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
