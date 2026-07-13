@@ -348,6 +348,7 @@ function Assert-StateSyncSucceeded {
 function Assert-MemoryStatusSucceeded {
     param(
         [Parameter(Mandatory=$true)]$Result,
+        [Parameter(Mandatory=$true)][string]$ExpectedAgentId,
         [Parameter(Mandatory=$true)][string]$Context
     )
 
@@ -357,12 +358,17 @@ function Assert-MemoryStatusSucceeded {
             throw "Canonical memory status is missing $required $Context."
         }
     }
+    $integerTypes = @(
+        [byte], [sbyte], [int16], [uint16], [int32], [uint32], [int64], [uint64]
+    )
+    $recordsIsInteger = @($integerTypes | Where-Object { $Result.records -is $_ }).Count -eq 1
+    $eventsIsInteger = @($integerTypes | Where-Object { $Result.events -is $_ }).Count -eq 1
     if (
-        [string]::IsNullOrWhiteSpace([string]$Result.agentId) -or
-        $Result.records -isnot [ValueType] -or
-        [int64]$Result.records -lt 0 -or
-        $Result.events -isnot [ValueType] -or
-        [int64]$Result.events -lt 0 -or
+        [string]$Result.agentId -ne $ExpectedAgentId -or
+        -not $recordsIsInteger -or
+        [decimal]$Result.records -lt 0 -or
+        -not $eventsIsInteger -or
+        [decimal]$Result.events -lt 0 -or
         [string]$Result.projectionHash -notmatch '^[a-fA-F0-9]{64}$'
     ) {
         throw "Canonical memory status is invalid $Context."
@@ -391,6 +397,17 @@ function Restore-ProjectionState {
 
 $authority = Resolve-AgentEnvironment
 $script:PhysicalWriteRoots = @($authority.AgentsHome)
+$manifestPath = Join-Path $authority.AgentsHome "manifest.json"
+Assert-PhysicalFileDestination -Path $manifestPath
+try {
+    $canonicalManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+} catch {
+    throw "Canonical Agent OS manifest is invalid: $manifestPath"
+}
+$canonicalAgentId = [string]$canonicalManifest.agentId
+if ([string]::IsNullOrWhiteSpace($canonicalAgentId)) {
+    throw "Canonical Agent OS manifest does not identify an agent: $manifestPath"
+}
 $compactLockPath = Join-Path $authority.MemoryRoot ".compact.lock"
 Assert-PhysicalFileDestination -Path $compactLockPath
 try {
@@ -546,7 +563,7 @@ try {
 
     $render = Invoke-AgentsJson -Arguments @("memory", "render", "--json")
     $memoryStatus = Invoke-AgentsJson -Arguments @("memory", "status", "--json")
-    Assert-MemoryStatusSucceeded -Result $memoryStatus -Context "after writing the compaction capsule"
+    Assert-MemoryStatusSucceeded -Result $memoryStatus -ExpectedAgentId $canonicalAgentId -Context "after writing the compaction capsule"
 
     New-Item -ItemType Directory -Path $resolvedCompatibilityRoot -Force | Out-Null
     Assert-PhysicalDirectoryChain -Root $compatibilityAnchor -Target $resolvedCompatibilityRoot
@@ -601,7 +618,7 @@ Last validation: $Validation
     # and prove this capsule is still the one active scalar before reporting success.
     $render = Invoke-AgentsJson -Arguments @("memory", "render", "--json")
     $memoryStatus = Invoke-AgentsJson -Arguments @("memory", "status", "--json")
-    Assert-MemoryStatusSucceeded -Result $memoryStatus -Context "after final repository synchronization"
+    Assert-MemoryStatusSucceeded -Result $memoryStatus -ExpectedAgentId $canonicalAgentId -Context "after final repository synchronization"
     $publishedActiveResult = Invoke-AgentsJson -Arguments @(
         "memory", "list",
         "--scope", "session",
@@ -699,14 +716,14 @@ Last validation: $Validation
             }
             Invoke-AgentsJson -Arguments @("memory", "render", "--json") | Out-Null
             $recoveredStatus = Invoke-AgentsJson -Arguments @("memory", "status", "--json")
-            Assert-MemoryStatusSucceeded -Result $recoveredStatus -Context "after rollback"
+            Assert-MemoryStatusSucceeded -Result $recoveredStatus -ExpectedAgentId $canonicalAgentId -Context "after rollback"
             $recoverySync = Invoke-AgentsJson -Arguments @("state", "sync", "--json")
             Assert-StateSyncSucceeded -Result $recoverySync
             } else {
                 $recoveryNotes += "rollback skipped because synchronized authority no longer uniquely matches the failed local record"
                 Invoke-AgentsJson -Arguments @("memory", "render", "--json") | Out-Null
                 $preservedStatus = Invoke-AgentsJson -Arguments @("memory", "status", "--json")
-                Assert-MemoryStatusSucceeded -Result $preservedStatus -Context "after preserving concurrent state"
+                Assert-MemoryStatusSucceeded -Result $preservedStatus -ExpectedAgentId $canonicalAgentId -Context "after preserving concurrent state"
             }
         } catch {
             $recoveryIssues += "canonical rollback failed: $($_.Exception.Message)"
