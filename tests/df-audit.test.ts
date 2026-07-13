@@ -379,8 +379,25 @@ test("main-only data repositories do not inherit product gate requirements", asy
     allow_force_pushes: { enabled: false },
     allow_deletions: { enabled: false }
   }));
-  const findings = await doctor.auditBranchProtection(gh, { owner: "marius-patrik", repo: "Andromeda-data" }, "main", { required: false });
+  const findings = await doctor.auditBranchProtection(gh, { owner: "marius-patrik", repo: "Andromeda-data" }, "main", {
+    protectionRequired: true,
+    gatesRequired: false
+  });
   assert.deepEqual(findings, []);
+});
+
+test("main-only data repositories require observable main protection", async () => {
+  const dataRepo = { owner: "marius-patrik", repo: "Andromeda-data" };
+  const branches = [{ name: "main", commit: { sha: "a" } }];
+  const { gh } = mockGh((_method, requestPath) => {
+    if (requestPath.includes("/protection")) throw notFound();
+    throw new Error(`unexpected ${requestPath}`);
+  });
+  const result = await doctor.auditBranchAndReleaseState(gh, dataRepo, { default_branch: "main", allow_auto_merge: false }, {
+    branches, branchNames: new Set(["main"]), pulls: [], isData: true
+  });
+  assert.ok(result.findings.some((finding) => finding.id === "protection-main-missing"));
+  assert.equal(result.findings.some((finding) => /validate|review|strict/.test(finding.id)), false);
 });
 
 test("main-only data repositories still fail closed on admin bypass and inaccessible protection", async () => {

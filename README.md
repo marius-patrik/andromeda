@@ -112,6 +112,9 @@ only aggregate violation classes and counts.
 Managed `Validate`, `Codex Review`, and future `DarkFactory Autoreview` gates
 must use their exact context names and the GitHub Actions producer App ID
 `15368`; a same-name check from any other App is critical drift.
+Main-only data repositories are exempt from `dev`, release-lane, and product
+gate expectations, but their `main` branch must still expose protection with
+administrator bypass, force-push, and deletion disabled.
 
 The doctor target token requests only read access to administration, actions,
 checks, contents, pull requests, secrets, and statuses; issue access becomes

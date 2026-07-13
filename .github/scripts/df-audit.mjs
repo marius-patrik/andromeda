@@ -360,7 +360,11 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
   }
 
   for (const branch of ["main", ...(!isData ? ["dev"] : [])].filter((name) => branchNames.has(name))) {
-    findings.push(...await auditBranchProtection(github, repository, branch, { required: !isData, observations }));
+    findings.push(...await auditBranchProtection(github, repository, branch, {
+      protectionRequired: true,
+      gatesRequired: !isData,
+      observations
+    }));
   }
 
   const activeHeads = new Set(
@@ -388,6 +392,8 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
 }
 
 export async function auditBranchProtection(github, repository, branch, options = {}) {
+  const protectionRequired = options.protectionRequired ?? (options.required === true);
+  const gatesRequired = options.gatesRequired ?? (options.required === true);
   const protection = await getBranchProtection(github, repository, branch);
   if (!protection.configured) {
     if (protection.status === 403) {
@@ -397,7 +403,7 @@ export async function auditBranchProtection(github, repository, branch, options 
         repair: ["Grant metadata-only administration read to the trusted doctor token, then re-run diagnosis. Do not change branch settings based on this finding alone."]
       })];
     }
-    if (!options.required) return [];
+    if (!protectionRequired) return [];
     return [doctorFinding(`protection-${slug(branch)}-missing`, "branch protection", `Branch \`${branch}\` has no readable protection.`, {
       severity: "critical",
       evidence: [{ label: `${branch} settings`, url: `https://github.com/${repoName(repository)}/settings/branches` }],
@@ -411,7 +417,7 @@ export async function auditBranchProtection(github, repository, branch, options 
   const contexts = required.checks.map((check) => check.context);
   const hasValidate = contexts.includes("Validate");
   const hasReview = contexts.includes("Codex Review") || contexts.includes("DarkFactory Autoreview");
-  if (options.required) {
+  if (gatesRequired) {
     if (required.malformed) {
       findings.push(doctorFinding(`protection-${slug(branch)}-required-checks-malformed`, "branch protection", `Branch \`${branch}\` returned malformed or unobservable required-check metadata.`, {
         severity: "critical",
@@ -466,7 +472,7 @@ export async function auditBranchProtection(github, repository, branch, options 
   } else if (data.allow_deletions?.enabled !== false) {
     findings.push(doctorFinding(`protection-${slug(branch)}-deletion-unobservable`, "branch protection", `Deletion posture for \`${branch}\` is malformed or unobservable.`, { severity: "critical" }));
   }
-  options.observations?.push(`Branch ${branch} protection: policy_required=${options.required === true}, strict=${data.required_status_checks?.strict === true}, enforce_admins=${data.enforce_admins?.enabled === true}, required=${required.checks.map((check) => `${check.context}@app:${check.appId ?? "unbound"}`).join(", ") || "none"}.`);
+  options.observations?.push(`Branch ${branch} protection: protection_required=${protectionRequired}, gates_required=${gatesRequired}, strict=${data.required_status_checks?.strict === true}, enforce_admins=${data.enforce_admins?.enabled === true}, required=${required.checks.map((check) => `${check.context}@app:${check.appId ?? "unbound"}`).join(", ") || "none"}.`);
   return findings;
 }
 
