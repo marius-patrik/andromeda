@@ -308,15 +308,23 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
 
   let comparison = null;
   if (!isData && branchNames.has("main") && branchNames.has("dev")) {
-    comparison = await compareBranches(github, repository, "main", "dev");
-    observations.push(`main...dev is ${comparison.status} (ahead=${comparison.ahead_by || 0}, behind=${comparison.behind_by || 0}).`);
-    if (comparison.status === "behind") {
+    const observedComparison = await compareBranches(github, repository, "main", "dev");
+    if (!isValidBranchComparison(observedComparison)) {
+      findings.push(doctorFinding("main-dev-comparison-malformed", "branch convergence", "The main...dev comparison response is malformed or incomplete, so branch convergence is unobservable.", {
+        severity: "critical",
+        evidence: [compareEvidence(repository, "main", "dev")]
+      }));
+    } else {
+      comparison = observedComparison;
+      observations.push(`main...dev is ${comparison.status} (ahead=${comparison.ahead_by}, behind=${comparison.behind_by}).`);
+    }
+    if (comparison?.status === "behind") {
       findings.push(doctorFinding("dev-behind-main", "branch convergence", "`dev` is behind `main` and must be synchronized before new work/release.", {
         severity: "error",
         evidence: [compareEvidence(repository, "main", "dev")],
         repair: ["Open a reviewed main-to-dev reconciliation PR; do not force-update dev."]
       }));
-    } else if (comparison.status === "diverged") {
+    } else if (comparison?.status === "diverged") {
       findings.push(doctorFinding("main-dev-diverged", "branch convergence", "`main` and `dev` have diverged.", {
         severity: "critical",
         evidence: [compareEvidence(repository, "main", "dev")],
@@ -363,7 +371,6 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
 export async function auditBranchProtection(github, repository, branch, options = {}) {
   const protection = await getBranchProtection(github, repository, branch);
   if (!protection.configured) {
-    if (!options.required) return [];
     if (protection.status === 403) {
       return [doctorFinding(`protection-${slug(branch)}-unobservable`, "branch protection", `Branch protection for \`${branch}\` is inaccessible (HTTP 403); posture is unknown, not absent.`, {
         severity: "critical",
@@ -371,6 +378,7 @@ export async function auditBranchProtection(github, repository, branch, options 
         repair: ["Grant metadata-only administration read to the trusted doctor token, then re-run diagnosis. Do not change branch settings based on this finding alone."]
       })];
     }
+    if (!options.required) return [];
     return [doctorFinding(`protection-${slug(branch)}-missing`, "branch protection", `Branch \`${branch}\` has no readable protection.`, {
       severity: "critical",
       evidence: [{ label: `${branch} settings`, url: `https://github.com/${repoName(repository)}/settings/branches` }],
@@ -421,13 +429,13 @@ export async function auditBranchProtection(github, repository, branch, options 
     if (data.required_status_checks?.strict !== true) {
       findings.push(doctorFinding(`protection-${slug(branch)}-strict-missing`, "branch protection", `Branch \`${branch}\` does not require branches to be up to date before merge.`, { severity: "critical" }));
     }
-    if (data.enforce_admins?.enabled === false) {
-      findings.push(doctorFinding(`protection-${slug(branch)}-admin-bypass`, "branch protection", `Branch \`${branch}\` does not enforce protections for administrators.`, {
-        severity: "critical", repair: ["Enable administrator enforcement or record an explicit owner decision; automation itself must never use bypass authority."]
-      }));
-    } else if (data.enforce_admins?.enabled !== true) {
-      findings.push(doctorFinding(`protection-${slug(branch)}-admin-bypass-unobservable`, "branch protection", `Administrator enforcement posture for \`${branch}\` is malformed or unobservable.`, { severity: "critical" }));
-    }
+  }
+  if (data.enforce_admins?.enabled === false) {
+    findings.push(doctorFinding(`protection-${slug(branch)}-admin-bypass`, "branch protection", `Branch \`${branch}\` does not enforce protections for administrators.`, {
+      severity: "critical", repair: ["Enable administrator enforcement or record an explicit owner decision; automation itself must never use bypass authority."]
+    }));
+  } else if (data.enforce_admins?.enabled !== true) {
+    findings.push(doctorFinding(`protection-${slug(branch)}-admin-bypass-unobservable`, "branch protection", `Administrator enforcement posture for \`${branch}\` is malformed or unobservable.`, { severity: "critical" }));
   }
   if (data.allow_force_pushes?.enabled === true) {
     findings.push(doctorFinding(`protection-${slug(branch)}-force-push`, "branch protection", `Force-push is allowed on \`${branch}\`.`, { severity: "critical" }));
@@ -1503,6 +1511,12 @@ async function listRepositoryLabelNames(github, repository) {
 
 async function compareBranches(github, repository, base, head) {
   return await github.request("GET", `/repos/${repoName(repository)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`);
+}
+
+function isValidBranchComparison(comparison) {
+  return ["identical", "ahead", "behind", "diverged"].includes(comparison?.status) &&
+    Number.isInteger(comparison?.ahead_by) && comparison.ahead_by >= 0 &&
+    Number.isInteger(comparison?.behind_by) && comparison.behind_by >= 0;
 }
 
 async function getPullRequest(github, repository, number) {

@@ -245,6 +245,26 @@ test("branch policy classifies behind, diverged, missing, and main-only data rep
   assert.equal(data.findings.some((finding) => /dev|automerge/.test(finding.id)), false);
 });
 
+test("malformed branch comparisons fail closed instead of appearing converged", async () => {
+  for (const comparison of [
+    { status: "mystery", ahead_by: 0, behind_by: 0 },
+    { status: "identical", ahead_by: "0", behind_by: 0 },
+    null
+  ]) {
+    const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "b" } }];
+    const { gh } = mockGh((_method, requestPath) => {
+      if (requestPath.endsWith("/compare/main...dev")) return comparison;
+      if (requestPath.includes("/protection")) return protectedBranch();
+      throw new Error(`unexpected ${requestPath}`);
+    });
+    const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+      branches, branchNames: new Set(["main", "dev"]), pulls: [], isData: false
+    });
+    assert.ok(result.findings.some((finding) => finding.id === "main-dev-comparison-malformed"));
+    assert.equal(result.observations.some((observation) => observation.startsWith("main...dev is")), false);
+  }
+});
+
 test("branch protection reports each missing or unsafe gate", async () => {
   const { gh } = mockGh(() => ({ required_status_checks: { strict: true, contexts: [] }, enforce_admins: { enabled: true }, allow_force_pushes: { enabled: true }, allow_deletions: { enabled: true } }));
   const findings = await doctor.auditBranchProtection(gh, repo, "main", { required: true });
@@ -314,11 +334,27 @@ test("branch protection distinguishes inaccessible 403 state from absent 404 sta
 
 test("main-only data repositories do not inherit product gate requirements", async () => {
   const { gh } = mockGh(() => ({
+    enforce_admins: { enabled: true },
     allow_force_pushes: { enabled: false },
     allow_deletions: { enabled: false }
   }));
   const findings = await doctor.auditBranchProtection(gh, { owner: "marius-patrik", repo: "Andromeda-data" }, "main", { required: false });
   assert.deepEqual(findings, []);
+});
+
+test("main-only data repositories still fail closed on admin bypass and inaccessible protection", async () => {
+  const dataRepo = { owner: "marius-patrik", repo: "Andromeda-data" };
+  const { gh: bypassGh } = mockGh(() => ({
+    enforce_admins: { enabled: false },
+    allow_force_pushes: { enabled: false },
+    allow_deletions: { enabled: false }
+  }));
+  const bypass = await doctor.auditBranchProtection(bypassGh, dataRepo, "main", { required: false });
+  assert.deepEqual(bypass.map((finding) => finding.id), ["protection-main-admin-bypass"]);
+
+  const { gh: inaccessibleGh } = mockGh(() => { throw Object.assign(new Error("forbidden"), { status: 403 }); });
+  const inaccessible = await doctor.auditBranchProtection(inaccessibleGh, dataRepo, "main", { required: false });
+  assert.deepEqual(inaccessible.map((finding) => finding.id), ["protection-main-unobservable"]);
 });
 
 test("the #241 shape remains diagnosed while its active head branch is exempt", async () => {
