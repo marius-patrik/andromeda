@@ -834,7 +834,7 @@ test("df-work delegates local model execution exclusively to canonical Agent OS 
   const source = await readFile(new URL("../.github/scripts/df-work.mjs", import.meta.url), "utf8");
 
   assert.match(workflow, /runs-on: \[self-hosted, df-local\]/);
-  assert.match(workflow, /& \$agentsLauncher state doctor --json/);
+  assert.match(workflow, /pwsh -NoLogo -NoProfile -File \$agentsLauncher state doctor --json/);
   assert.doesNotMatch(workflow, /CODEX_AUTH_JSON|KIMI_AUTH_JSON|AGY_AUTH_JSON/);
   assert.match(source, /runAgentCommand\(\["run", "--mode", "default", prompt\], worktree\)/);
   assert.doesNotMatch(source, /--provider|--model|runWithFailover|loadProviderRegistry/);
@@ -883,7 +883,8 @@ test("df-work native gate remains fail closed before checkout and worker executi
   assert.match(agentOs, /Join-Path -Path \$env:AGENTS_HOME -ChildPath "bin\\agents\.ps1"/);
   assert.match(agentOs, /Test-Path -LiteralPath \$agentsLauncher -PathType Leaf/);
   assert.equal((agentOs.match(/exit 1/g) ?? []).length, 3);
-  assert.match(agentOs, /& \$agentsLauncher state doctor --json/);
+  assert.match(agentOs, /pwsh -NoLogo -NoProfile -File \$agentsLauncher state doctor --json/);
+  assert.doesNotMatch(agentOs, /&\s+\$agentsLauncher/);
   assert.match(agentOs, /if \(\$LASTEXITCODE -ne 0\)\s*\{\s*exit \$LASTEXITCODE/);
   assert.match(verificationTarget, /node -e/);
   assert.match(verificationTarget, /if \(\$LASTEXITCODE -ne 0\)\s*\{\s*exit \$LASTEXITCODE/);

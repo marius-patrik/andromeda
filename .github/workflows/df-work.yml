@@ -89,7 +89,7 @@ jobs:
             exit 1
           }
 
-          & $agentsLauncher state doctor --json
+          pwsh -NoLogo -NoProfile -File $agentsLauncher state doctor --json
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
