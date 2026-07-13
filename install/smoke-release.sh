@@ -55,13 +55,14 @@ while read -r _key component_name; do
   git -C "$stub_repo" init -q -b main
   git -C "$stub_repo" config user.name "Agent OS smoke"
   git -C "$stub_repo" config user.email "agent-os-smoke@invalid"
-  printf '%s\n' "$component_path" >"$stub_repo/COMPONENT"
   if [ "$component_name" = "data" ]; then
     printf '%s\n' '/bin/' '/clis/' '/memory/' '/runtime/' '/secrets/' '/sessions/' '/sync/' >"$stub_repo/.gitignore"
     printf '%s\n' '{"schemaVersion":1,"id":"agent-os-data","kind":"data"}' >"$stub_repo/agent.package.json"
     printf '%s\n' '# Agent OS Data smoke fixture' >"$stub_repo/README.md"
     mkdir -p "$stub_repo/scripts"
     printf '%s\n' '// smoke fixture' >"$stub_repo/scripts/validate.mjs"
+  else
+    printf '%s\n' "$component_path" >"$stub_repo/COMPONENT"
   fi
   git -C "$stub_repo" add .
   git -C "$stub_repo" commit -q -m "stub $component_name"
