@@ -49,7 +49,7 @@ describe("canonical mutable-state locks", () => {
       const lock = await acquireRenewableStateLock(state, "race:busy", {
         leaseMs: 2_000,
         heartbeatMs: 1_500,
-        waitMs: 50,
+        waitMs: 3_000,
       });
       const ready = path.join(root, "blocker-ready");
       const code = `

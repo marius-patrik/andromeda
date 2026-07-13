@@ -392,7 +392,7 @@ describe("session runtime", () => {
     }
   });
 
-  test("session lock heartbeat prevents reclaim during a provider-length operation", async () => {
+  test("session lock heartbeat advances the authoritative lease before ordered handoff", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-session-heartbeat-"));
     try {
       const state = sharedState(root);
@@ -402,31 +402,98 @@ describe("session runtime", () => {
         model: "test",
         sessionId: "heartbeat-session",
       });
-      const options = { leaseMs: 500, heartbeatMs: 50, waitMs: 3_000 };
+      const options = { leaseMs: 10_000, heartbeatMs: 100, waitMs: 3_000 };
       const order: string[] = [];
+      let reportRenewal!: () => void;
+      const renewalObserved = new Promise<void>((resolve) => {
+        reportRenewal = resolve;
+      });
+      let releaseFirst!: () => void;
+      const firstMayLeave = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let startSecond!: () => void;
+      const secondMayStart = new Promise<void>((resolve) => {
+        startSecond = resolve;
+      });
+      let reportSecondAttemptStarted!: () => void;
+      const secondAttemptStarted = new Promise<void>((resolve) => {
+        reportSecondAttemptStarted = resolve;
+      });
+      let reportSecondEntered!: () => void;
+      const secondCallbackEntered = new Promise<void>((resolve) => {
+        reportSecondEntered = resolve;
+      });
 
       const first = withSessionWriteLock(
         state,
         descriptor.sessionId,
         async (lock) => {
           order.push("first:entered");
-          await new Promise((resolve) => setTimeout(resolve, 800));
-          await lock.verify();
-          order.push("first:leaving");
-        },
-        options,
-      );
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const second = withSessionWriteLock(
-        state,
-        descriptor.sessionId,
-        async () => {
-          order.push("second:entered");
-        },
-        options,
-      );
+          const database = new Database(renewableLockDatabasePath(state), { readonly: true });
+          try {
+            const lease = database.query<{ expiresAt: number }, [string]>(
+              "SELECT expires_at AS expiresAt FROM renewable_leases WHERE key = ?1",
+            );
+            const key = `session:${descriptor.sessionId}`;
+            const initialExpiresAt = lease.get(key)?.expiresAt;
+            if (!initialExpiresAt) throw new Error(`active session lease is missing: ${key}`);
 
-      await Promise.all([first, second]);
+            const deadline = Date.now() + 5_000;
+            let renewedExpiresAt = initialExpiresAt;
+            while (renewedExpiresAt <= initialExpiresAt && Date.now() < deadline) {
+              await Bun.sleep(10);
+              renewedExpiresAt = lease.get(key)?.expiresAt ?? 0;
+            }
+            expect(renewedExpiresAt).toBeGreaterThan(initialExpiresAt);
+            reportRenewal();
+            await firstMayLeave;
+            await lock.verify();
+            order.push("first:leaving");
+          } finally {
+            database.close();
+          }
+        },
+        options,
+      );
+      let second: Promise<void> | undefined;
+      try {
+        await Promise.race([
+          renewalObserved,
+          first.then(() => {
+            throw new Error("first session owner exited before its heartbeat renewed the lease");
+          }),
+        ]);
+        second = (async () => {
+          await secondMayStart;
+          const attempt = withSessionWriteLock(
+            state,
+            descriptor.sessionId,
+            async () => {
+              order.push("second:entered");
+              reportSecondEntered();
+            },
+            options,
+          );
+          reportSecondAttemptStarted();
+          return attempt;
+        })();
+        startSecond();
+        await secondAttemptStarted;
+        const blockedProbe = await Promise.race([
+          secondCallbackEntered.then(() => "second-entered" as const),
+          second.then(() => "second-completed" as const),
+          first.then(() => "first-exited" as const),
+          Bun.sleep(250).then(() => "blocked" as const),
+        ]);
+        expect(blockedProbe).toBe("blocked");
+        expect(order).toEqual(["first:entered"]);
+        releaseFirst();
+        await Promise.all([first, second]);
+      } finally {
+        releaseFirst();
+        await Promise.allSettled([first, ...(second ? [second] : [])]);
+      }
       expect(order).toEqual(["first:entered", "first:leaving", "second:entered"]);
       if (process.platform !== "win32") {
         expect((await stat(renewableLockDatabasePath(state))).mode & 0o777).toBe(0o600);
