@@ -4,7 +4,7 @@
   "repositories": {
     "marius-patrik/andromeda": {
       "state": "active",
-      "note": "Canonical Andromeda source, control repository, and product integration root."
+      "note": "Canonical Andromeda source and product integration root."
     },
     "marius-patrik/andromeda-data": {
       "state": "active",
