@@ -306,6 +306,27 @@ come first: the system may only learn in ways it can prove it can stop.
   flag.
 - The substrate serves per-role adapters behind the same engine contract.
 
+### Cognitive memory operations (plugins/memory — owner-ruled, epic #227)
+
+The reflection/cognitive layer lives in a new `plugins/memory` plugin, which
+also absorbs existing memory operations tooling. The canonical memory
+authority and state contracts remain manager/core-owned — the plugin operates
+strictly through them.
+
+- A reflection engine performs guided temporal replay over canonical session
+  events and records, emitting typed, provenance-backed memory records
+  exclusively through the canonical mutation path.
+- Dreams are typed memories: scheduled/idle-time distillation of recent
+  activity into records with supersession semantics — never direct file
+  writes.
+- Corpus batch processing turns historical transcripts and archives (evidence
+  sources) into candidate records with visible provenance.
+- The existing provider-side Dream tooling migrates into the plugin with its
+  processed-timeline state preserved; other standalone memory operations
+  tooling consolidates there as discovered.
+- The plugin ships its own suite wired into Validate and claims no second
+  memory authority.
+
 ### GitHub control plane (DarkFactory)
 
 - Required status checks (Validate + Codex Review) are enforced on `dev` and
@@ -514,15 +535,15 @@ the lane breakdown lives in the program plan (`context/PLAN.md`):
    cluster with cluster-wide local LLM inference.
 8. **Autolearn** — the #225 epic: brakes-first self-improvement, recorded
    scope only, execution owner-gated.
+9. **Memory plugin** — the #227 epic: reflection, dreams, and corpus
+   processing in `plugins/memory` through the canonical memory contract, with
+   the Dream tooling migrated.
 
 Program acceptance: one continuous woven live session — an operator task from
 the TUI exercising the concurrent brain with subagents, cluster-served local
 inference, memory-informed behavior, and a synthetic mid-run fault with clean
 recovery, producing validated artifacts end to end. The container/distro demo
-variant of this acceptance stays parked with the distro scope. The
-reflection/cognitive memory layer (reflection engine, dreams as typed
-memories, corpus processing) is deliberately unscoped pending an explicit
-owner decision recorded in the program plan.
+variant of this acceptance stays parked with the distro scope.
 
 Parked (owner-gated): custom distro/distribution including the container
 capstone demo, observability stack, and the other board-parked scopes.
