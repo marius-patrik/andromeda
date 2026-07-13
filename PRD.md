@@ -8,21 +8,58 @@ identity, memory, session, or configuration authorities. The
 `Andromeda` repository implements the system, and its `agents` CLI is the
 single management and runtime surface.
 
+Andromeda is one program, not a collection of adjacent tools. Every component
+in this repository — state/manager core, orchestration harness, model/execution
+substrate, and GitHub control plane — is a layer of the same system and is
+specified, validated, and released as such.
+
 [Canonical State and Memory v2](docs/state-memory-v2.md) is the authoritative
-state specification. This PRD defines the product boundary and required CLI
-capabilities around it.
+state specification. This PRD defines the product boundary, the system
+layering, and the required capabilities around it.
+
+## North star and program plan
+
+The owner-set end state: **the system runs itself — multi-agent, one system,
+GitHub-only control.** An orchestrator assesses global state on schedule, plans
+waves, dispatches per-component agents within concurrency caps, posts
+dashboards, and escalates only via ask-owner issues. The full backlog drains
+through DarkFactory lanes: issue → branch (from `dev`) → PR → CI + Codex Review
+gates → automerge → release. Zero orchestrator terminal sessions.
+
+The consolidated program plan that sequences work toward this end state lives
+in the Andromeda-data authority at `context/PLAN.md`. Precedence when artifacts
+disagree: owner instruction > program plan > this PRD > issues. The program's
+end-state demo — the full system running in one container from an agents-os
+image — is parked with all custom distro/distribution work until the owner
+reopens it.
 
 ## Naming and authority
 
 - **Agent OS** — final product name.
 - **Andromeda** — repository. npm package surface stays `@marius-patrik/agents-manager` (recorded exception).
 - **agents** — CLI command.
-- **`~/.agents` / `AGENTS_HOME`** — only authoritative runtime state root.
+- **`~/.agents` / `AGENTS_HOME`** — only authoritative runtime state root; a
+  checkout of the Andromeda-data authority.
 - **`packages/`** — implementation domains, each rooted as one direct child.
 - **`plugins/`** — managed product plugins and authored plugin capabilities.
 
 Historical product, repository, and layout names are evidence to migrate and
 retire. They are not supported aliases or compatibility contracts.
+
+## System layering
+
+| Component | Role |
+| --- | --- |
+| `packages/core` | Shared state, memory, provenance, and contract primitives |
+| `packages/manager` | Package/state/secrets substrate and the single local management surface; implementation home for local system operations |
+| `packages/harness` | Orchestration engine (long-term home of brains, workers, streams, scheduling); disposition decision pending — roadmap or documented dormancy, no silent limbo |
+| `packages/gateway` | Model routing substrate: registry, switcher control plane, cloud OAuth dispatch |
+| `packages/inference` | Local engine substrate: discovery, serve profiles, engine contract |
+| `plugins/darkfactory` | Thin GitHub control-plane adapter: issues/PRs/labels ↔ work units, enforcement sync, review gates. No second brain. |
+
+Binding architecture rule: anything executable locally lives in the manager and
+is invoked by DarkFactory; DarkFactory keeps only the GitHub-facing adapter.
+GitHub is the remote control plane; the `agents` CLI is the local one.
 
 ## Goals
 
@@ -41,6 +78,15 @@ retire. They are not supported aliases or compatibility contracts.
   tombstones, locking, and secret/symlink rejection.
 - Validate the real installed provider invocation and filesystem-write
   contracts, not only mocked adapters.
+- Productize the model/execution substrate: one canonical gateway name and
+  registry backend, a stable switcher control-plane contract, credential-gated
+  cloud OAuth dispatch, and a supported install/run/update path with runtime
+  profiles.
+- Enforce the GitHub control plane fail-closed: required CI and review gates on
+  `dev` and `main`, managed templates that cover every active toolchain, and
+  credential-isolated review takeover.
+- Make CI prove the whole system: every active component's suite on every PR,
+  real-behavior legs, a Windows matrix leg, and fail-closed suite inventory.
 
 ## Non-goals
 
@@ -52,6 +98,9 @@ retire. They are not supported aliases or compatibility contracts.
 - Sync mutable provider databases, raw transcripts, secrets, models, caches,
   logs, locks, or process state.
 - Replace language/package managers such as Bun, npm, or uv.
+- Advance parked scopes (custom distro/distribution including the container
+  capstone and Docker-OS TUI terminal, observability stack, and the other
+  board-parked items) before the owner explicitly reopens them.
 
 ## Users
 
@@ -77,6 +126,10 @@ retire. They are not supported aliases or compatibility contracts.
 - **Package:** a registered local or git-backed Agent OS component.
 - **Data repository:** a managed data checkout recorded in canonical registry
   state; it is not another Agent OS state root.
+- **Substrate:** the model/execution layer (gateway + inference) that serves
+  and routes model calls for every other component.
+- **Control plane:** the GitHub-facing enforcement and work-dispatch layer
+  (DarkFactory) plus the local `agents` management surface.
 
 ## Functional requirements
 
@@ -96,6 +149,8 @@ retire. They are not supported aliases or compatibility contracts.
 - `agents memory remember|list|status|supersede|retract|render` manages
   provenance-backed canonical records and generated views. Mutations require
   source URI, content hash, source class, and confidence.
+- State publication (projections, backups) is atomic and survives transient
+  filesystem failures on every supported platform, Windows included.
 
 ### Providers, sessions, and orchestration
 
@@ -128,6 +183,71 @@ retire. They are not supported aliases or compatibility contracts.
 - `agents credits ...` maintains the shared credit ledger.
 - `agents doctor` validates package registration and the integrated system.
 - `agents os ...` manages the declared Agent OS image and environment lifecycle.
+
+### CLI surface and distribution
+
+- The installed launcher binds only canonical current paths; `agents` is a
+  genuinely global command on supported machines.
+- Bare `agents` enters the TUI directly. Every manager action is reachable from
+  the TUI, which supports switchable style presets (Claude Code, Codex, and
+  Kimi aesthetics plus a default Agent OS identity theme) and a preset default
+  provider and model (owner selection pending).
+- Help output is command-specific at the root and every subcommand: usage,
+  arguments, options, defaults, examples, and related commands.
+- Distribution is release-backed: per-platform binaries or self-contained
+  archives with signed artifacts/checksums, a Windows PowerShell installer
+  alongside the Bash installer, and an `agents update` self-update path.
+
+### Model/execution substrate (gateway and inference)
+
+- One canonical gateway identity: public name, distribution name, import
+  namespace, CLI script name, and agent package id are decided and consistent;
+  any retained compatibility naming is explicit and tested.
+- One canonical registry backend with a deterministic local fallback; operator
+  migration off ad-hoc YAML state; persistence semantics covered by non-live
+  tests plus gated live tests.
+- The switcher control plane implements the canonical proto/Connect
+  SwitcherService contract with session > project > global scope resolution and
+  persistence; REST remains only as a compatibility shim.
+- Cloud OAuth dispatch is credential-gated and fail-closed: provider adapters
+  for subscription OAuth paths reuse the Agent OS provider credential homes
+  (no second credential store), enable only after live proof, never meter, and
+  degrade to local serving on quota exhaustion.
+- The gateway ships a supported install/run/update/rollback path and `agents os
+  deploy` runtime profiles for gateway and inference (ports, env, health
+  checks, data mounts, secrets), with a no-live-engine smoke.
+- Engine discovery, registration, and routing are exercised end-to-end through
+  the inferctl seam.
+
+### GitHub control plane (DarkFactory)
+
+- Required status checks (Validate + Codex Review) are enforced on `dev` and
+  `main`; force pushes and deletions stay blocked; automerge lands only on
+  green.
+- Managed templates cover every active toolchain (Node/Bun, Go, uv) and stay
+  robust to PRs that introduce managed files, without weakening the
+  `pull_request_target` trust boundary.
+- Review quota/auth takeover is credential-isolated and fail-closed: the
+  secondary provider receives the exact immutable prompt, no filesystem/tool
+  authority, and no access to primary-provider credentials; both-provider
+  failure blocks the merge.
+- Work dispatch through DarkFactory lanes (routing, baton ownership, progress
+  reporting, duplicate-ownership prevention) resumes only on explicit owner
+  authorization per the program plan.
+
+### Continuous integration
+
+- Every active component's full test suite runs in Validate on every PR:
+  `packages/{core,gateway,harness,inference,manager}` and
+  `plugins/darkfactory`; parked plugins stay excluded.
+- Real-behavior legs, not only mocks: a real gateway process round-trip
+  (plain and streaming) against an OpenAI-wire backend and an engine
+  discovery→registration→routing pass; no hardcoded registry counts.
+- A Windows matrix leg covers the platform-sensitive suites.
+- Product-surface smokes run on the PR gate: installer/doctor, release smoke,
+  and an encrypted-bundle sync round-trip.
+- Suite inventory is fail-closed: a component without wired tests fails CI
+  rather than passing by omission.
 
 ## Canonical state layout
 
@@ -252,12 +372,16 @@ launcher, initializes explicit canonical roots, pins installed providers, and
 runs `agents state doctor`. It uses no global package-manager link. Old product
 checkout locations and installers are not supported update paths.
 
-CI runs:
+CI runs the full validation gate:
 
 ```sh
-bun run check
-bun run test
+bun run ci
 ```
+
+The gate's required end state — whole-monorepo suites, real-behavior legs, a
+Windows matrix leg, product-surface smokes, and fail-closed suite inventory —
+is specified in the Continuous integration requirements above and tracked by
+issue #206.
 
 Acceptance requires the behavioral proofs in
 [Canonical State and Memory v2](docs/state-memory-v2.md), including idempotent
@@ -267,11 +391,25 @@ secret/symlink rejection.
 
 ## Delivery milestones
 
-1. Non-destructive root resolution, v2 bootstrap/doctor, correct provider
-   invocation, and disabled unsafe mutations.
-2. Journalled provider-home and memory migration with verified retired-state removal.
-3. Canonical session/orchestrator event replay and native continuation proofs.
-4. Capability content-addressing and provider projections.
-5. Two-machine event exchange, tombstones, locking, and recovery proofs.
-6. Release-backed installation and daily-use activation of the reconciled Agent
-   OS.
+Milestones 1–6 of the state/memory reconciliation are delivered and folded into
+release history (v0.2.x): v2 bootstrap/doctor, journalled migration, canonical
+event replay, capability content-addressing, two-machine encrypted event
+exchange, and release-backed installation with daily-use activation.
+
+The active program (sequenced in the Andromeda-data `context/PLAN.md`):
+
+1. **Enforcement and CI truth** — managed enforcement baseline (delivered,
+   issue #203) and the full-coverage CI gate (issue #206).
+2. **Gateway productization** — naming convergence, canonical registry
+   backend, switcher Connect contract, credential-gated cloud OAuth dispatch,
+   packaging and runtime profiles.
+3. **Platform and repository hardening** — Windows-safe atomic state
+   publication; root metadata/docs consolidation residue.
+4. **CLI, TUI, and distribution** — global launcher, TUI-first UX with style
+   presets, command-specific help, release-backed installers and self-update.
+5. **DarkFactory work resumption** — owner-gated: DarkFactory spec/issue lane,
+   then provider routing, baton ownership, and dispatch.
+6. **Harness disposition** — explicit roadmap or documented dormancy.
+
+Parked (owner-gated): custom distro/distribution including the container
+capstone demo, observability stack, and the other board-parked scopes.
