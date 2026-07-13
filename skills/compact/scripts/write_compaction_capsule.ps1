@@ -33,6 +33,64 @@ function Invoke-AgentsJson {
     }
 }
 
+function Resolve-PhysicalPath {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [hashtable]$VisitedLinks = @{}
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $current = [System.IO.Path]::GetPathRoot($fullPath)
+    $relative = [System.IO.Path]::GetRelativePath($current, $fullPath)
+    $segments = @($relative -split '[\\/]' | Where-Object { $_ -and $_ -ne "." })
+    for ($index = 0; $index -lt $segments.Count; $index++) {
+        $segment = $segments[$index]
+        $candidate = Join-Path $current $segment
+        $item = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+        if ($null -eq $item) {
+            $current = $candidate
+            continue
+        }
+
+        $linkTarget = $null
+        $hasLinkType = (
+            $item.PSObject.Properties.Name -contains "LinkType" -and
+            -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)
+        )
+        if ($hasLinkType) {
+            $linkKey = [System.IO.Path]::GetFullPath($candidate)
+            if ($VisitedLinks.ContainsKey($linkKey)) {
+                throw "Physical path resolution encountered a link cycle: $linkKey"
+            }
+            $VisitedLinks[$linkKey] = $true
+            try {
+                $linkTarget = $item.ResolveLinkTarget($true)
+            } catch [System.Management.Automation.MethodNotFoundException] {
+                $linkTarget = $null
+            }
+            if ($null -ne $linkTarget) {
+                $targetPath = [System.IO.Path]::GetFullPath($linkTarget.FullName)
+            } else {
+                $targetValue = [string](@($item.Target)[0])
+                if ([string]::IsNullOrWhiteSpace($targetValue)) {
+                    throw "Unable to resolve physical link target: $candidate"
+                }
+                $targetPath = if ([System.IO.Path]::IsPathRooted($targetValue)) {
+                    [System.IO.Path]::GetFullPath($targetValue)
+                } else {
+                    [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $candidate) $targetValue))
+                }
+            }
+            for ($remaining = $index + 1; $remaining -lt $segments.Count; $remaining++) {
+                $targetPath = Join-Path $targetPath $segments[$remaining]
+            }
+            return Resolve-PhysicalPath -Path $targetPath -VisitedLinks $VisitedLinks
+        }
+        $current = [System.IO.Path]::GetFullPath($item.FullName)
+    }
+    return [System.IO.Path]::GetFullPath($current)
+}
+
 function Assert-PhysicalDirectoryChain {
     param(
         [Parameter(Mandatory=$true)][string]$Root,
@@ -170,8 +228,13 @@ function Resolve-AgentEnvironment {
     }
 
     Assert-PhysicalDirectoryChain -Root $agentsHome -Target $memoryRoot
+    $physicalAgentsHome = Resolve-PhysicalPath -Path $agentsHome
+    $physicalMemoryRoot = Resolve-PhysicalPath -Path $memoryRoot
+    if (-not (Test-PathWithin -Parent $physicalAgentsHome -Candidate $physicalMemoryRoot)) {
+        throw "Canonical memory root must remain physically under AGENTS_HOME: $physicalMemoryRoot"
+    }
 
-    return [ordered]@{ AgentsHome = $agentsHome; MemoryRoot = $memoryRoot }
+    return [ordered]@{ AgentsHome = $physicalAgentsHome; MemoryRoot = $physicalMemoryRoot }
 }
 
 function Write-Utf8NoBom {
@@ -341,14 +404,20 @@ if ([string]::IsNullOrWhiteSpace($CompatibilityRoot)) {
     }
     $CompatibilityRoot = Join-Path (Join-Path $UserHome ".codex") "memories"
 }
-$resolvedCompatibilityRoot = [System.IO.Path]::GetFullPath($CompatibilityRoot)
-$resolvedUserHome = [System.IO.Path]::GetFullPath($UserHome)
-if (-not (Test-Path -LiteralPath $resolvedUserHome -PathType Container)) {
-    throw "User home does not exist: $resolvedUserHome"
+$lexicalCompatibilityRoot = [System.IO.Path]::GetFullPath($CompatibilityRoot)
+$lexicalUserHome = [System.IO.Path]::GetFullPath($UserHome)
+if (-not (Test-Path -LiteralPath $lexicalUserHome -PathType Container)) {
+    throw "User home does not exist: $lexicalUserHome"
 }
-Assert-PhysicalDirectoryChain -Root $resolvedUserHome -Target $resolvedUserHome
-if (-not (Test-PathWithin -Parent $resolvedUserHome -Candidate $resolvedCompatibilityRoot)) {
+Assert-PhysicalDirectoryChain -Root $lexicalUserHome -Target $lexicalUserHome
+if (-not (Test-PathWithin -Parent $lexicalUserHome -Candidate $lexicalCompatibilityRoot)) {
     throw "Compatibility projection root must remain under the resolved user home."
+}
+Assert-PhysicalDirectoryChain -Root $lexicalUserHome -Target $lexicalCompatibilityRoot
+$resolvedUserHome = Resolve-PhysicalPath -Path $lexicalUserHome
+$resolvedCompatibilityRoot = Resolve-PhysicalPath -Path $lexicalCompatibilityRoot
+if (-not (Test-PathWithin -Parent $resolvedUserHome -Candidate $resolvedCompatibilityRoot)) {
+    throw "Compatibility projection root must remain physically under the resolved user home."
 }
 if (
     (Test-PathWithin -Parent $authority.AgentsHome -Candidate $resolvedCompatibilityRoot) -or
