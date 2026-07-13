@@ -23,7 +23,8 @@ both directions; neither may be an ancestor or descendant of the other. The
 compatibility root stays under the resolved user home so macOS system aliases
 above that boundary do not get mistaken for provider-local link escapes. Resolve
 ancestor links for both configured roots before physical containment and
-disjointness comparisons; link entries at or below either root remain forbidden.
+disjointness comparisons. Re-walk aliases found inside link targets and reject
+cycles; link entries at or below either configured root remain forbidden.
 
 ## Workflow
 

@@ -34,13 +34,17 @@ function Invoke-AgentsJson {
 }
 
 function Resolve-PhysicalPath {
-    param([Parameter(Mandatory=$true)][string]$Path)
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [hashtable]$VisitedLinks = @{}
+    )
 
     $fullPath = [System.IO.Path]::GetFullPath($Path)
     $current = [System.IO.Path]::GetPathRoot($fullPath)
     $relative = [System.IO.Path]::GetRelativePath($current, $fullPath)
-    foreach ($segment in ($relative -split '[\\/]')) {
-        if (-not $segment -or $segment -eq ".") { continue }
+    $segments = @($relative -split '[\\/]' | Where-Object { $_ -and $_ -ne "." })
+    for ($index = 0; $index -lt $segments.Count; $index++) {
+        $segment = $segments[$index]
         $candidate = Join-Path $current $segment
         $item = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
         if ($null -eq $item) {
@@ -54,25 +58,33 @@ function Resolve-PhysicalPath {
             -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)
         )
         if ($hasLinkType) {
+            $linkKey = [System.IO.Path]::GetFullPath($candidate)
+            if ($VisitedLinks.ContainsKey($linkKey)) {
+                throw "Physical path resolution encountered a link cycle: $linkKey"
+            }
+            $VisitedLinks[$linkKey] = $true
             try {
                 $linkTarget = $item.ResolveLinkTarget($true)
             } catch [System.Management.Automation.MethodNotFoundException] {
                 $linkTarget = $null
             }
             if ($null -ne $linkTarget) {
-                $current = [System.IO.Path]::GetFullPath($linkTarget.FullName)
-                continue
-            }
-            $targetValue = [string](@($item.Target)[0])
-            if ([string]::IsNullOrWhiteSpace($targetValue)) {
-                throw "Unable to resolve physical link target: $candidate"
-            }
-            $current = if ([System.IO.Path]::IsPathRooted($targetValue)) {
-                [System.IO.Path]::GetFullPath($targetValue)
+                $targetPath = [System.IO.Path]::GetFullPath($linkTarget.FullName)
             } else {
-                [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $candidate) $targetValue))
+                $targetValue = [string](@($item.Target)[0])
+                if ([string]::IsNullOrWhiteSpace($targetValue)) {
+                    throw "Unable to resolve physical link target: $candidate"
+                }
+                $targetPath = if ([System.IO.Path]::IsPathRooted($targetValue)) {
+                    [System.IO.Path]::GetFullPath($targetValue)
+                } else {
+                    [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $candidate) $targetValue))
+                }
             }
-            continue
+            for ($remaining = $index + 1; $remaining -lt $segments.Count; $remaining++) {
+                $targetPath = Join-Path $targetPath $segments[$remaining]
+            }
+            return Resolve-PhysicalPath -Path $targetPath -VisitedLinks $VisitedLinks
         }
         $current = [System.IO.Path]::GetFullPath($item.FullName)
     }
