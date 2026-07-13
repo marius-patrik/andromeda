@@ -1,4 +1,4 @@
-name: DarkFactory Audit
+name: DarkFactory Repository Doctor
 
 on:
   schedule:
@@ -9,15 +9,23 @@ on:
         description: Target repository in owner/name form. Defaults to all active managed repositories.
         required: false
         type: string
+      write_issues:
+        description: Reconcile stable per-finding issues and write the doctor ledger. No repair is performed.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
-  issues: write
+
+concurrency:
+  group: darkfactory-repository-doctor
+  cancel-in-progress: false
 
 jobs:
-  df-audit:
-    name: Audit managed repositories
-    runs-on: ubuntu-24.04
+  repository-doctor:
+    name: Diagnose managed repository truth
+    runs-on: [self-hosted, df-local]
     if: >-
       ${{
         github.repository == 'marius-patrik/DarkFactory' &&
@@ -26,58 +34,53 @@ jobs:
           github.event_name == 'workflow_dispatch'
         )
       }}
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
       - name: Validate trusted control ref
-        shell: bash
         run: |
-          if [[ "${GITHUB_REPOSITORY_OWNER}" != "marius-patrik" ]]; then
-            echo "::error::DarkFactory audit can only run in the marius-patrik owner."
+          if ($env:GITHUB_REPOSITORY_OWNER -ne "marius-patrik") {
+            Write-Output "::error::Repository doctor can only run in the marius-patrik owner."
             exit 1
-          fi
-
-          if [[ "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
-            echo "::error::DarkFactory audit can only run from refs/heads/main."
+          }
+          if ($env:GITHUB_REF -ne "refs/heads/main") {
+            Write-Output "::error::Repository doctor can only run from refs/heads/main."
             exit 1
-          fi
+          }
 
-          if [[ "${GITHUB_REF_TYPE:-}" == "branch" && "${GITHUB_REF_NAME:-}" != "main" ]]; then
-            echo "::error::DarkFactory audit branch mismatch."
-            exit 1
-          fi
-
-      - name: Validate manual audit target repository
+      - name: Validate manual target
         if: github.event_name == 'workflow_dispatch' && inputs.repo
-        shell: bash
         env:
-          DF_MANUAL_AUDIT_REPO: ${{ inputs.repo }}
+          DF_MANUAL_DOCTOR_REPO: ${{ inputs.repo }}
         run: |
-          repo="${DF_MANUAL_AUDIT_REPO}"
-          case "${repo}" in
-            marius-patrik/fabrica|marius-patrik/skyblock-agent|marius-patrik/singularity|marius-patrik/life-support)
-              echo "::error::DarkFactory manual audit target is parked: ${repo}."
-              exit 1
-              ;;
-            marius-patrik/*)
-              ;;
-            *)
-              echo "::error::DarkFactory manual audit target must be a marius-patrik repository."
-              exit 1
-              ;;
-          esac
+          if ($env:DF_MANUAL_DOCTOR_REPO -notmatch '^marius-patrik/[^/]+$') {
+            Write-Output "::error::Repository doctor target must be a marius-patrik repository."
+            exit 1
+          }
 
-      - name: Resolve DarkFactory script path
-        id: script-path
-        shell: bash
-        run: echo "path=.github/scripts/df-audit.mjs" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout DarkFactory control scripts
+      - name: Checkout trusted doctor source
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Mint mp-agents installation token
+      - name: Verify canonical Agent OS state
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AGENTS_HOME) -or -not [System.IO.Path]::IsPathFullyQualified($env:AGENTS_HOME)) {
+            Write-Output "::error::AGENTS_HOME must name the absolute canonical Agent OS checkout."
+            exit 1
+          }
+          $agentsLauncher = Join-Path -Path $env:AGENTS_HOME -ChildPath "bin\agents.ps1"
+          if (-not (Test-Path -LiteralPath $agentsLauncher -PathType Leaf)) {
+            Write-Output "::error::Canonical Agent OS launcher is missing at $agentsLauncher."
+            exit 1
+          }
+          pwsh -NoLogo -NoProfile -File $agentsLauncher state doctor --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Mint least-privilege mp-agents token
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
@@ -85,14 +88,38 @@ jobs:
           private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
           owner: marius-patrik
           permission-actions: read
-          permission-contents: write
-          permission-issues: write
+          permission-contents: ${{ (github.event_name == 'schedule' || inputs.write_issues) && 'write' || 'read' }}
+          permission-issues: ${{ (github.event_name == 'schedule' || inputs.write_issues) && 'write' || 'read' }}
+          permission-pull-requests: read
 
-      - name: Run audit
+      - name: Run deterministic repository doctor
         env:
           DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token }}
           DF_CONTROL_REPO: marius-patrik/DarkFactory
           DF_TARGET_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.repo || github.repository }}
-          DF_AUDIT_ALL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.repo)) && 'true' || 'false' }}
+          DF_DOCTOR_ALL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.repo)) && 'true' || 'false' }}
+          DF_DOCTOR_MODE: ${{ (github.event_name == 'schedule' || inputs.write_issues) && 'report' || 'diagnose' }}
+          DF_LOCAL_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.repo == github.repository && github.workspace || '' }}
           DF_TRIGGER: ${{ github.event_name }}
-        run: node ${{ steps.script-path.outputs.path }}
+        run: |
+          node .github/scripts/df-audit.mjs --json | Tee-Object -FilePath repository-doctor-report.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish doctor summary
+        if: always() && hashFiles('repository-doctor-report.json') != ''
+        run: |
+          $reports = Get-Content -LiteralPath repository-doctor-report.json -Raw | ConvertFrom-Json
+          "## DarkFactory Repository Doctor" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          foreach ($report in $reports) {
+            $status = if ($report.skipped) { "SKIPPED" } elseif ($report.findings.Count -gt 0) { "FINDINGS" } else { "HEALTHY" }
+            "- ``$($report.target_repository)``: **$status** ($($report.mode), findings=$($report.findings.Count), model_calls=0)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+
+      - name: Upload deterministic evidence
+        if: always() && hashFiles('repository-doctor-report.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-doctor-report
+          path: repository-doctor-report.json
+          if-no-files-found: error
+          retention-days: 30

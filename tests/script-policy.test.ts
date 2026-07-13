@@ -91,12 +91,17 @@ test("parsePrdItems treats checked PRD checkboxes as a completion signal", () =>
   assert.equal(doneItem.marker, openItem.marker);
 });
 
-test("listPackagePaths finds package.json directories excluding node_modules", () => {
+test("listPackagePaths excludes dependencies and non-product template/example/test trees", () => {
   const paths = listPackagePaths([
     { type: "blob", path: "package.json" },
     { type: "blob", path: "packages/core/package.json" },
     { type: "blob", path: "packages/ui/package.json" },
     { type: "blob", path: "node_modules/lib/package.json" },
+    { type: "blob", path: "templates/sample/package.json" },
+    { type: "blob", path: "examples/demo/package.json" },
+    { type: "blob", path: "fixtures/repo/package.json" },
+    { type: "blob", path: "tests/fake/package.json" },
+    { type: "blob", path: "archive/old/package.json" },
     { type: "blob", path: "packages/core/index.ts" }
   ]);
 
@@ -601,31 +606,37 @@ test("df-plan preserves PRD sequence references across completed predecessors", 
   assert.match(source, /create-closed-completed-prd-issue/);
 });
 
-test("df-audit script performs deterministic repo audits and files findings as issues", async () => {
+test("repository doctor performs deterministic diagnosis and explicit per-finding reporting", async () => {
   const source = await readFile(new URL("../.github/scripts/df-audit.mjs", import.meta.url), "utf8");
 
-  assert.match(source, /auditGitState/);
+  assert.match(source, /runRepositoryDoctor/);
+  assert.match(source, /auditBranchAndReleaseState/);
+  assert.match(source, /auditManagedFileDrift/);
+  assert.match(source, /auditRepositoryTree/);
   assert.match(source, /auditHealth/);
-  assert.match(source, /auditEnforcement/);
   assert.match(source, /auditPrdDrift/);
   assert.match(source, /auditDocStaleness/);
-  assert.match(source, /upsertAuditIssue/);
-  assert.match(source, /closeResolvedAuditIssue/);
-  assert.match(source, /df-audit/);
-  assert.match(source, /df:audit/);
+  assert.match(source, /auditWorkerSessionIsolation/);
+  assert.match(source, /reconcileDoctorIssues/);
+  assert.match(source, /df-doctor/);
+  assert.match(source, /df:doctor/);
+  assert.match(source, /parseDoctorMode/);
+  assert.match(source, /mode === "report"/);
+  assert.match(source, /repair mode is not implemented/);
   assert.match(source, /writeRunLedger/);
-  assert.match(source, /codex_calls:\s*0/);
-  assert.match(source, /listActiveManagedRepos\(gh, controlRepo, \{ registry \}\)/);
+  assert.match(source, /model_calls:\s*0/);
+  assert.match(source, /listActiveManagedRepos/);
   assert.match(source, /auditSubmoduleState/);
   assert.doesNotMatch(source, /\bcodex\s+exec\b|CODEX_AUTH_JSON|DF_WORKER_IMAGE|docker\s+run/);
 });
 
-test("df-audit workflow schedules trusted managed-repo audits", async () => {
+test("repository doctor workflow schedules trusted diagnosis with explicit report authority", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-audit.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");
-  const checkout = workflow.indexOf("Checkout DarkFactory control scripts");
-  const token = workflow.indexOf("Mint mp-agents installation token");
+  const checkout = workflow.indexOf("Checkout trusted doctor source");
+  const token = workflow.indexOf("Mint least-privilege mp-agents token");
 
+  assert.match(workflow, /name: DarkFactory Repository Doctor/);
   assert.match(workflow, /^\s+schedule:\s*$/m);
   assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
   assert.match(workflow, /github\.repository == 'marius-patrik\/DarkFactory'/);
@@ -636,18 +647,18 @@ test("df-audit workflow schedules trusted managed-repo audits", async () => {
   assert.ok(checkout < token);
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
   assert.doesNotMatch(workflow, /GITHUB_REF.*refs\/heads\/dev/);
-  assert.match(workflow, /Validate manual audit target repository/);
-  assert.match(workflow, /marius-patrik\/fabrica/);
-  assert.match(workflow, /must be a marius-patrik repository/);
-  assert.match(workflow, /DF_MANUAL_AUDIT_REPO: \$\{\{ inputs\.repo \}\}/);
-  assert.match(workflow, /repo="\$\{DF_MANUAL_AUDIT_REPO\}"/);
-  assert.doesNotMatch(workflow, /repo="\$\{\{ inputs\.repo \}\}"/);
-  assert.match(workflow, /path=\.github\/scripts\/df-audit\.mjs/);
+  assert.match(workflow, /Validate manual target/);
+  assert.match(workflow, /DF_MANUAL_DOCTOR_REPO: \$\{\{ inputs\.repo \}\}/);
+  assert.match(workflow, /write_issues:/);
   assert.match(workflow, /permission-actions:\s+read/);
-  assert.match(workflow, /permission-contents:\s+write/);
-  assert.match(workflow, /permission-issues:\s+write/);
+  assert.doesNotMatch(workflow, /permission-administration:\s+write/);
+  assert.match(workflow, /permission-contents: \$\{\{/);
+  assert.match(workflow, /permission-issues: \$\{\{/);
   assert.doesNotMatch(workflow, /permission-pull-requests:\s+write/);
-  assert.match(workflow, /DF_AUDIT_ALL/);
+  assert.match(workflow, /DF_DOCTOR_ALL/);
+  assert.match(workflow, /DF_DOCTOR_MODE/);
+  assert.match(workflow, /repository-doctor-report\.json/);
+  assert.match(workflow, /model_calls=0/);
   assert.doesNotMatch(workflow, /DF_DATA_REPO/);
 });
 

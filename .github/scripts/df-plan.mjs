@@ -15,6 +15,7 @@ import {
   getOptionalFileContent,
   getRepository,
   isActiveManagedRepo,
+  isNonProductPlanningPath,
   listActiveManagedRepos,
   listIssues,
   listPackagePaths,
@@ -298,7 +299,7 @@ async function getPrdSources(repository, ref, tree) {
   return sources;
 }
 
-async function listPrdPaths(repository, ref, tree) {
+export async function listPrdPaths(repository, ref, tree) {
   if (!tree) {
     try {
       tree = await getRecursiveTree(repository, ref);
@@ -310,7 +311,11 @@ async function listPrdPaths(repository, ref, tree) {
   }
 
   const paths = (tree.tree || [])
-    .filter((entry) => entry.type === "blob" && (entry.path === "PRD.md" || entry.path.endsWith("/PRD.md")))
+    .filter((entry) => (
+      entry.type === "blob" &&
+      (entry.path === "PRD.md" || entry.path.endsWith("/PRD.md")) &&
+      (entry.path === "PRD.md" || !isNonProductPlanningPath(entry.path))
+    ))
     .map((entry) => entry.path)
     .sort((a, b) => {
       if (a === "PRD.md") return -1;

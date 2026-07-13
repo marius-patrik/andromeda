@@ -2,7 +2,7 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 export const API_ROOT = "https://api.github.com";
-export const AGENT_OS_DATA_REPO = "marius-patrik/agents-data";
+export const AGENT_OS_DATA_REPO = "marius-patrik/Andromeda-data";
 export const DARK_FACTORY_DATA_REPO = "marius-patrik/darkfactory-data";
 export const PARKED_REPOS = new Set([
   "marius-patrik/fabrica",
@@ -30,7 +30,8 @@ export const PLANNING_LABELS = [
   { name: "P1", color: "D93F0B", description: "Priority 1: important planned work" },
   { name: "P2", color: "FBCA04", description: "Priority 2: follow-up or lower urgency" },
   { name: "df:prd-drift", color: "B60205", description: "DarkFactory PRD drift report" },
-  { name: "df:audit", color: "0E8A16", description: "DarkFactory audit finding" }
+  { name: "df:audit", color: "0E8A16", description: "Legacy DarkFactory aggregate audit finding" },
+  { name: "df:doctor", color: "0E8A16", description: "DarkFactory repository-doctor repair finding" }
 ];
 
 export const WORKER_PULL_REQUEST_AUTHORS = new Set([
@@ -753,12 +754,34 @@ export function listPackagePaths(treeEntries) {
       continue;
     }
     const dir = entry.path.slice(0, -"/package.json".length);
-    if (dir.includes("node_modules") || dir.includes("/.") || !dir) {
+    if (isNonProductPlanningPath(dir) || !dir) {
       continue;
     }
     packageDirs.add(dir);
   }
   return [...packageDirs].sort();
+}
+
+export function isNonProductPlanningPath(filePath) {
+  const segments = String(filePath || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase());
+  const excluded = new Set([
+    "node_modules",
+    "templates",
+    "template",
+    "examples",
+    "example",
+    "fixtures",
+    "fixture",
+    "tests",
+    "test",
+    "archive",
+    "archived"
+  ]);
+  return segments.some((segment) => segment.startsWith(".") || excluded.has(segment));
 }
 
 export function scaffoldPackagePrd(repositoryName, options = {}) {

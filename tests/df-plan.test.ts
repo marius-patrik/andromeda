@@ -13,7 +13,8 @@ const {
   askOwnerIssueTitle,
   askOwnerIssueBody,
   escalateHumanClosedPrdIssue,
-  handleClosedIncompletePrdIssue
+  handleClosedIncompletePrdIssue,
+  listPrdPaths
 } = dfPlan;
 
 const repository = { owner: "marius-patrik", repo: "example" };
@@ -32,6 +33,22 @@ const item = {
   taskClass: "standard"
 };
 const labels = [item.priority, "roadmap", `df:class:${item.taskClass}`, "df:ready"];
+
+test("planner discovers product PRDs but excludes template, example, fixture, test, archive, and hidden trees", async () => {
+  const paths = await listPrdPaths(repository, "main", {
+    tree: [
+      { type: "blob", path: "PRD.md" },
+      { type: "blob", path: "packages/core/PRD.md" },
+      { type: "blob", path: "templates/cli/PRD.md" },
+      { type: "blob", path: "examples/demo/PRD.md" },
+      { type: "blob", path: "fixtures/repo/PRD.md" },
+      { type: "blob", path: "tests/fake/PRD.md" },
+      { type: "blob", path: "archive/old/PRD.md" },
+      { type: "blob", path: ".agents/.project/PRD.md" }
+    ]
+  });
+  assert.deepEqual(paths, ["PRD.md", "packages/core/PRD.md"]);
+});
 
 function mockGh(routes: Record<string, unknown | (() => unknown)>) {
   const calls: Array<{ method: string; path: string; body?: unknown }> = [];

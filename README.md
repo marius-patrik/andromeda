@@ -16,9 +16,10 @@ not DarkFactory's product or release owner.
 - Checks pull requests in installed repositories for the current DarkFactory
   policy and workflow scaffold.
 - Dispatches the orchestrator workflow immediately when an issue is labeled `df:ready` or when an owner/member/collaborator comments `/df run`, providing a low-latency path for managed repositories.
-- Installs the managed Codex Review workflow, Dockerfile, runner script, and output schema used to run `codex exec` in a container for pull request review.
+- Installs the current managed Codex Review migration gate. Issue #36 replaces
+  it with provider-agnostic DarkFactory Autoreview through canonical Agent OS.
 - Reads repository-local agent context, `.darkfactory`, and `.github` policy
-  files from `marius-patrik/agents-data`.
+  from the `managed-repository` child of canonical Andromeda-data authority.
 - Opens managed setup PRs when the app is installed on a repository or when repositories are added to an installation.
 - Can sync all installed repositories from the `Sync Managed Repositories` workflow.
 
@@ -61,7 +62,7 @@ To install the app on every repository, use the GitHub App installation UI and c
 npm ci
 npm run build
 agents packages register packages/darkfactory
-agents data repo path agent-os-data
+agents state doctor
 ```
 
 Store local secrets through Agent OS. Secret values are not printed by the manager:
@@ -90,7 +91,28 @@ npm run build
 darkfactory serve
 darkfactory install-url
 darkfactory sync-managed
+darkfactory doctor [owner/repo | --all] [--json]
+darkfactory doctor [owner/repo | --all] --write-issues [--json]
 ```
+
+## Repository doctor
+
+`darkfactory doctor` reconstructs branch/release state, protections and gates,
+open PR health, issue dependencies, managed-file drift, product layout,
+submodule pointers, trusted launcher/runner prerequisites, and explicitly
+supplied local checkout state. It also checks recent canonical Agent OS worker
+sessions for task-clone cwd isolation when `$AGENTS_HOME` is observable.
+Managed `Validate`, `Codex Review`, and future `DarkFactory Autoreview` gates
+must use their exact context names and the GitHub Actions producer App ID
+`15368`; a same-name check from any other App is critical drift.
+
+Diagnosis is the default and makes no GitHub writes or repairs. The explicit
+`--write-issues` mode reconciles one issue per stable `df-doctor:` finding and
+writes a zero-model-token ledger to `marius-patrik/darkfactory-data`. Repair is
+intentionally a separate reviewed work item; `--repair` is rejected. The
+trusted `DarkFactory Repository Doctor` workflow runs the same engine, uploads
+its JSON evidence, and uses report authority only on the schedule or when the
+manual `write_issues` input is selected.
 
 `df-work.yml` runs only on a trusted self-hosted runner labeled `df-local`. It
 requires `$AGENTS_HOME` to be an absolute path containing `bin\agents.ps1`,
@@ -99,10 +121,12 @@ turn through the same launcher without provider or model flags. It never falls
 back to an ambient `agents` command. Provider selection, identity, memory, and
 session state therefore come exclusively from `$AGENTS_HOME`.
 
-`codex-review.yml` is the one external CI execution boundary. It uses an
+`codex-review.yml` is the current external CI execution boundary. It uses an
 ephemeral Codex container and repository secret because GitHub-hosted CI cannot
 access personal Agent OS state. It does not define a repository model or serve
-as local provider authority.
+as local provider authority. This provider-specific gate remains current only
+until #36 lands DarkFactory Autoreview; active specs distinguish the current
+migration gate from that target.
 
 The review command keeps `--sandbox read-only`. Inside GitHub-hosted Docker it
 selects Codex's legacy Landlock backend because the default bubblewrap backend
@@ -133,11 +157,12 @@ agents state doctor
 agents packages run darkfactory -- serve
 ```
 
-The service uses the sole `agent-os-data` registration from
-`$AGENTS_HOME/data-repos.json`, verifies that it points to
-`$AGENTS_ROOT/data/agent-os`, and reads managed policy from its
-`managed-repository` child. There is no DarkFactory-specific data root or path
-override.
+Canonical policy/state authority is the root `$AGENTS_HOME` checkout of
+`marius-patrik/Andromeda-data`; DarkFactory reads only its
+`managed-repository` child. The current managed-sync adapter still accepts the
+pre-Andromeda redirected repository and nested checkout contract. That is a
+tracked implementation gap, not current policy; #255 migrates the adapter,
+workflow, manifest, and documentation together.
 
 The service requires these settings or Agent OS-managed secrets:
 
@@ -155,7 +180,7 @@ Dark Factory manages shared setup through pull requests. It does not write direc
 
 Managed files:
 
-- `.agents/.project/**`, only when `$AGENTS_ROOT/data/agent-os/managed-repository/repositories/<owner>/<repo>/.agents/.project/**` exists
+- `.agents/.project/**`, only when `$AGENTS_HOME/managed-repository/repositories/<owner>/<repo>/.agents/.project/**` exists
 - `.darkfactory/managed-repository.json`
 - `.darkfactory/installer-policy.json`
 - `.github/workflows/dark-factory-bootstrap.yml`
@@ -175,7 +200,7 @@ Managed setup does not ship `.github/workflows/df-event-forward.yml`. That workf
 When the DarkFactory webhook server is deployed, `df:ready` labels and `/df run` comments in any installed repository are dispatched immediately to the orchestrator workflow, eliminating the wait for the next scheduled tick. If the webhook server is not deployed or the dispatch fails, the schedule and workflow-run chaining still pick up the issue.
 
 Managed publication has path-level ownership: this package owns executable
-DarkFactory workflows and scripts, while the sole `agent-os-data` checkout owns
+DarkFactory workflows and scripts, while canonical Andromeda-data owns
 shared repository policy and context. Duplicate paths fail closed. Keep reusable
 repository policy in `managed-repository/.darkfactory/` and
 per-repository context in
@@ -229,7 +254,7 @@ release authority away from this repository.
 ## Development notes
 
 - Keep webhook handlers registered in `src/bot.ts`.
-- Keep managed file templates in `$AGENTS_ROOT/data/agent-os/managed-repository/`.
+- Keep managed file templates in `$AGENTS_HOME/managed-repository/` (migration tracked by #255).
 - Keep managed sync logic in `src/managed-sync.ts`.
 - Keep installed-repository setup enforcement in `src/repository-setup.ts`.
 - Keep HTTP routing and signature handoff behavior in `src/server.ts`.

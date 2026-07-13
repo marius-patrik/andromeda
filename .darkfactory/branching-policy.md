@@ -1,11 +1,15 @@
 # DarkFactory Branching Policy
 
-Managed code repositories use `dev` for work integration and `main` for the
-canonical Agent OS product state.
+Managed code repositories use `dev` for work integration and `main` for each
+repository's canonical released product state.
 
 - Work pull requests target `dev`.
-- Agent OS integration pull requests move reviewed `dev` state to `main`.
-- Component repositories do not define independent version, tag, or release authority.
+- Release pull requests move reviewed `dev` state to `main` through an eligible
+  `release/<id>` branch without deleting long-lived `dev`.
+- DarkFactory and Andromeda retain their explicit independent product, version,
+  tag, and release authority.
 - State and data repositories may commit directly to `main` when their own policy permits it.
 
-This policy is owned by the canonical `marius-patrik/agents-manager` source repository.
+DarkFactory owns the executable policy contract. Shared managed-policy source
+is canonical Andromeda-data under `$AGENTS_HOME`; migration of the current
+compatibility adapter is tracked by #255.

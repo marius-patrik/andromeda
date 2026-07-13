@@ -1,276 +1,475 @@
+// @ts-nocheck
 import assert from "node:assert/strict";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
-// @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
-const dfAudit: any = await import("../.github/scripts/df-audit.mjs?unit=df-audit-test");
-// @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
-const dfLib: any = await import("../.github/scripts/df-lib.mjs");
+const doctor: any = await import("../.github/scripts/df-audit.mjs?unit=repository-doctor-test");
 
-const {
-  DOC_PATHS,
-  DOC_STALE_DAYS,
-  REQUIRED_FILES,
-  auditDocStaleness,
-  auditHealth,
-  auditSubmoduleState,
-  parseGitmodules,
-  resolveSubmoduleRepo
-} = dfAudit;
+const repo = { owner: "marius-patrik", repo: "DarkFactory" };
 
-const { auditIssueBody } = dfLib;
+function content(text: string) {
+  return { type: "file", encoding: "base64", content: Buffer.from(text).toString("base64") };
+}
 
-const parentRepo = { owner: "marius-patrik", repo: "DarkFactory" };
+function notFound(message = "not found") {
+  return Object.assign(new Error(message), { status: 404 });
+}
 
-function mockGh(routes: Record<string, unknown>) {
+function mockGh(handler: (method: string, requestPath: string, body?: unknown) => unknown) {
+  const calls: Array<{ method: string; path: string; body?: unknown }> = [];
   return {
-    async request(method: string, path: string, _body?: unknown) {
-      const key = `${method} ${path}`;
-      if (key in routes) return routes[key];
-      throw new Error(`Unexpected mock request: ${key}`);
+    calls,
+    gh: {
+      async request(method: string, requestPath: string, body?: unknown) {
+        calls.push({ method, path: requestPath, body });
+        return await handler(method, requestPath, body);
+      }
     }
   };
 }
 
-function gitmodulesContent(text: string) {
+function protectedBranch() {
   return {
-    type: "file",
-    encoding: "base64",
-    content: Buffer.from(text, "utf8").toString("base64")
+    required_status_checks: { strict: true, checks: [{ context: "Validate", app_id: 15368 }, { context: "Codex Review", app_id: 15368 }] },
+    enforce_admins: { enabled: true },
+    allow_force_pushes: { enabled: false },
+    allow_deletions: { enabled: false }
   };
 }
 
-test("parseGitmodules returns empty array for empty content", () => {
-  assert.deepEqual(parseGitmodules(""), []);
-  assert.deepEqual(parseGitmodules("   \n\n"), []);
-  assert.deepEqual(parseGitmodules(null), []);
+test("doctor modes are explicit and repair is fail-closed", () => {
+  assert.equal(doctor.parseDoctorMode("diagnose"), "diagnose");
+  assert.equal(doctor.parseDoctorMode("report"), "report");
+  assert.throws(() => doctor.parseDoctorMode("repair"), /repair mode is not implemented/i);
+  assert.throws(() => doctor.parseDoctorMode("surprise"), /Unknown repository-doctor mode/);
 });
 
-test("parseGitmodules parses a single submodule", () => {
-  const content = `[submodule "packages/darkfactory"]
-  path = packages/darkfactory
-  url = https://github.com/marius-patrik/DarkFactory.git
-`;
-  assert.deepEqual(parseGitmodules(content), [
-    { name: "packages/darkfactory", path: "packages/darkfactory", url: "https://github.com/marius-patrik/DarkFactory.git" }
+test("stable findings deduplicate evidence and sort by id", () => {
+  const findings = doctor.dedupeFindings([
+    doctor.doctorFinding("z-last", "test", "last"),
+    doctor.doctorFinding("a-first", "test", "first", { evidence: [{ label: "one", url: "https://example.test/1" }] }),
+    doctor.doctorFinding("a-first", "test", "duplicate", { evidence: [{ label: "one", url: "https://example.test/1" }] })
   ]);
+  assert.deepEqual(findings.map((finding) => finding.id), ["a-first", "z-last"]);
+  assert.equal(findings[0].evidence.length, 1);
 });
 
-test("parseGitmodules parses multiple submodules and ignores comments", () => {
-  const content = `# Global shared code
-[submodule "shared"]
-  path = packages/shared
-  url = ../shared.git
-
-; additional component
-[submodule "tools"]
-  path = tools
-  url = git@github.com:marius-patrik/tools.git
-`;
-  assert.deepEqual(parseGitmodules(content), [
-    { name: "shared", path: "packages/shared", url: "../shared.git" },
-    { name: "tools", path: "tools", url: "git@github.com:marius-patrik/tools.git" }
+test("parseGitmodules preserves exact names, paths, urls, and branches", () => {
+  assert.deepEqual(doctor.parseGitmodules(`[submodule "DarkFactory"]\n path = plugins/DarkFactory\n url = https://github.com/marius-patrik/DarkFactory.git\n branch = main\n`), [
+    { name: "DarkFactory", path: "plugins/DarkFactory", url: "https://github.com/marius-patrik/DarkFactory.git", branch: "main" }
   ]);
+  assert.deepEqual(doctor.parseGitmodules(""), []);
 });
 
-test("resolveSubmoduleRepo handles GitHub HTTPS, SSH, and SCP-like URLs", () => {
-  assert.deepEqual(resolveSubmoduleRepo(parentRepo, "https://github.com/marius-patrik/foo.git"), {
-    owner: "marius-patrik",
-    repo: "foo"
+test("branch policy accepts protected identical main/dev and exempts active PR heads", async () => {
+  const branches = [
+    { name: "main", commit: { sha: "a" } },
+    { name: "dev", commit: { sha: "a" } },
+    { name: "feature/live", commit: { sha: "b" } }
+  ];
+  const pull = {
+    number: 10,
+    head: { ref: "feature/live", sha: "b", repo: { full_name: "marius-patrik/DarkFactory" } },
+    base: { ref: "dev" }
+  };
+  const { gh } = mockGh((method, requestPath) => {
+    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.endsWith("/branches/main/protection") || requestPath.endsWith("/branches/dev/protection")) return protectedBranch();
+    if (requestPath.endsWith("/pulls/10")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://github.com/marius-patrik/DarkFactory/pull/10" };
+    if (requestPath.includes("/commits/b/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] };
+    if (requestPath.includes("/commits/b/status")) return { statuses: [] };
+    throw new Error(`unexpected ${method} ${requestPath}`);
   });
-  assert.deepEqual(resolveSubmoduleRepo(parentRepo, "https://github.com/marius-patrik/foo"), {
-    owner: "marius-patrik",
-    repo: "foo"
+  const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+    branches,
+    branchNames: new Set(branches.map((branch) => branch.name)),
+    pulls: [pull],
+    isData: false,
+    now: "2026-07-13T01:00:00Z"
   });
-  assert.deepEqual(resolveSubmoduleRepo(parentRepo, "git@github.com:marius-patrik/foo.git"), {
-    owner: "marius-patrik",
-    repo: "foo"
+  assert.deepEqual(result.findings, []);
+});
+
+test("an open PR exempts only the exact same-repository branch head SHA", async () => {
+  const branches = [
+    { name: "main", commit: { sha: "a" } },
+    { name: "dev", commit: { sha: "a" } },
+    { name: "feature/moved", commit: { sha: "new-head" } }
+  ];
+  const pull = {
+    number: 11,
+    head: { ref: "feature/moved", sha: "stale-pr-head", repo: { full_name: "marius-patrik/DarkFactory" } },
+    base: { ref: "dev" }
+  };
+  const { gh } = mockGh((_method, requestPath) => {
+    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.includes("/protection")) return protectedBranch();
+    if (requestPath.endsWith("/pulls/11")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/11" };
+    if (requestPath.includes("/commits/stale-pr-head/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] };
+    if (requestPath.includes("/commits/stale-pr-head/status")) return { statuses: [] };
+    throw new Error(`unexpected ${requestPath}`);
   });
-  assert.deepEqual(resolveSubmoduleRepo(parentRepo, "github.com:marius-patrik/foo"), {
-    owner: "marius-patrik",
-    repo: "foo"
+  const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+    branches, branchNames: new Set(branches.map((branch) => branch.name)), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
   });
+  assert.ok(result.findings.some((finding) => finding.id === "extra-branch-feature-moved"));
 });
 
-test("resolveSubmoduleRepo resolves relative URLs against the parent repository", () => {
-  assert.deepEqual(resolveSubmoduleRepo(parentRepo, "../shared.git"), { owner: "marius-patrik", repo: "shared" });
-  assert.deepEqual(resolveSubmoduleRepo(parentRepo, "../../other-owner/shared.git"), {
-    owner: "other-owner",
-    repo: "shared"
-  });
-  assert.deepEqual(resolveSubmoduleRepo(parentRepo, "./sibling"), {
-    owner: "DarkFactory",
-    repo: "sibling"
-  });
-});
-
-test("resolveSubmoduleRepo returns null for non-GitHub URLs", () => {
-  assert.equal(resolveSubmoduleRepo(parentRepo, "https://gitlab.com/foo/bar.git"), null);
-  assert.equal(resolveSubmoduleRepo(parentRepo, "git@gitlab.com:foo/bar.git"), null);
-  assert.equal(resolveSubmoduleRepo(parentRepo, ""), null);
-  assert.equal(resolveSubmoduleRepo(parentRepo, "not-a-url"), null);
-});
-
-test("auditSubmoduleState returns no findings when submodules are in sync", async () => {
-  const sha = "abc123def456abc123def456abc123def456abcd";
-  const routes = {
-    "GET /repos/marius-patrik/DarkFactory/contents/.gitmodules?ref=main": gitmodulesContent(
-      `[submodule "shared"]\n  path = shared\n  url = ../shared.git\n`
-    ),
-    "GET /repos/marius-patrik/DarkFactory/contents/shared?ref=main": { type: "submodule", sha },
-    "GET /repos/marius-patrik/shared": { default_branch: "main" },
-    "GET /repos/marius-patrik/shared/commits/main": { sha }
-  };
-
-  const findings = await auditSubmoduleState(mockGh(routes), parentRepo, "main");
-  assert.deepEqual(findings, []);
-});
-
-test("auditSubmoduleState flags a dirty submodule when recorded commit differs from HEAD", async () => {
-  const recordedSha = "abc123def456abc123def456abc123def456abcd";
-  const headSha = "fedcba6543210fedcba6543210fedcba6543210f";
-  const routes = {
-    "GET /repos/marius-patrik/DarkFactory/contents/.gitmodules?ref=main": gitmodulesContent(
-      `[submodule "shared"]\n  path = shared\n  url = ../shared.git\n`
-    ),
-    "GET /repos/marius-patrik/DarkFactory/contents/shared?ref=main": { type: "submodule", sha: recordedSha },
-    "GET /repos/marius-patrik/shared": { default_branch: "main" },
-    "GET /repos/marius-patrik/shared/commits/main": { sha: headSha }
-  };
-
-  const findings = await auditSubmoduleState(mockGh(routes), parentRepo, "main");
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].category, "git state");
-  assert.match(findings[0].message, /dirty/);
-  assert.match(findings[0].message, /abc123def456/);
-  assert.match(findings[0].message, /fedcba654321/);
-});
-
-test("auditSubmoduleState flags a submodule declared in .gitmodules but missing from the tree", async () => {
-  const routes = {
-    "GET /repos/marius-patrik/DarkFactory/contents/.gitmodules?ref=main": gitmodulesContent(
-      `[submodule "shared"]\n  path = shared\n  url = ../shared.git\n`
-    ),
-    "GET /repos/marius-patrik/DarkFactory/contents/shared?ref=main": null,
-    "GET /repos/marius-patrik/shared": { default_branch: "main" },
-    "GET /repos/marius-patrik/shared/commits/main": { sha: "abc123" }
-  };
-
-  const findings = await auditSubmoduleState(mockGh(routes), parentRepo, "main");
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].category, "git state");
-  assert.match(findings[0].message, /no recorded commit/);
-});
-
-test("auditSubmoduleState flags non-GitHub submodule URLs", async () => {
-  const routes = {
-    "GET /repos/marius-patrik/DarkFactory/contents/.gitmodules?ref=main": gitmodulesContent(
-      `[submodule "external"]\n  path = external\n  url = https://gitlab.com/foo/bar.git\n`
-    )
-  };
-
-  const findings = await auditSubmoduleState(mockGh(routes), parentRepo, "main");
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].category, "git state");
-  assert.match(findings[0].message, /non-GitHub URL/);
-});
-
-test("auditHealth flags failing workflow runs", async () => {
-  const routes = {
-    "GET /repos/marius-patrik/DarkFactory/actions/runs?branch=main&per_page=20": {
-      workflow_runs: [
-        { status: "completed", conclusion: "success", name: "ci", workflow_id: 1 },
-        { status: "completed", conclusion: "failure", name: "validate", workflow_id: 2 }
-      ]
-    }
-  };
-
-  const findings = await auditHealth(parentRepo, "main", mockGh(routes));
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].category, "health");
-  assert.match(findings[0].message, /validate/);
-  assert.match(findings[0].message, /failure/);
-});
-
-test("auditHealth reports no completed runs", async () => {
-  const routes = {
-    "GET /repos/marius-patrik/DarkFactory/actions/runs?branch=main&per_page=20": {
-      workflow_runs: [{ status: "queued", conclusion: null, name: "ci", workflow_id: 1 }]
-    }
-  };
-
-  const findings = await auditHealth(parentRepo, "main", mockGh(routes));
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].category, "health");
-  assert.match(findings[0].message, /No completed/);
-});
-
-test("auditHealth ignores skipped and neutral conclusions", async () => {
-  const routes = {
-    "GET /repos/marius-patrik/DarkFactory/actions/runs?branch=main&per_page=20": {
-      workflow_runs: [
-        { status: "completed", conclusion: "skipped", name: "ci", workflow_id: 1 },
-        { status: "completed", conclusion: "neutral", name: "lint", workflow_id: 2 }
-      ]
-    }
-  };
-
-  const findings = await auditHealth(parentRepo, "main", mockGh(routes));
-  assert.equal(findings.length, 0);
-});
-
-test("auditDocStaleness flags docs older than the threshold", async () => {
-  const now = new Date("2026-07-07T00:00:00Z");
-  const stale = new Date(now.getTime() - (DOC_STALE_DAYS + 10) * 24 * 60 * 60 * 1000).toISOString();
-  const routes: Record<string, unknown> = {};
-  for (const docPath of DOC_PATHS) {
-    routes[`GET /repos/marius-patrik/DarkFactory/commits?sha=main&path=${encodeURIComponent(docPath)}&per_page=1`] = [
-      { commit: { committer: { date: stale } } }
-    ];
+test("branch policy classifies behind, diverged, missing, and main-only data repositories", async () => {
+  for (const status of ["behind", "diverged"]) {
+    const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "b" } }];
+    const { gh } = mockGh((_method, requestPath) => {
+      if (requestPath.endsWith("/compare/main...dev")) return { status, ahead_by: 1, behind_by: 1 };
+      if (requestPath.includes("/protection")) return protectedBranch();
+      throw new Error(`unexpected ${requestPath}`);
+    });
+    const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+      branches, branchNames: new Set(["main", "dev"]), pulls: [], isData: false
+    });
+    assert.ok(result.findings.some((finding) => finding.id === (status === "behind" ? "dev-behind-main" : "main-dev-diverged")));
   }
 
-  const findings = await auditDocStaleness(parentRepo, { pushed_at: now.toISOString() }, "main", mockGh(routes));
-  assert.equal(findings.length, DOC_PATHS.length);
-  for (const finding of findings) {
-    assert.equal(finding.category, "doc staleness");
+  const { gh: missingGh } = mockGh((_method, requestPath) => requestPath.includes("/protection") ? protectedBranch() : (() => { throw new Error(`unexpected ${requestPath}`); })());
+  const missing = await doctor.auditBranchAndReleaseState(missingGh, repo, { default_branch: "main", allow_auto_merge: true }, {
+    branches: [{ name: "main", commit: { sha: "a" } }], branchNames: new Set(["main"]), pulls: [], isData: false
+  });
+  assert.ok(missing.findings.some((finding) => finding.id === "dev-branch-missing"));
+
+  const dataRepo = { owner: "marius-patrik", repo: "Andromeda-data" };
+  const { gh: dataGh } = mockGh((_method, requestPath) => requestPath.includes("/protection") ? (() => { throw notFound(); })() : (() => { throw new Error(`unexpected ${requestPath}`); })());
+  const data = await doctor.auditBranchAndReleaseState(dataGh, dataRepo, { default_branch: "main", allow_auto_merge: false }, {
+    branches: [{ name: "main", commit: { sha: "a" } }], branchNames: new Set(["main"]), pulls: [], isData: true
+  });
+  assert.equal(data.findings.some((finding) => /dev|automerge/.test(finding.id)), false);
+});
+
+test("branch protection reports each missing or unsafe gate", async () => {
+  const { gh } = mockGh(() => ({ required_status_checks: { strict: true, contexts: [] }, enforce_admins: { enabled: true }, allow_force_pushes: { enabled: true }, allow_deletions: { enabled: true } }));
+  const findings = await doctor.auditBranchProtection(gh, repo, "main", { required: true });
+  assert.deepEqual(new Set(findings.map((finding) => finding.id)), new Set([
+    "protection-main-validate-missing",
+    "protection-main-review-missing",
+    "protection-main-force-push",
+    "protection-main-deletion"
+  ]));
+});
+
+test("branch protection requires exact app-bound gates, strict updates, and admin enforcement", async () => {
+  const { gh } = mockGh(() => ({
+    required_status_checks: { strict: false, checks: [{ context: "CI", app_id: 1 }, { context: "Autoreview lint", app_id: 1 }] },
+    enforce_admins: { enabled: false },
+    allow_force_pushes: { enabled: false },
+    allow_deletions: { enabled: false }
+  }));
+  const findings = await doctor.auditBranchProtection(gh, repo, "main", { required: true });
+  const ids = new Set(findings.map((finding) => finding.id));
+  assert.ok(ids.has("protection-main-validate-missing"));
+  assert.ok(ids.has("protection-main-review-missing"));
+  assert.ok(ids.has("protection-main-strict-missing"));
+  assert.ok(ids.has("protection-main-admin-bypass"));
+});
+
+test("branch protection fails closed on unbound and malformed required-check payloads", async () => {
+  const { gh: unboundGh } = mockGh(() => ({
+    required_status_checks: { strict: true, contexts: ["Validate", "Codex Review"] },
+    enforce_admins: { enabled: true },
+    allow_force_pushes: { enabled: false },
+    allow_deletions: { enabled: false }
+  }));
+  const unbound = await doctor.auditBranchProtection(unboundGh, repo, "dev", { required: true });
+  assert.ok(unbound.some((finding) => finding.id === "protection-dev-validate-app-unbound"));
+  assert.ok(unbound.some((finding) => finding.id === "protection-dev-codex-review-app-unbound"));
+
+  const { gh: wrongAppGh } = mockGh(() => ({
+    required_status_checks: { strict: true, checks: [{ context: "Validate", app_id: 99999 }, { context: "DarkFactory Autoreview", app_id: 99999 }] },
+    enforce_admins: { enabled: true },
+    allow_force_pushes: { enabled: false },
+    allow_deletions: { enabled: false }
+  }));
+  const observations: string[] = [];
+  const wrongApp = await doctor.auditBranchProtection(wrongAppGh, repo, "dev", { required: true, observations });
+  assert.ok(wrongApp.some((finding) => finding.id === "protection-dev-validate-app-mismatch" && /99999.*15368/.test(finding.message)));
+  assert.ok(wrongApp.some((finding) => finding.id === "protection-dev-darkfactory-autoreview-app-mismatch"));
+  assert.match(observations[0], /Validate@app:99999.*DarkFactory Autoreview@app:99999/);
+
+  const { gh: malformedGh } = mockGh(() => ({ required_status_checks: { strict: true, checks: "invalid" } }));
+  const malformed = await doctor.auditBranchProtection(malformedGh, repo, "dev", { required: true });
+  const ids = new Set(malformed.map((finding) => finding.id));
+  assert.ok(ids.has("protection-dev-required-checks-malformed"));
+  assert.ok(ids.has("protection-dev-admin-bypass-unobservable"));
+  assert.ok(ids.has("protection-dev-force-push-unobservable"));
+  assert.ok(ids.has("protection-dev-deletion-unobservable"));
+});
+
+test("branch protection distinguishes inaccessible 403 state from absent 404 state", async () => {
+  for (const [status, expected] of [[403, "protection-dev-unobservable"], [404, "protection-dev-missing"]]) {
+    const { gh } = mockGh(() => { throw Object.assign(new Error(`HTTP ${status}`), { status }); });
+    const findings = await doctor.auditBranchProtection(gh, repo, "dev", { required: true });
+    assert.equal(findings[0].id, expected);
+    if (status === 403) assert.match(findings[0].message, /unknown, not absent/);
   }
 });
 
-test("auditDocStaleness ignores fresh docs", async () => {
-  const now = new Date("2026-07-07T00:00:00Z");
-  const fresh = new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString();
-  const routes: Record<string, unknown> = {};
-  for (const docPath of DOC_PATHS) {
-    routes[`GET /repos/marius-patrik/DarkFactory/commits?sha=main&path=${encodeURIComponent(docPath)}&per_page=1`] = [
-      { commit: { committer: { date: fresh } } }
-    ];
+test("main-only data repositories do not inherit product gate requirements", async () => {
+  const { gh } = mockGh(() => ({
+    allow_force_pushes: { enabled: false },
+    allow_deletions: { enabled: false }
+  }));
+  const findings = await doctor.auditBranchProtection(gh, { owner: "marius-patrik", repo: "Andromeda-data" }, "main", { required: false });
+  assert.deepEqual(findings, []);
+});
+
+test("the #241 shape remains diagnosed while its active head branch is exempt", async () => {
+  const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }, { name: "dark-factory/managed-repository-setup", commit: { sha: "b" } }];
+  const pull = { number: 241, head: { ref: "dark-factory/managed-repository-setup", sha: "b", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "main" } };
+  const { gh } = mockGh((_method, requestPath) => {
+    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.includes("/protection")) return protectedBranch();
+    if (requestPath.endsWith("/pulls/241")) return { ...pull, updated_at: "2026-07-01T00:00:00Z", mergeable: false, mergeable_state: "dirty", html_url: "https://github.com/marius-patrik/DarkFactory/pull/241" };
+    if (requestPath.includes("/commits/b/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "failure", html_url: "https://example.test/validate" }, { name: "Codex Review", status: "completed", conclusion: "failure" }] };
+    if (requestPath.includes("/commits/b/status")) return { statuses: [] };
+    throw new Error(`unexpected ${requestPath}`);
+  });
+  const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+    branches, branchNames: new Set(branches.map((branch) => branch.name)), pulls: [pull], isData: false, now: "2026-07-13T00:00:00Z"
+  });
+  assert.ok(result.findings.some((finding) => finding.id === "pr-241-red"));
+  assert.ok(result.findings.some((finding) => finding.id === "pr-241-not-mergeable"));
+  assert.equal(result.findings.some((finding) => finding.id.includes("extra-branch-dark-factory")), false);
+});
+
+test("unknown completed check conclusions and malformed check payloads never become healthy", async () => {
+  for (const checkRuns of [
+    { check_runs: [{ name: "Validate", status: "completed", conclusion: "mystery" }] },
+    { check_runs: "malformed" }
+  ]) {
+    const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
+    const pull = { number: 77, head: { ref: "feature/check", sha: "c", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
+    const { gh } = mockGh((_method, requestPath) => {
+      if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+      if (requestPath.includes("/protection")) return protectedBranch();
+      if (requestPath.endsWith("/pulls/77")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/77" };
+      if (requestPath.includes("/commits/c/check-runs")) return checkRuns;
+      if (requestPath.includes("/commits/c/status")) return { statuses: [] };
+      throw new Error(`unexpected ${requestPath}`);
+    });
+    const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+      branches, branchNames: new Set(["main", "dev"]), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
+    });
+    assert.ok(result.findings.some((finding) => finding.id === "pr-77-checks-unobservable"));
   }
-
-  const findings = await auditDocStaleness(parentRepo, { pushed_at: now.toISOString() }, "main", mockGh(routes));
-  assert.deepEqual(findings, []);
 });
 
-test("auditDocStaleness returns no findings when pushed_at is missing", async () => {
-  const findings = await auditDocStaleness(parentRepo, {}, "main", mockGh({}));
-  assert.deepEqual(findings, []);
+test("inaccessible and individually malformed check evidence fails closed", async () => {
+  for (const variant of ["inaccessible", "missing-name", "missing-context"]) {
+    const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
+    const pull = { number: 78, head: { ref: "feature/check", sha: "d", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
+    const { gh } = mockGh((_method, requestPath) => {
+      if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+      if (requestPath.includes("/protection")) return protectedBranch();
+      if (requestPath.endsWith("/pulls/78")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/78" };
+      if (requestPath.includes("/commits/d/check-runs")) {
+        if (variant === "inaccessible") throw Object.assign(new Error("forbidden"), { status: 403 });
+        return { check_runs: [{ ...(variant === "missing-name" ? {} : { name: "Validate" }), status: "completed", conclusion: "success" }] };
+      }
+      if (requestPath.includes("/commits/d/status")) {
+        return variant === "missing-context"
+          ? { statuses: [{ state: "success" }] }
+          : { statuses: [] };
+      }
+      throw new Error(`unexpected ${requestPath}`);
+    });
+    const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+      branches, branchNames: new Set(["main", "dev"]), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
+    });
+    assert.ok(result.findings.some((finding) => finding.id === "pr-78-checks-unobservable"), variant);
+  }
 });
 
-test("auditIssueBody contains expected audit sections", () => {
-  const body = auditIssueBody("marius-patrik/example", [
-    { category: "health", message: "CI is red" }
-  ]);
-  assert.match(body, /df-audit:marius-patrik-example/);
-  assert.match(body, /## Findings/);
-  assert.match(body, /## Acceptance Criteria/);
-  assert.match(body, /## Audit Scope/);
-  assert.match(body, /Git state/);
-  assert.match(body, /Health/);
-  assert.match(body, /Doc staleness/);
+test("issue lane catches duplicate markers, stale blockers, missing blockers, self-reference, and cycles", () => {
+  const issues = [
+    { number: 1, state: "open", title: "One", body: "<!-- darkfactory:model -->\nBlocked-by: #2", updated_at: "2026-07-13T00:00:00Z", html_url: "https://example.test/1" },
+    { number: 2, state: "open", title: "Two", body: "<!-- darkfactory:model -->\nBlocked-by: #1", updated_at: "2026-07-13T00:00:00Z", html_url: "https://example.test/2" },
+    { number: 3, state: "open", title: "Three", body: "Blocked-by: #3, #9, #4", updated_at: "2026-07-13T00:00:00Z", html_url: "https://example.test/3" },
+    { number: 4, state: "closed", title: "Done", body: "", updated_at: "2026-07-12T00:00:00Z", html_url: "https://example.test/4" }
+  ];
+  const findings = doctor.auditIssueLane(repo, issues, { now: "2026-07-13T01:00:00Z" });
+  const ids = new Set(findings.map((finding) => finding.id));
+  assert.ok(ids.has("duplicate-issue-marker-darkfactory-model"));
+  assert.ok(ids.has("issue-3-blocker-self-reference"));
+  assert.ok(ids.has("issue-3-blocker-9-missing"));
+  assert.ok(ids.has("issue-3-blocker-4-satisfied"));
+  assert.ok(ids.has("issue-blocker-cycle-1-2"));
 });
 
-test("REQUIRED_FILES and DOC_PATHS are exported", () => {
-  assert.ok(Array.isArray(REQUIRED_FILES));
-  assert.ok(REQUIRED_FILES.includes("PRD.md"));
-  assert.ok(Array.isArray(DOC_PATHS));
-  assert.ok(DOC_PATHS.includes("PRD.md"));
-  assert.equal(typeof DOC_STALE_DAYS, "number");
+test("issue lane does not treat historical prose as an active supersession declaration", () => {
+  const findings = doctor.auditIssueLane(repo, [{
+    number: 11,
+    state: "open",
+    title: "Current contract",
+    body: "Historical comments are superseded by #35, but this issue remains current.",
+    updated_at: "2026-07-13T00:00:00Z"
+  }], { now: "2026-07-13T01:00:00Z" });
+  assert.equal(findings.some((finding) => finding.id === "superseded-issue-11-open"), false);
+});
+
+test("untrusted issue text cannot claim a doctor-owned marker", () => {
+  const issue = {
+    number: 99,
+    state: "open",
+    title: "spoof",
+    body: "<!-- df-doctor:marius-patrik-darkfactory:fake -->",
+    user: { login: "untrusted-user" },
+    updated_at: "2026-07-13T00:00:00Z",
+    html_url: "https://example.test/99"
+  };
+  const findings = doctor.auditIssueLane(repo, [issue], { now: "2026-07-13T01:00:00Z" });
+  assert.ok(findings.some((finding) => finding.id === "untrusted-doctor-marker-99"));
+  assert.equal(doctor.isTrustedDoctorIssue(issue), false);
+});
+
+test("repository tree permits root policy authority but rejects nested copies", async () => {
+  const findings = await doctor.auditRepositoryTree(repo, {
+    truncated: false,
+    tree: [
+      { path: ".agents", type: "tree" },
+      { path: ".agents/.project", type: "tree" },
+      { path: ".agents/.project/STATUS.md", type: "blob" },
+      { path: ".darkfactory", type: "tree" },
+      { path: ".darkfactory/branching-policy.md", type: "blob" },
+      { path: "packages/example/.agents/private.json", type: "blob" }
+    ]
+  });
+  assert.deepEqual(findings.map((finding) => finding.id), ["state-boundary-packages-example-agents-private-json"]);
+});
+
+test("worker session isolation reads canonical state and catches escaped cwd", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "df-doctor-sessions-"));
+  try {
+    for (const [id, workdir] of [["good", path.join(tmpdir(), "df-work-good", "repo")], ["bad", "C:\\Users\\patrik\\marius-patrik\\Andromeda"]]) {
+      const session = path.join(root, "sessions", id);
+      await mkdir(session, { recursive: true });
+      await writeFile(path.join(session, "state.json"), JSON.stringify({ sessionId: id, workdir, lastTurnAt: "2026-07-13T00:00:00Z" }));
+      await writeFile(path.join(session, "transcript.json"), JSON.stringify({ messages: [{ role: "user", content: "Read .darkfactory/df-task-brief.md and implement that task in the current repository. Continue safely." }] }));
+    }
+    const result = doctor.auditWorkerSessionIsolation(root, { now: "2026-07-13T01:00:00Z" });
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].id, "worker-session-workdir-isolation");
+    assert.match(result.findings[0].message, /bad/);
+    assert.doesNotMatch(result.findings[0].message, /good/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("diagnose mode performs no GitHub writes", async () => {
+  const { gh, calls } = mockGh((method, requestPath) => {
+    if (method !== "GET") throw new Error(`unexpected write ${method} ${requestPath}`);
+    if (requestPath === "/repos/marius-patrik/DarkFactory") return { default_branch: "main", allow_auto_merge: true, archived: false, disabled: false, pushed_at: "2026-07-13T00:00:00Z" };
+    if (requestPath.includes("/branches?")) return requestPath.endsWith("page=1") ? [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }] : [];
+    if (requestPath.includes("/pulls?state=open")) return [];
+    if (requestPath.includes("/issues?state=all")) return [];
+    if (requestPath.endsWith("/git/trees/main?recursive=1")) return { truncated: false, tree: [{ path: "README.md", type: "blob" }] };
+    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.includes("/protection")) return protectedBranch();
+    if (requestPath.includes("/actions/secrets")) return { secrets: [] };
+    if (requestPath.includes("/actions/runners")) return { runners: [{ status: "online", labels: [{ name: "df-local" }] }] };
+    if (requestPath.includes("/actions/runs?")) return { workflow_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] };
+    if (requestPath.includes("/commits?sha=")) return [];
+    if (requestPath.includes("/contents/.github/workflows/df-work.yml")) return content("AGENTS_HOME bin\\agents.ps1 state doctor --json");
+    if (requestPath.includes("/contents/AGENTS.md")) return content("Use AGENTS_HOME.");
+    if (requestPath.includes("/contents/README.md")) return content("# DarkFactory\n");
+    if (requestPath.includes("/contents/package.json")) return content('{"name":"@agent-os/darkfactory"}');
+    if (requestPath.includes("/contents/PRD.md")) return content("# PRD\n");
+    if (requestPath.includes("/contents/.darkfactory/enforcement-rules.json")) return content('{"rules":[{"id":"no-admin-bypass","enabled":true,"severity":"block"}]}');
+    if (requestPath.includes("/contents/.darkfactory/") || requestPath.includes("/contents/.gitmodules") || requestPath.includes("/contents/.github/workflows/sync-managed-repos.yml") || requestPath.includes("/contents/.agents/") || requestPath.includes("/contents/src/managed-files.ts")) throw notFound();
+    throw new Error(`unexpected ${method} ${requestPath}`);
+  });
+  const reports = await doctor.runRepositoryDoctor(gh, {
+    mode: "diagnose",
+    trigger: "test",
+    controlRepo: repo,
+    target: repo,
+    registry: { schemaVersion: 1, repositories: { "marius-patrik/DarkFactory": { state: "active" } } }
+  });
+  assert.equal(reports[0].read_only, true);
+  assert.equal(reports[0].trigger, "test");
+  assert.equal(calls.every((call) => call.method === "GET"), true);
+});
+
+test("report issue reconciliation is marker-idempotent and closes resolved findings", async () => {
+  const current = doctor.doctorFinding("current-drift", "branch policy", "current");
+  const existing = { number: 7, state: "open", body: "<!-- df-doctor:marius-patrik-darkfactory:current-drift -->", user: { login: "mp-agents[bot]" }, html_url: "https://example.test/7" };
+  const resolved = { number: 8, state: "open", body: "<!-- df-doctor:marius-patrik-darkfactory:old-drift -->", user: { login: "mp-agents[bot]" }, html_url: "https://example.test/8" };
+  const { gh, calls } = mockGh((method, requestPath) => {
+    if (method === "GET" && requestPath.includes("issues?state=all") && requestPath.endsWith("page=1")) return [existing, resolved];
+    if (method === "GET" && requestPath.includes("issues?state=all") && requestPath.endsWith("page=2")) return [];
+    if (method === "PATCH" || method === "POST") return {};
+    throw new Error(`unexpected ${method} ${requestPath}`);
+  });
+  const actions = await doctor.reconcileDoctorIssues(gh, repo, [current]);
+  assert.equal(calls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/DarkFactory/issues"), false);
+  assert.ok(actions.some((action) => action.action === "update-repair-issue"));
+  assert.ok(actions.some((action) => action.action === "close-resolved-repair-issue"));
+});
+
+test("doctor issue sources are unambiguous across repositories", () => {
+  const body = doctor.doctorIssueBody("marius-patrik/Andromeda", doctor.doctorFinding("drift", "policy", "observed", { severity: "critical" }));
+  assert.match(body, /Priority: `P0`/);
+  assert.match(body, /\[marius-patrik\/DarkFactory#12\]\(https:\/\/github\.com\/marius-patrik\/DarkFactory\/issues\/12\)/);
+  assert.match(body, /\[marius-patrik\/DarkFactory#35\]\(https:\/\/github\.com\/marius-patrik\/DarkFactory\/issues\/35\)/);
+  assert.doesNotMatch(body, /foundation: #12|epic: #35/);
+  assert.deepEqual(doctor.DOCTOR_REPORT_LABELS.map((label) => label.name).sort(), ["P0", "P1", "P2", "df:class:mechanical", "df:doctor"]);
+});
+
+test("live DarkFactory App actor creates, updates, then closes one stable issue across consecutive reports", async () => {
+  const issues: any[] = [];
+  const calls: any[] = [];
+  const gh = {
+    async request(method: string, requestPath: string, body?: any) {
+      calls.push({ method, path: requestPath, body });
+      if (method === "GET" && requestPath.includes("issues?state=all")) return issues.map((issue) => ({ ...issue }));
+      if (method === "POST" && requestPath === "/repos/marius-patrik/DarkFactory/issues") {
+        const issue = {
+          number: 10,
+          state: "open",
+          title: body.title,
+          body: body.body,
+          labels: body.labels,
+          user: { login: "darkfactory-agent[bot]" },
+          html_url: "https://example.test/10"
+        };
+        issues.push(issue);
+        return { ...issue };
+      }
+      if (method === "PATCH" && requestPath === "/repos/marius-patrik/DarkFactory/issues/10") {
+        Object.assign(issues[0], body);
+        return { ...issues[0] };
+      }
+      if (method === "POST" && requestPath === "/repos/marius-patrik/DarkFactory/issues/10/comments") return {};
+      throw new Error(`unexpected ${method} ${requestPath}`);
+    }
+  };
+  const finding = doctor.doctorFinding("stable-live-actor", "health", "observed");
+
+  const created = await doctor.reconcileDoctorIssues(gh, repo, [finding]);
+  assert.deepEqual(created.map((action) => action.action), ["create-repair-issue"]);
+  assert.equal(doctor.isTrustedDoctorIssue(issues[0]), true);
+
+  const updated = await doctor.reconcileDoctorIssues(gh, repo, [finding]);
+  assert.deepEqual(updated.map((action) => action.action), ["update-repair-issue"]);
+  assert.equal(issues.length, 1);
+
+  const closed = await doctor.reconcileDoctorIssues(gh, repo, []);
+  assert.deepEqual(closed.map((action) => action.action), ["close-resolved-repair-issue"]);
+  assert.equal(issues[0].state, "closed");
+  assert.equal(calls.filter((call) => call.method === "POST" && call.path === "/repos/marius-patrik/DarkFactory/issues").length, 1);
+});
+
+test("human and JSON formats preserve deterministic zero-token evidence", () => {
+  const reports = [{ target_repository: "marius-patrik/DarkFactory", mode: "diagnose", read_only: true, findings: [], observations: ["checked"], token_usage: { model_calls: 0 } }];
+  assert.match(doctor.formatDoctorReports(reports), /HEALTHY \(diagnose, read_only=true\)/);
+  assert.equal(JSON.parse(JSON.stringify(reports))[0].token_usage.model_calls, 0);
 });
