@@ -385,14 +385,19 @@ function secretFieldPath(value: unknown, field = "", path = ""): string | null {
     if (STRUCTURAL_STRING_FIELDS.has(field) && (UUID.test(value) || CANONICAL_HASH_OR_ID.test(value))) return null;
     const trimmed = value.trim();
     if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      let structured: unknown;
       try {
-        const structured = JSON.parse(trimmed) as unknown;
-        if (structured !== null && typeof structured === "object") {
+        structured = JSON.parse(trimmed) as unknown;
+      } catch {
+        return secretLikeText(value) ? path || field || "<root>" : null;
+      }
+      if (structured !== null && typeof structured === "object") {
+        try {
           if (hasDuplicateJsonObjectKeys(trimmed)) return path || field || "<root>";
           return secretFieldPath(structured, field, path);
+        } catch {
+          return path || field || "<root>";
         }
-      } catch {
-        // Non-JSON strings continue through the opaque-text scanner below.
       }
     }
     return secretLikeText(value) ? path || field || "<root>" : null;

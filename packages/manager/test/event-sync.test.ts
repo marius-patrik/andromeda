@@ -427,6 +427,20 @@ describe("encrypted cross-machine event exchange", () => {
         exportEventBundle(duplicateStructuredSecret, path.join(root, "duplicate-structured-secret.bundle.json")),
       ).rejects.toThrow("secret-like");
 
+      const deeplyNestedSecret = await exchangeState(path.join(root, "deeply-nested-secret"));
+      const nestedDepth = 5_000;
+      const deeplyNestedValue = `${'{"child":'.repeat(nestedDepth)}{"apiKey":"redacted"}${"}".repeat(nestedDepth)}`;
+      await rememberMemory(deeplyNestedSecret, {
+        scope: "session",
+        subject: "compaction",
+        predicate: "current",
+        value: deeplyNestedValue,
+        evidence,
+      });
+      await expect(
+        exportEventBundle(deeplyNestedSecret, path.join(root, "deeply-nested-secret.bundle.json")),
+      ).rejects.toThrow("secret-like");
+
       const secretSession = await exchangeState(path.join(root, "secret-session"));
       await createSession(secretSession, {
         sessionId: "secret-session",
