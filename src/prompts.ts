@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
  * runtime through the `agents` launcher (issue #24) — never by these artifacts.
  */
 
-export const PROMPT_LIBRARY_SCHEMA_VERSION = 1;
+export const PROMPT_LIBRARY_SCHEMA_VERSION = 2;
 export const PROMPT_LIBRARY_ID = "darkfactory-prompts";
 export const PROMPT_MANIFEST_PATH = "manifest.json";
 export const PROMPT_MANIFEST_RECOVERY_PATH = "manifest.recovery.json";
@@ -86,8 +86,10 @@ export const RUN_KINDS = [
   "implement",
   "draft-issue",
   "review-issue",
+  "fix-issue",
   "review-pr",
   "fix-pr",
+  "update-pointer",
   "release",
   "verify",
   "audit",
@@ -172,10 +174,12 @@ export interface OutputSchema {
 
 /** Which artifacts to compose and at what tier. */
 export interface PromptSelection {
+  profile: string;
   role: string;
   skills: string[];
   modelTier: ModelTier;
   overlays: string[];
+  repositoryOverlays: string[];
 }
 
 /** The complete typed inputs required to compose any prompt. */
@@ -213,11 +217,32 @@ export interface ManifestFixture {
   covers: string[];
 }
 
+/**
+ * Versioned selection authority for one model-backed worker class. Cross-cutting
+ * and workflow overlays are exact. Repository overlays are selected only from
+ * the profile's explicit allowlist because repository type is trusted run state,
+ * not a property of the worker class.
+ */
+export interface ManifestWorkerProfile {
+  id: string;
+  version: string;
+  runKind: RunKind;
+  purpose: RunPurpose;
+  role: string;
+  skills: string[];
+  modelTier: ModelTier;
+  overlays: string[];
+  allowedRepositoryOverlays: string[];
+  requiresRepositoryOverlay: boolean;
+  output: string;
+}
+
 export interface PromptManifest {
   schemaVersion: typeof PROMPT_LIBRARY_SCHEMA_VERSION;
   library: typeof PROMPT_LIBRARY_ID;
   contractVersion: string;
   artifacts: ManifestArtifact[];
+  profiles: ManifestWorkerProfile[];
   fixtures: ManifestFixture[];
 }
 
@@ -266,8 +291,10 @@ export const REQUIRED_ROLES = [
   "role/implementer",
   "role/issue-drafter",
   "role/issue-reviewer",
+  "role/issue-fixer",
   "role/pr-reviewer",
   "role/pr-fixer",
+  "role/pointer-updater",
   "role/releaser",
   "role/verifier",
   "role/auditor",
@@ -296,8 +323,10 @@ const RUN_PURPOSES_BY_KIND: Readonly<Record<RunKind, readonly RunPurpose[]>> = {
   implement: ["implementation"],
   "draft-issue": ["interactive-issue-drafting"],
   "review-issue": ["iterative-review", "final-review"],
+  "fix-issue": ["review-fix"],
   "review-pr": ["iterative-review", "final-review"],
   "fix-pr": ["review-fix"],
+  "update-pointer": ["implementation"],
   release: ["release"],
   verify: ["verification"],
   audit: ["audit"],
@@ -312,8 +341,10 @@ const WORK_ITEM_ADMISSIONS_BY_RUN: Readonly<Record<RunKind, readonly WorkItemAdm
   implement: ["issue"],
   "draft-issue": ["none"],
   "review-issue": ["issue"],
+  "fix-issue": ["issue"],
   "review-pr": ["pr"],
   "fix-pr": ["pr"],
+  "update-pointer": ["issue"],
   release: ["none"],
   verify: ["issue", "pr"],
   audit: ["none"],
@@ -346,12 +377,22 @@ const ROLE_BINDINGS: Readonly<Record<(typeof REQUIRED_ROLES)[number], RoleBindin
     purposes: ["iterative-review", "final-review"],
     output: "output/issue-reviewer"
   },
+  "role/issue-fixer": {
+    kind: "fix-issue",
+    purposes: ["review-fix"],
+    output: "output/issue-fixer"
+  },
   "role/pr-reviewer": {
     kind: "review-pr",
     purposes: ["iterative-review", "final-review"],
     output: "output/pr-reviewer"
   },
   "role/pr-fixer": { kind: "fix-pr", purposes: ["review-fix"], output: "output/pr-fixer" },
+  "role/pointer-updater": {
+    kind: "update-pointer",
+    purposes: ["implementation"],
+    output: "output/pointer-updater"
+  },
   "role/releaser": { kind: "release", purposes: ["release"], output: "output/releaser" },
   "role/verifier": { kind: "verify", purposes: ["verification"], output: "output/verifier" },
   "role/auditor": { kind: "audit", purposes: ["audit"], output: "output/auditor" },
@@ -1151,7 +1192,7 @@ function parseManifestContent(raw: string, source: string): PromptManifest {
   }
   assertExactKeys(
     parsed,
-    ["schemaVersion", "library", "contractVersion", "artifacts", "fixtures"],
+    ["schemaVersion", "library", "contractVersion", "artifacts", "profiles", "fixtures"],
     source
   );
   if (parsed.schemaVersion !== PROMPT_LIBRARY_SCHEMA_VERSION) {
@@ -1168,17 +1209,22 @@ function parseManifestContent(raw: string, source: string): PromptManifest {
   if (!Array.isArray(parsed.artifacts) || parsed.artifacts.length === 0) {
     throw new Error(`${source} must declare a non-empty artifacts array`);
   }
+  if (!Array.isArray(parsed.profiles) || parsed.profiles.length === 0) {
+    throw new Error(`${source} must declare a non-empty profiles array`);
+  }
   if (!Array.isArray(parsed.fixtures) || parsed.fixtures.length === 0) {
     throw new Error(`${source} must declare a non-empty fixtures array`);
   }
 
   const artifacts = parsed.artifacts.map(parseArtifact);
+  const profiles = parsed.profiles.map(parseWorkerProfile);
   const fixtures = parsed.fixtures.map(parseFixture);
   return {
     schemaVersion: PROMPT_LIBRARY_SCHEMA_VERSION,
     library: PROMPT_LIBRARY_ID,
     contractVersion: parsed.contractVersion,
     artifacts,
+    profiles,
     fixtures
   };
 }
@@ -1234,6 +1280,110 @@ function parseArtifact(value: unknown): ManifestArtifact {
   assertUniqueStrings(variables, `Manifest artifact ${id} variables`);
   assertUniqueStrings(requiredVariables, `Manifest artifact ${id} requiredVariables`);
   return { id, kind, path, version, checksum, variables, requiredVariables };
+}
+
+function parseWorkerProfile(value: unknown): ManifestWorkerProfile {
+  if (!isRecord(value)) {
+    throw new Error("Manifest worker profile entries must be objects");
+  }
+  assertExactKeys(
+    value,
+    [
+      "id",
+      "version",
+      "runKind",
+      "purpose",
+      "role",
+      "skills",
+      "modelTier",
+      "overlays",
+      "allowedRepositoryOverlays",
+      "requiresRepositoryOverlay",
+      "output"
+    ],
+    "Manifest worker profile"
+  );
+  const {
+    id,
+    version,
+    runKind,
+    purpose,
+    role,
+    skills,
+    modelTier,
+    overlays,
+    allowedRepositoryOverlays,
+    requiresRepositoryOverlay,
+    output
+  } = value;
+  if (typeof id !== "string" || !/^profile\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
+    throw new Error(`Manifest worker profile must declare a typed id: ${String(id)}`);
+  }
+  if (typeof version !== "string" || !SEMVER_PATTERN.test(version)) {
+    throw new Error(`Manifest worker profile ${id} must declare a semver version`);
+  }
+  if (!RUN_KINDS.includes(runKind as RunKind)) {
+    throw new Error(`Manifest worker profile ${id} has unknown runKind: ${String(runKind)}`);
+  }
+  if (!RUN_PURPOSES.includes(purpose as RunPurpose)) {
+    throw new Error(`Manifest worker profile ${id} has unknown purpose: ${String(purpose)}`);
+  }
+  if (typeof role !== "string" || !/^role\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(role)) {
+    throw new Error(`Manifest worker profile ${id} must declare a typed role`);
+  }
+  if (
+    !isStringArray(skills) ||
+    skills.some((entry) => !/^skill\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry))
+  ) {
+    throw new Error(`Manifest worker profile ${id} must declare typed skills`);
+  }
+  if (!MODEL_TIERS.includes(modelTier as ModelTier)) {
+    throw new Error(`Manifest worker profile ${id} has unknown modelTier: ${String(modelTier)}`);
+  }
+  if (
+    !isStringArray(overlays) ||
+    overlays.some((entry) => !/^overlay\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry)) ||
+    !isStringArray(allowedRepositoryOverlays) ||
+    allowedRepositoryOverlays.some((entry) => !/^overlay\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(entry))
+  ) {
+    throw new Error(`Manifest worker profile ${id} must declare typed overlays`);
+  }
+  if (typeof requiresRepositoryOverlay !== "boolean") {
+    throw new Error(`Manifest worker profile ${id} must declare requiresRepositoryOverlay`);
+  }
+  if (typeof output !== "string" || !/^output\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(output)) {
+    throw new Error(`Manifest worker profile ${id} must declare a typed output`);
+  }
+  assertUniqueStrings(skills, `Manifest worker profile ${id} skills`);
+  assertUniqueStrings(overlays, `Manifest worker profile ${id} overlays`);
+  assertUniqueStrings(
+    allowedRepositoryOverlays,
+    `Manifest worker profile ${id} allowedRepositoryOverlays`
+  );
+  if (overlays.some((entry) => allowedRepositoryOverlays.includes(entry))) {
+    throw new Error(`Manifest worker profile ${id} duplicates a fixed overlay as a repository overlay`);
+  }
+  if (
+    allowedRepositoryOverlays.includes("overlay/main-only-private-data") &&
+    overlays.some((entry) => entry === "overlay/release" || entry === "overlay/autoupdate")
+  ) {
+    throw new Error(
+      `Manifest worker profile ${id} cannot combine a main-only private-data repository with release or autoupdate workflow policy`
+    );
+  }
+  return {
+    id,
+    version,
+    runKind: runKind as RunKind,
+    purpose: purpose as RunPurpose,
+    role,
+    skills,
+    modelTier: modelTier as ModelTier,
+    overlays,
+    allowedRepositoryOverlays,
+    requiresRepositoryOverlay,
+    output
+  };
 }
 
 function parseFixture(value: unknown): ManifestFixture {
@@ -1491,7 +1641,44 @@ function validatePromptLibrary(
     }
   }
 
+  const seenProfiles = new Set<string>();
+  for (const profile of manifest.profiles) {
+    if (seenProfiles.has(profile.id)) throw new Error(`Duplicate manifest worker profile id: ${profile.id}`);
+    seenProfiles.add(profile.id);
+    const forbiddenIdentity = findForbiddenContent(profile.id);
+    if (forbiddenIdentity.length > 0) {
+      throw new Error(`Prompt worker profile ${profile.id} has forbidden identity content: ${forbiddenIdentity.join("; ")}`);
+    }
+    const role = artifactById(manifest, profile.role, "role");
+    const output = artifactById(manifest, profile.output, "output");
+    for (const skill of profile.skills) artifactById(manifest, skill, "skill");
+    for (const overlay of [...profile.overlays, ...profile.allowedRepositoryOverlays]) {
+      const artifact = artifactById(manifest, overlay, "overlay");
+      const isRepositoryOverlay = artifact.path.startsWith("overlays/repo-types/");
+      if (profile.allowedRepositoryOverlays.includes(overlay) !== isRepositoryOverlay) {
+        throw new Error(`Prompt worker profile ${profile.id} misclassifies overlay ${overlay}`);
+      }
+    }
+    if (profile.requiresRepositoryOverlay && profile.allowedRepositoryOverlays.length === 0) {
+      throw new Error(`Prompt worker profile ${profile.id} requires a repository overlay but allows none`);
+    }
+    const binding = roleBindings[role.id];
+    if (!binding || binding.kind !== profile.runKind || !binding.purposes.includes(profile.purpose)) {
+      throw new Error(`Prompt worker profile ${profile.id} conflicts with role binding ${role.id}`);
+    }
+    if (binding.output !== output.id) {
+      throw new Error(`Prompt worker profile ${profile.id} conflicts with role output ${binding.output}`);
+    }
+    if (!RUN_PURPOSES_BY_KIND[profile.runKind].includes(profile.purpose)) {
+      throw new Error(`Prompt worker profile ${profile.id} has an invalid run kind/purpose pair`);
+    }
+    if (profile.modelTier !== PURPOSE_TIER[profile.purpose]) {
+      throw new Error(`Prompt worker profile ${profile.id} has the wrong tier for ${profile.purpose}`);
+    }
+  }
+
   const covered = new Set<string>();
+  const coveredProfiles = new Set<string>();
   const seenFixtures = new Set<string>();
   const seenFixturePaths = new Set<string>();
   const seenSnapshotPaths = new Set<string>();
@@ -1540,11 +1727,14 @@ function validatePromptLibrary(
     }
 
     const inputs = parseFixtureContent(fixtureContent, fixture.path);
+    const profile = validateSelectionAgainstProfile(inputs, manifest);
+    coveredProfiles.add(profile.id);
     const actualCoverage = [
       inputs.selection.role,
       ...inputs.selection.skills,
       `tier/${inputs.selection.modelTier}`,
       ...inputs.selection.overlays,
+      ...inputs.selection.repositoryOverlays,
       inputs.output.id
     ].sort();
     const declaredCoverage = [...fixture.covers].sort();
@@ -1569,6 +1759,10 @@ function validatePromptLibrary(
       `Artifacts missing fixture coverage: ${uncovered.map((artifact) => artifact.id).join(", ")}`
     );
   }
+  const uncoveredProfiles = manifest.profiles.filter((profile) => !coveredProfiles.has(profile.id));
+  if (uncoveredProfiles.length > 0) {
+    throw new Error(`Worker profiles missing fixture coverage: ${uncoveredProfiles.map((profile) => profile.id).join(", ")}`);
+  }
 
   return { manifest, artifactContent };
 }
@@ -1586,6 +1780,50 @@ function artifactById(manifest: PromptManifest, id: string, kind: PromptArtifact
     throw new Error(`Prompt artifact ${id} is a ${artifact.kind}, expected ${kind}`);
   }
   return artifact;
+}
+
+function profileById(manifest: PromptManifest, id: string): ManifestWorkerProfile {
+  const profile = manifest.profiles.find((entry) => entry.id === id);
+  if (!profile) throw new Error(`Unknown prompt worker profile: ${id}`);
+  return profile;
+}
+
+function assertExactOrderedIds(actual: readonly string[], expected: readonly string[], context: string): void {
+  if (actual.length !== expected.length || actual.some((value, index) => value !== expected[index])) {
+    throw new Error(`${context} must equal the profile selection [${expected.join(", ")}]`);
+  }
+}
+
+function validateSelectionAgainstProfile(inputs: PromptInputs, manifest: PromptManifest): ManifestWorkerProfile {
+  const profile = profileById(manifest, inputs.selection.profile);
+  if (inputs.run.kind !== profile.runKind || inputs.run.purpose !== profile.purpose) {
+    throw new Error(
+      `Prompt profile ${profile.id} requires ${profile.runKind}/${profile.purpose}, received ${inputs.run.kind}/${inputs.run.purpose}`
+    );
+  }
+  if (inputs.selection.role !== profile.role) {
+    throw new Error(`Prompt profile ${profile.id} requires role ${profile.role}`);
+  }
+  if (inputs.selection.modelTier !== profile.modelTier) {
+    throw new Error(`Prompt profile ${profile.id} requires model tier ${profile.modelTier}`);
+  }
+  if (inputs.output.id !== profile.output) {
+    throw new Error(`Prompt profile ${profile.id} requires output ${profile.output}`);
+  }
+  assertExactOrderedIds(inputs.selection.skills, profile.skills, `Prompt profile ${profile.id} skills`);
+  assertExactOrderedIds(inputs.selection.overlays, profile.overlays, `Prompt profile ${profile.id} overlays`);
+  if (profile.requiresRepositoryOverlay && inputs.selection.repositoryOverlays.length !== 1) {
+    throw new Error(`Prompt profile ${profile.id} requires exactly one repository overlay`);
+  }
+  if (!profile.requiresRepositoryOverlay && inputs.selection.repositoryOverlays.length > 1) {
+    throw new Error(`Prompt profile ${profile.id} permits at most one repository overlay`);
+  }
+  for (const overlay of inputs.selection.repositoryOverlays) {
+    if (!profile.allowedRepositoryOverlays.includes(overlay)) {
+      throw new Error(`Prompt profile ${profile.id} does not allow repository overlay ${overlay}`);
+    }
+  }
+  return profile;
 }
 
 function trustedValues(inputs: PromptInputs): Record<string, string> {
@@ -1718,16 +1956,24 @@ export function validateInputs(inputs: PromptInputs): void {
   assertExactKeys(inputs.output, ["id"], "Prompt output selection");
   if (
     !isRecord(inputs.selection) ||
+    typeof inputs.selection.profile !== "string" ||
+    !/^profile\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(inputs.selection.profile) ||
     typeof inputs.selection.role !== "string" ||
     !/^role\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(inputs.selection.role) ||
     !isStringArray(inputs.selection.skills) ||
     inputs.selection.skills.some((id) => !/^skill\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) ||
     !isStringArray(inputs.selection.overlays) ||
-    inputs.selection.overlays.some((id) => !/^overlay\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))
+    inputs.selection.overlays.some((id) => !/^overlay\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) ||
+    !isStringArray(inputs.selection.repositoryOverlays) ||
+    inputs.selection.repositoryOverlays.some((id) => !/^overlay\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id))
   ) {
-    throw new Error("Prompt inputs require typed role, skill, and overlay artifact ids");
+    throw new Error("Prompt inputs require typed profile, role, skill, and overlay artifact ids");
   }
-  assertExactKeys(inputs.selection, ["role", "skills", "modelTier", "overlays"], "Prompt artifact selection");
+  assertExactKeys(
+    inputs.selection,
+    ["profile", "role", "skills", "modelTier", "overlays", "repositoryOverlays"],
+    "Prompt artifact selection"
+  );
   if (
     !MODEL_TIERS.includes(inputs.selection.modelTier as ModelTier)
   ) {
@@ -1755,6 +2001,10 @@ export function validateInputs(inputs: PromptInputs): void {
   }
   assertUniqueStrings(inputs.selection.skills, "Prompt selection skills");
   assertUniqueStrings(inputs.selection.overlays, "Prompt selection overlays");
+  assertUniqueStrings(inputs.selection.repositoryOverlays, "Prompt selection repository overlays");
+  if (inputs.selection.overlays.some((id) => inputs.selection.repositoryOverlays.includes(id))) {
+    throw new Error("Prompt selection duplicates a fixed overlay as a repository overlay");
+  }
   if (inputs.workItem === undefined) {
     throw new Error("Prompt inputs require workItem to be an issue/PR object or explicit null");
   }
@@ -1848,10 +2098,12 @@ export function validateInputs(inputs: PromptInputs): void {
     inputs.effort,
     ...inputs.verified.facts,
     inputs.output.id,
+    inputs.selection.profile,
     inputs.selection.role,
     ...inputs.selection.skills,
     inputs.selection.modelTier,
     ...inputs.selection.overlays,
+    ...inputs.selection.repositoryOverlays,
     ...(inputs.workItem ? [inputs.workItem.kind, String(inputs.workItem.number), inputs.workItem.author, inputs.workItem.url] : [])
   ];
   for (const value of trustedDynamicValues) {
@@ -1887,8 +2139,10 @@ function renderRunContext(inputs: PromptInputs): string {
     `- kind: ${inputs.run.kind}`,
     `- purpose: ${inputs.run.purpose}`,
     `- triggeredBy: ${inputs.run.triggeredBy}`,
+    `- worker profile: ${inputs.selection.profile}`,
     `- effort: ${inputs.effort}`,
-    `- model tier: ${inputs.selection.modelTier}`
+    `- model tier: ${inputs.selection.modelTier}`,
+    `- repository overlay: ${inputs.selection.repositoryOverlays.join(", ") || "none"}`
   ].join("\n");
 }
 
@@ -1994,13 +2248,15 @@ function composePromptFromValidated(
     return content;
   };
 
+  validateSelectionAgainstProfile(inputs, manifest);
   const role = artifactById(manifest, inputs.selection.role, "role");
   const skills = inputs.selection.skills.map((id) => artifactById(manifest, id, "skill"));
   const tier = artifactById(manifest, `tier/${inputs.selection.modelTier}`, "tier");
   const overlays = inputs.selection.overlays.map((id) => artifactById(manifest, id, "overlay"));
+  const repositoryOverlays = inputs.selection.repositoryOverlays.map((id) => artifactById(manifest, id, "overlay"));
   const output = artifactById(manifest, inputs.output.id, "output");
 
-  const composed = [role, ...skills, tier, ...overlays, output];
+  const composed = [role, ...skills, tier, ...overlays, ...repositoryOverlays, output];
   for (const artifact of composed) {
     for (const required of artifact.requiredVariables) {
       if (!hasInputValue(inputs, required)) {
@@ -2028,6 +2284,14 @@ function composePromptFromValidated(
   if (overlays.length > 0) {
     sections.push(
       ["## Overlays", ...overlays.map((overlay) => substitute(contentFor(overlay), inputs).trimEnd())].join("\n\n")
+    );
+  }
+  if (repositoryOverlays.length > 0) {
+    sections.push(
+      [
+        "## Repository-type overlay",
+        ...repositoryOverlays.map((overlay) => substitute(contentFor(overlay), inputs).trimEnd())
+      ].join("\n\n")
     );
   }
   sections.push(renderRepositoryContext(inputs));
@@ -2088,6 +2352,7 @@ export function verifySnapshots(root: string = defaultPromptsRoot()): void {
       ...inputs.selection.skills,
       `tier/${inputs.selection.modelTier}`,
       ...inputs.selection.overlays,
+      ...inputs.selection.repositoryOverlays,
       inputs.output.id
     ].sort();
     const declaredCovers = [...fixture.covers].sort();

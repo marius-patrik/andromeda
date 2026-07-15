@@ -8,18 +8,18 @@ the canonical Agent OS runtime through the `agents` launcher (issue #24).
 
 ## Layout
 
-- `manifest.json` — the versioned, checksummed index of every artifact,
-  typed fixture, and generated snapshot.
+- `manifest.json` — the versioned, checksummed index of every artifact, the
+  authoritative worker profiles, typed fixtures, and generated snapshots.
 - `manifest.recovery.json` — the durable, structurally validated recovery copy
   for an interrupted write that leaves `manifest.json` malformed.
-- `roles/` — role prompts (planner, implementer, issue drafter/reviewer, PR
-  reviewer/fixer, releaser, verifier, auditor, L0 orchestrator, low mechanic,
-  and explicit max escalation).
+- `roles/` — role prompts (planner, implementer, issue drafter/reviewer/fixer,
+  PR reviewer/fixer, pointer updater, releaser, verifier, auditor, L0
+  orchestrator, low mechanic, and explicit max escalation).
 - `skills/` — reusable capability snippets composed into a role.
 - `tiers/` — logical model tiers (`low`, `medium`, `high`, `max`) describing
   behavior and output only; tier selection remains independent from effort.
-- `overlays/` — cross-cutting context (GitHub control plane, Agent OS boundary,
-  token economy).
+- `overlays/` — cross-cutting control boundaries plus explicit repository-type
+  and workflow overlays.
 - `outputs/` — versioned output-schema artifacts selected by typed ID.
 - `fixtures/compose/` — typed composition inputs, one per composable role.
 - `fixtures/snapshots/` — deterministic composed output for each fixture.
@@ -41,10 +41,12 @@ A prompt is composed deterministically (no model in the loop) from typed inputs:
 Typed inputs are `run` (including a typed kind and purpose), `repository`,
 `workItem` (issue/PR or explicit null), `draftIntent` (required only for an
 interactive `draft-issue` run and otherwise explicit null), `policy`
-(immutable), `validation`, `effort` (independent effort), `selection` (role +
-skills + `modelTier` + overlays), `verified` (verified state), and `output.id`
-(a manifest-owned output schema). The logical model tier and effort describe
-behavior only.
+(immutable), `validation`, `effort` (independent effort), `selection` (profile +
+role + ordered skills + `modelTier` + fixed overlays + exactly one
+allowed repository-type overlay), `verified` (verified state), and `output.id`
+(a manifest-owned output schema). The manifest profile is authoritative for
+that complete selection. The logical model tier and effort describe behavior
+only.
 
 Purpose is fail-closed: low is reserved for trivial mechanical work, medium for
 implementation/iterative review/fixes/verification, high for planning,
@@ -83,6 +85,9 @@ compose until its semantics are bound explicitly.
 
 - Every artifact declares a semver `version` and a `sha256:` `checksum` of its
   normalized content in `manifest.json`.
+- Every worker profile declares its run kind, purpose, role, ordered skills,
+  logical tier, fixed workflow overlays, allowed repository overlays, and output
+  as one versioned fail-closed selection.
 - Every typed fixture declares a semver version plus checksums for both its JSON
   input and generated snapshot. Output schemas are normal manifest artifacts,
   so they carry the same version/checksum/coverage guarantees as roles.
@@ -120,5 +125,5 @@ compose until its semantics are bound explicitly.
   checksum/version mismatch, an unknown or raw untrusted variable, a missing
   required input, an untrusted-data delimiter escape, missing fixture coverage,
   or any provider CLI mechanic, auth path, or concrete runtime command.
-- Prompt content is filled in by follow-up issue #50; this scaffold provides the
-  structure, contract, and validation harness.
+- Issue #50 supplies the complete role, skill, tier, repository-type, workflow,
+  and output content. Runtime integration remains owned by follow-up issue #51.

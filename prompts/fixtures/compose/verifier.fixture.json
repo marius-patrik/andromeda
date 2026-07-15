@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "run": {
     "id": "run-20260713-verify-080",
     "kind": "verify",
@@ -23,21 +23,49 @@
   "draftIntent": null,
   "policy": {
     "branching": "One worker = one issue = one branch = one PR; branch df/<issue>-<slug> from dev.",
-    "labels": ["P0", "P1", "P2", "df:ready", "df:running", "df:blocked"],
+    "labels": [
+      "P0",
+      "P1",
+      "P2",
+      "df:ready",
+      "df:running",
+      "df:blocked"
+    ],
     "enforcement": "All merges require green CI and the configured review gate; never force-push or bypass gates."
   },
   "validation": {
-    "commands": ["npm run check"]
+    "commands": [
+      "npm run check"
+    ]
   },
   "effort": "low",
   "verified": {
-    "facts": ["The PR branch is pushed and CI is configured."]
+    "facts": [
+      "The PR branch is pushed and CI is configured."
+    ]
   },
-  "output": { "id": "output/verifier" },
+  "output": {
+    "id": "output/verifier"
+  },
   "selection": {
+    "profile": "profile/verifier",
     "role": "role/verifier",
-    "skills": ["skill/verification-first", "skill/untrusted-input-handling"],
+    "skills": [
+      "skill/worker-claim-verification",
+      "skill/closure-verification",
+      "skill/untrusted-input-handling",
+      "skill/evidence-status-reporting",
+      "skill/token-economy",
+      "skill/canonical-agent-execution"
+    ],
     "modelTier": "medium",
-    "overlays": ["overlay/github-control-plane"]
+    "overlays": [
+      "overlay/agent-os-boundary",
+      "overlay/github-control-plane",
+      "overlay/work"
+    ],
+    "repositoryOverlays": [
+      "overlay/go"
+    ]
   }
 }

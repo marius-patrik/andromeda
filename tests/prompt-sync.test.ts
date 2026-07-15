@@ -246,8 +246,8 @@ test("sync restores a partial live manifest from its durable recovery copy", asy
     writeFileSync(join(liveRoot, "manifest.json"), '{"schemaVersion": 1,');
 
     const result = await syncPromptLibrary(liveRoot);
-    assert.equal(result.artifactCount, 35);
-    assert.equal(result.fixtureCount, 14);
+    assert.equal(result.artifactCount, 62);
+    assert.equal(result.fixtureCount, 16);
     assert.equal(loadManifest(liveRoot).library, "darkfactory-prompts");
     assert.doesNotThrow(() => verifySnapshots(liveRoot));
   } finally {

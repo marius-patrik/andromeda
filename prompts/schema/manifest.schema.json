@@ -4,12 +4,12 @@
   "title": "DarkFactory prompt library manifest",
   "description": "Contract for prompts/manifest.json. Enforced at runtime by src/prompts.ts (validateManifest); this document is the human-readable reference.",
   "type": "object",
-  "required": ["schemaVersion", "library", "contractVersion", "artifacts", "fixtures"],
+  "required": ["schemaVersion", "library", "contractVersion", "artifacts", "profiles", "fixtures"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": {
-      "const": 1,
-      "description": "Manifest schema version. Must be 1."
+      "const": 2,
+      "description": "Manifest schema version. Must be 2."
     },
     "library": {
       "const": "darkfactory-prompts",
@@ -25,6 +25,11 @@
       "minItems": 1,
       "items": { "$ref": "#/$defs/artifact" }
     },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/profile" }
+    },
     "fixtures": {
       "type": "array",
       "minItems": 1,
@@ -32,6 +37,55 @@
     }
   },
   "$defs": {
+    "profile": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "runKind",
+        "purpose",
+        "role",
+        "skills",
+        "modelTier",
+        "overlays",
+        "allowedRepositoryOverlays",
+        "requiresRepositoryOverlay",
+        "output"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^profile/[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$"
+        },
+        "runKind": {
+          "enum": ["plan", "orchestrate", "implement", "draft-issue", "review-issue", "fix-issue", "review-pr", "fix-pr", "update-pointer", "release", "verify", "audit", "mechanic", "escalate"]
+        },
+        "purpose": {
+          "enum": ["planning", "orchestration", "implementation", "interactive-issue-drafting", "iterative-review", "final-review", "review-fix", "release", "verification", "audit", "trivial-mechanical", "explicit-escalation"]
+        },
+        "role": { "type": "string", "pattern": "^role/[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "skills": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^skill/[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "uniqueItems": true
+        },
+        "modelTier": { "enum": ["low", "medium", "high", "max"] },
+        "overlays": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^overlay/[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "uniqueItems": true
+        },
+        "allowedRepositoryOverlays": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^overlay/[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "uniqueItems": true
+        },
+        "requiresRepositoryOverlay": { "type": "boolean" },
+        "output": { "type": "string", "pattern": "^output/[a-z0-9]+(?:-[a-z0-9]+)*$" }
+      }
+    },
     "artifact": {
       "type": "object",
       "required": ["id", "kind", "path", "version", "checksum", "variables", "requiredVariables"],

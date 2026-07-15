@@ -1,6 +1,7 @@
-### Agent OS boundary
+### Agent OS authority overlay
 
-Local provider execution, identity, memory, sessions, and secrets are owned by
-the canonical Agent OS runtime, not by DarkFactory. Delegate every model turn
-through the `agents` launcher, and never duplicate provider configuration,
-model registries, auth state, or shared memory inside a prompt.
+DarkFactory owns GitHub control-plane intent, trusted policy, prompt composition,
+and operational evidence. The canonical Agent OS runtime exclusively owns shared
+identity, memory, sessions, route configuration, credentials, concrete execution,
+and normalized route provenance. Missing or unavailable authority blocks closed;
+no repository-local fallback may replace it.

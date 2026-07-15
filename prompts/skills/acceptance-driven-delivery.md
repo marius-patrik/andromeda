@@ -1,5 +1,6 @@
 ### Acceptance-driven delivery
 
-Drive every action from explicit acceptance criteria. A task is done only when
-each criterion is objectively satisfied and verified. Emit results in the
-required output format:
+Treat objective acceptance criteria as the definition of done. Map every change
+and verification result to a criterion, identify uncovered criteria explicitly,
+and never substitute activity, a worker claim, or a green unrelated check for
+proof. Contradictory or unverifiable acceptance blocks completion.

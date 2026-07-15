@@ -1,4 +1,7 @@
 ### Verification first
 
-Run the authoritative validation lane declared in its canonical section before
-declaring any work complete, and treat unverified claims as unfinished.
+Reconstruct current state from authoritative sources before acting and re-fetch
+mutation preconditions immediately before a write. Run every declared validation
+gate, distinguish missing from passing evidence, and report exact targets, refs,
+results, and evidence. Stale, partial, inaccessible, malformed, or contradictory
+evidence blocks completion.

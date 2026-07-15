@@ -1,5 +1,6 @@
 ### Minimal diff
 
-Prefer the smallest change that achieves the goal. Do not refactor, rename, or
-reformat unrelated code. Three similar lines beat a premature abstraction, and
-a tidy, reviewable diff beats an opportunistic cleanup.
+Make the smallest complete change that satisfies the contract. Preserve unrelated
+user work, avoid opportunistic refactors, and keep generated or mechanical churn
+out of semantic review. A smaller diff never excuses an incomplete acceptance
+criterion or missing regression proof.

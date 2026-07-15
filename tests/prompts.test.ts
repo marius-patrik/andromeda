@@ -77,8 +77,9 @@ function publicationGeneration(
 
 test("manifest validates: every reference exists, is versioned, checksummed, and covered", () => {
   const manifest = validateManifest(realRoot);
-  assert.equal(manifest.schemaVersion, 1);
+  assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.library, "darkfactory-prompts");
+  assert.equal(manifest.profiles.length, 16);
 
   for (const role of REQUIRED_ROLES) {
     assert.ok(manifest.artifacts.some((artifact) => artifact.id === role), `missing ${role}`);
@@ -128,6 +129,61 @@ test("manifest validates: every reference exists, is versioned, checksummed, and
 
 test("snapshots are deterministic and drift-free", () => {
   assert.doesNotThrow(() => verifySnapshots(realRoot));
+});
+
+test("worker profiles own exact role, skill, tier, overlay, and output selections", () => {
+  const manifest = validateManifest(realRoot);
+  const coveredProfiles = new Set<string>();
+  for (const fixture of manifest.fixtures) {
+    const inputs = loadFixture(realRoot, fixture.path);
+    const profile = manifest.profiles.find((entry) => entry.id === inputs.selection.profile);
+    assert.ok(profile, `profile exists for ${fixture.id}`);
+    coveredProfiles.add(profile.id);
+    assert.equal(inputs.run.kind, profile.runKind);
+    assert.equal(inputs.run.purpose, profile.purpose);
+    assert.equal(inputs.selection.role, profile.role);
+    assert.deepEqual(inputs.selection.skills, profile.skills);
+    assert.equal(inputs.selection.modelTier, profile.modelTier);
+    assert.deepEqual(inputs.selection.overlays, profile.overlays);
+    assert.ok(profile.allowedRepositoryOverlays.includes(inputs.selection.repositoryOverlays[0]));
+    assert.equal(inputs.output.id, profile.output);
+  }
+  assert.deepEqual([...coveredProfiles].sort(), manifest.profiles.map((entry) => entry.id).sort());
+
+  const drifted = loadFixture(realRoot, "fixtures/compose/implementer.fixture.json");
+  drifted.selection.skills = drifted.selection.skills.slice(1);
+  assert.throws(() => composePrompt(drifted, realRoot), /must equal the profile selection/);
+
+  const missingRepositoryType = loadFixture(realRoot, "fixtures/compose/implementer.fixture.json");
+  missingRepositoryType.selection.repositoryOverlays = [];
+  assert.throws(() => composePrompt(missingRepositoryType, realRoot), /requires exactly one repository overlay/);
+});
+
+test("manifest worker profiles fail closed on semantic and overlay drift", async () => {
+  await withLibraryCopy(async (root) => {
+    await editManifest(root, (manifest) => {
+      const profile = manifest.profiles.find((entry: any) => entry.id === "profile/implementer");
+      profile.modelTier = "high";
+    });
+    assert.throws(() => validateManifest(root), /wrong tier/);
+  });
+  await withLibraryCopy(async (root) => {
+    await editManifest(root, (manifest) => {
+      const profile = manifest.profiles.find((entry: any) => entry.id === "profile/implementer");
+      profile.overlays.push("overlay/bun-node");
+    });
+    assert.throws(() => validateManifest(root), /misclassifies overlay|duplicates a fixed overlay/);
+  });
+  await withLibraryCopy(async (root) => {
+    await editManifest(root, (manifest) => {
+      const profile = manifest.profiles.find((entry: any) => entry.id === "profile/releaser");
+      profile.allowedRepositoryOverlays.push("overlay/main-only-private-data");
+    });
+    assert.throws(
+      () => validateManifest(root),
+      /cannot combine a main-only private-data repository with release or autoupdate workflow policy/
+    );
+  });
 });
 
 test("every required role composes from a fixture without invoking a model", () => {
@@ -527,7 +583,7 @@ test("manifest validation rejects a missing referenced file", async () => {
 test("manifest rejects a wrong schemaVersion", async () => {
   await withLibraryCopy(async (root) => {
     await editManifest(root, (manifest) => {
-      manifest.schemaVersion = 2;
+      manifest.schemaVersion = 1;
     });
     assert.throws(() => loadManifest(root), /schemaVersion/);
   });
@@ -694,11 +750,11 @@ test("manifest validation rejects raw untrusted variable usage in an artifact", 
 
 test("manifest validation rejects concrete runtime commands in an artifact", async () => {
   await withLibraryCopy(async (root) => {
-    const rel = "overlays/token-economy.md";
+    const rel = "skills/token-economy.md";
     const content = "### Token economy\n\nDispatch with agents run now.\n";
     await writeFile(join(root, rel), content);
     await editManifest(root, (manifest) => {
-      const artifact = manifest.artifacts.find((entry: any) => entry.id === "overlay/token-economy");
+      const artifact = manifest.artifacts.find((entry: any) => entry.id === "skill/token-economy");
       artifact.checksum = computeChecksum(content);
     });
     assert.throws(() => validateManifest(root), /forbidden content/);
@@ -816,7 +872,8 @@ test("manifest paths stay in their owned roots and cannot alias docs or artifact
   });
   await withLibraryCopy(async (root) => {
     await editManifest(root, (manifest) => {
-      manifest.artifacts[0].path = "outputs/planner.md";
+      const planner = manifest.artifacts.find((entry: any) => entry.id === "role/planner");
+      planner.path = "outputs/planner.md";
     });
     assert.throws(() => loadManifest(root), /under roles/);
   });
@@ -1238,11 +1295,12 @@ test("composition follows the canonical policy-to-output order", () => {
   const inputs = loadFixture(realRoot, "fixtures/compose/verifier.fixture.json");
   const prompt = composePrompt(inputs, realRoot);
   const positions = [
-    prompt.indexOf("# Verifier"),
+    prompt.indexOf("# Verification adjudicator"),
     prompt.indexOf("## Immutable policy (trusted)"),
     prompt.indexOf(`## Model tier: ${inputs.selection.modelTier}`),
     prompt.indexOf(`## Work item (${inputs.workItem?.kind}`),
     prompt.indexOf("## Overlays"),
+    prompt.indexOf("## Repository-type overlay"),
     prompt.indexOf("## Validation"),
     prompt.indexOf("## Verified state (trusted)"),
     prompt.indexOf("## Required output")

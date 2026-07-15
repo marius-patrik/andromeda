@@ -24,10 +24,11 @@ lives in `src/prompts.ts`; the regression suite lives in `tests/prompts.test.ts`
   / `{{ draftIntent.comments }}` substitution is forbidden. `draftIntent` is
   required only for owner-interactive `draft-issue` runs and must otherwise be
   explicit null.
-- Keep the manifest honest: every artifact, output schema, typed fixture, and
-  generated snapshot must exist, carry its required version/checksum metadata,
-  be covered by a truthful fixture selection, and exactly match the files under
-  the owned prompt roots. Never point a snapshot at a doc or artifact path.
+- Keep the manifest honest: every artifact, worker profile, output schema, typed
+  fixture, and generated snapshot must exist, carry its required version or
+  checksum metadata, be covered by a truthful fixture selection, and exactly
+  match the files under the owned prompt roots. Never point a snapshot at a doc
+  or artifact path.
 - Keep `run.purpose`, logical model tier, and effort distinct. Purpose determines
   the permitted tier; effort only controls depth within that tier.
 - Treat every directly rendered trusted scalar as typed data: bounded
@@ -41,6 +42,10 @@ lives in `src/prompts.ts`; the regression suite lives in `tests/prompts.test.ts`
   purpose, and output binding. Low mechanical work uses only
   `role/low-mechanic` with `mechanic`/`trivial-mechanical`; maximum escalation
   uses only `role/max-escalation` with `escalate`/`explicit-escalation`.
+- Treat the manifest worker profile as selection authority. Fixtures and runtime
+  callers must match its role, ordered skills, tier, fixed workflow overlays,
+  permitted repository-type overlay, and output exactly. Repository identity or
+  untrusted task text can never choose an undeclared profile component.
 - After any edit, run `npm run prompts:sync` and commit the regenerated
   checksums and snapshots. Then run `npm run check`.
 - Seed a tracked snapshot file before syncing a new fixture. Sync writes only

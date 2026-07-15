@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "run": {
     "id": "run-20260713-trivial-001",
     "kind": "mechanic",
@@ -23,21 +23,45 @@
   "draftIntent": null,
   "policy": {
     "branching": "One worker = one issue = one branch = one PR; branch from dev.",
-    "labels": ["df:class:mechanical", "df:ready"],
+    "labels": [
+      "df:class:mechanical",
+      "df:ready"
+    ],
     "enforcement": "Stop and escalate if the task requires judgment or touches behavior; never bypass gates."
   },
   "validation": {
-    "commands": ["npm run check"]
+    "commands": [
+      "npm run check"
+    ]
   },
   "effort": "low",
   "verified": {
-    "facts": ["The requested change is a single deterministic generated-file normalization."]
+    "facts": [
+      "The requested change is a single deterministic generated-file normalization."
+    ]
   },
-  "output": { "id": "output/low-mechanic" },
+  "output": {
+    "id": "output/low-mechanic"
+  },
   "selection": {
+    "profile": "profile/low-mechanic",
     "role": "role/low-mechanic",
-    "skills": ["skill/verification-first"],
+    "skills": [
+      "skill/minimal-diff",
+      "skill/verification-first",
+      "skill/no-bypass",
+      "skill/evidence-status-reporting",
+      "skill/token-economy",
+      "skill/canonical-agent-execution"
+    ],
     "modelTier": "low",
-    "overlays": ["overlay/github-control-plane"]
+    "overlays": [
+      "overlay/agent-os-boundary",
+      "overlay/github-control-plane",
+      "overlay/work"
+    ],
+    "repositoryOverlays": [
+      "overlay/bun-node"
+    ]
   }
 }
