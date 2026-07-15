@@ -278,6 +278,29 @@ describe("canonical model execution route and receipt", () => {
     expect(await Bun.file(existing.receiptPath).text()).toBe("owner data");
   });
 
+  test("receipt containment accepts a lexical workdir alias but rejects a linked parent escape", async () => {
+    const { root, state } = await fixture();
+    const aliasContainer = await mkdtemp(path.join(os.tmpdir(), "agents-receipt-alias-"));
+    roots.push(aliasContainer);
+    const workdirAlias = path.join(aliasContainer, "workdir");
+    await symlink(root, workdirAlias, process.platform === "win32" ? "junction" : "dir");
+
+    const aliasedReceiptDir = path.join(workdirAlias, ".darkfactory");
+    const aliased = request(workdirAlias, aliasedReceiptDir, "medium");
+    const accepted = await executeModelRequest(state, aliased, successfulDependencies());
+    expect(accepted.ok).toBe(true);
+    expect(await Bun.file(path.join(root, ".darkfactory", path.basename(aliased.receiptPath))).exists()).toBe(true);
+
+    const outside = path.join(aliasContainer, "outside");
+    await mkdir(outside);
+    const linkedParent = path.join(root, "linked-receipts");
+    await symlink(outside, linkedParent, process.platform === "win32" ? "junction" : "dir");
+    const escaped = request(root, linkedParent, "high");
+    await expect(executeModelRequest(state, escaped, successfulDependencies())).rejects.toThrow(
+      "execution receipt parent is outside the execution workdir",
+    );
+  });
+
   test("provider version normalization emits the exact receipt-safe version token", () => {
     expect(receiptProviderVersion("codex-cli 0.144.1")).toBe("0.144.1");
     expect(receiptProviderVersion("2.1.203 (Claude Code)")).toBe("2.1.203");

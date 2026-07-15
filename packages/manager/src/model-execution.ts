@@ -275,10 +275,11 @@ class ReceiptReservation {
     workdir: string,
     pending: AgentExecutionReceipt,
   ): Promise<ReceiptReservation> {
-    const canonicalWorkdir = await realpath(requiredAbsolutePath(workdir, "execution workdir")).catch(() => null);
+    const requestedWorkdir = requiredAbsolutePath(workdir, "execution workdir");
+    const canonicalWorkdir = await realpath(requestedWorkdir).catch(() => null);
     if (!canonicalWorkdir) throw new Error("execution workdir is unavailable");
     const target = requiredAbsolutePath(receiptPath, "execution receipt path");
-    if (!containsPath(canonicalWorkdir, target) || target === canonicalWorkdir) {
+    if (!containsPath(requestedWorkdir, target) || target === requestedWorkdir) {
       throw new Error("execution receipt path must be inside the execution workdir");
     }
     const parent = path.dirname(target);
