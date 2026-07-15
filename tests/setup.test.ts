@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { convergeRepositorySettings, SetupOwnerActionRequired } from "../src/setup.js";
+import { convergeBranchProtection, convergeRepositorySettings, SetupOwnerActionRequired } from "../src/setup.js";
 
 const repo = { owner: "marius-patrik", repo: "example" };
 const labels = [{ name: "df:ready", color: "0E8A16", description: "Machine-evaluated" }];
@@ -157,6 +157,43 @@ test("setup fails closed when branch-protection postconditions do not materializ
   );
 });
 
+test("setup replaces the retired Codex Review gate with exact DarkFactory Autoreview evidence", async () => {
+  const legacy = {
+    ...protection(),
+    required_status_checks: {
+      strict: true,
+      checks: [
+        { context: "Validate", app_id: 15368 },
+        { context: "Codex Review", app_id: 15368 },
+        { context: "Repository policy", app_id: 42 }
+      ]
+    }
+  };
+  let observed = legacy;
+  const writes: Record<string, unknown>[] = [];
+  const github = requester([], (route, parameters) => {
+    if (route === "GET /repos/{owner}/{repo}/branches/{branch}/protection") return observed;
+    if (route === "PUT /repos/{owner}/{repo}/branches/{branch}/protection") {
+      writes.push(parameters);
+      observed = {
+        ...legacy,
+        required_status_checks: parameters.required_status_checks as typeof legacy.required_status_checks
+      };
+      return {};
+    }
+    throw new Error(`unexpected ${route}`);
+  });
+
+  const receipt = await convergeBranchProtection(github, repo, "dev");
+  assert.equal(receipt.status, "applied");
+  const checks = (writes[0].required_status_checks as { checks: Array<{ context: string; app_id: number }> }).checks;
+  assert.deepEqual(checks, [
+    { context: "DarkFactory Autoreview", app_id: 15368 },
+    { context: "Repository policy", app_id: 42 },
+    { context: "Validate", app_id: 15368 }
+  ]);
+});
+
 function requester(
   calls: Array<{ route: string; parameters: Record<string, unknown> }>,
   handle: (route: string, parameters: Record<string, unknown>) => unknown
@@ -171,7 +208,7 @@ function requester(
 
 function protection() {
   return {
-    required_status_checks: { strict: true, checks: [{ context: "Validate", app_id: 15368 }, { context: "Codex Review", app_id: 15368 }] },
+    required_status_checks: { strict: true, checks: [{ context: "Validate", app_id: 15368 }, { context: "DarkFactory Autoreview", app_id: 15368 }] },
     enforce_admins: { enabled: true },
     allow_force_pushes: { enabled: false },
     allow_deletions: { enabled: false }

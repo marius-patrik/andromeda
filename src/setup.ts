@@ -214,21 +214,17 @@ export async function convergeBranchProtection(
   }
 
   const existingChecks = requiredChecks(protection?.required_status_checks);
-  const reviewContext = existingChecks.find((check) => check.context === "DarkFactory Autoreview")
-    ? "DarkFactory Autoreview"
-    : existingChecks.find((check) => check.context === "Codex Review")
-      ? "Codex Review"
-      : "Codex Review";
   const desiredChecks = dedupeChecks([
-    ...existingChecks,
+    ...existingChecks.filter((check) => !["Validate", "Codex Review", "DarkFactory Autoreview"].includes(check.context)),
     { context: "Validate", app_id: 15368 },
-    { context: reviewContext, app_id: 15368 }
+    { context: "DarkFactory Autoreview", app_id: 15368 }
   ]);
   const currentSafe = protection
     && recordOrNull(protection.enforce_admins)?.enabled === true
     && recordOrNull(protection.allow_force_pushes)?.enabled === false
     && recordOrNull(protection.allow_deletions)?.enabled === false
     && recordOrNull(protection.required_status_checks)?.strict === true
+    && existingChecks.length === desiredChecks.length
     && desiredChecks.every((desired) => existingChecks.some((current) => current.context === desired.context && current.app_id === desired.app_id));
   if (currentSafe) return receipt("branch-protection", branch, "current", "Required gates and non-bypass controls match policy.");
 
