@@ -82,10 +82,10 @@ test("release closure planning paginates commit-associated pull requests", async
       if (method === "GET" && path.includes("/compare/")) {
         return { total_commits: 1, commits: [{ sha: SHA.merge, commit: { message: "implementation" } }] };
       }
-      if (method === "GET" && path.includes(`/commits/${SHA.merge}/pulls`) && path.includes("page=1")) {
+      if (method === "GET" && path.includes(`/commits/${SHA.merge}/pulls`) && /[?&]page=1$/.test(path)) {
         return Array.from({ length: 100 }, () => ({ body: "no closing reference" }));
       }
-      if (method === "GET" && path.includes(`/commits/${SHA.merge}/pulls`) && path.includes("page=2")) {
+      if (method === "GET" && path.includes(`/commits/${SHA.merge}/pulls`) && /[?&]page=2$/.test(path)) {
         return [{ body: "Closes #77" }];
       }
       throw new Error(`unexpected mocked request: ${method} ${path}`);
