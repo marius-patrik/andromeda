@@ -24,7 +24,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const DOCTOR_SCHEMA_VERSION = 1;
+export const DOCTOR_SCHEMA_VERSION = 2;
+export const DOCTOR_REPAIR_CLASSES = ["auto", "pr", "owner", "blocked"];
 export const DOC_PATHS = ["PRD.md", "AGENTS.md", ".agents/.project/STATUS.md", ".agents/.project/PROJECT.md"];
 export const DOC_STALE_DAYS = 90;
 export const STALE_PR_DAYS = 7;
@@ -252,6 +253,7 @@ async function auditTargetRepository(github, repository, metadata, options) {
   findings.push(...await auditRootLayout(github, repository, defaultBranch, tree));
   findings.push(...await auditRuntimeAuthority(github, repository, defaultBranch, options.controlRepo));
   findings.push(...await auditPrerequisites(github, repository, defaultBranch, options));
+  findings.push(...await auditLabelTaxonomy(github, repository, options.controlRepo));
   findings.push(...auditIssueLane(repository, issues, { now: options.now }));
   findings.push(...await auditPrdDrift(github, repository, defaultBranch, openIssues));
   findings.push(...await auditDocStaleness(repository, metadata, defaultBranch, github));
@@ -890,6 +892,44 @@ export async function auditPrerequisites(github, repository, ref, options = {}) 
   return findings;
 }
 
+export async function auditLabelTaxonomy(github, repository, controlRepo = CONTROL_REPO) {
+  const source = await getOptionalFileContent(github, controlRepo, "managed-repository/.darkfactory/labels.json", "main")
+    ?? await getOptionalFileContent(github, controlRepo, ".darkfactory/labels.json", "main");
+  if (!source) {
+    return [doctorFinding("label-taxonomy-source-missing", "configuration prerequisites", "Canonical label taxonomy is missing or inaccessible.", { severity: "critical" })];
+  }
+
+  let policy;
+  try {
+    policy = JSON.parse(source);
+  } catch (error) {
+    return [doctorFinding("label-taxonomy-source-malformed", "configuration prerequisites", `Canonical label taxonomy is invalid JSON: ${error.message || String(error)}`, { severity: "critical" })];
+  }
+  if (policy?.schemaVersion !== 1 || !Array.isArray(policy.labels)) {
+    return [doctorFinding("label-taxonomy-source-invalid", "configuration prerequisites", "Canonical label taxonomy must use schemaVersion 1 with a labels array.", { severity: "critical" })];
+  }
+
+  const desired = new Map();
+  for (const label of policy.labels) {
+    if (typeof label?.name !== "string" || !/^[0-9a-f]{6}$/i.test(label?.color || "") || typeof label?.description !== "string") {
+      return [doctorFinding("label-taxonomy-source-invalid", "configuration prerequisites", "Canonical label taxonomy contains a malformed definition.", { severity: "critical" })];
+    }
+    desired.set(label.name.toLowerCase(), label);
+  }
+
+  const findings = [];
+  const actual = new Map((await listRepositoryLabels(github, repository)).map((label) => [label.name.toLowerCase(), label]));
+  for (const [key, label] of desired) {
+    const observed = actual.get(key);
+    if (!observed) {
+      findings.push(doctorFinding(`label-${slug(label.name)}-missing`, "configuration prerequisites", `Required label \`${label.name}\` is missing.`, { severity: "error" }));
+    } else if (observed.color.toLowerCase() !== label.color.toLowerCase() || observed.description !== label.description) {
+      findings.push(doctorFinding(`label-${slug(label.name)}-drift`, "configuration prerequisites", `Label \`${label.name}\` differs from the canonical color or description.`, { severity: "warning" }));
+    }
+  }
+  return findings;
+}
+
 export function auditIssueLane(repository, issues, options = {}) {
   const findings = [];
   const now = new Date(options.now || Date.now()).getTime();
@@ -909,6 +949,26 @@ export function auditIssueLane(repository, issues, options = {}) {
   const blockerGraph = new Map();
 
   for (const issue of open) {
+    const labels = new Set((issue.labels || []).map((label) => typeof label === "string" ? label : label?.name).filter(Boolean));
+    if (labels.has("df:ready") && ["df:running", "df:blocked", "df:done", "df:ask-owner", "df:no-dispatch"].some((label) => labels.has(label))) {
+      findings.push(doctorFinding(`issue-${issue.number}-stale-ready`, "issue lane", `Issue #${issue.number} has stale \`df:ready\` beside a categorical hold or terminal label.`, {
+        severity: "error",
+        evidence: issue.html_url ? [{ label: `Issue #${issue.number}`, url: issue.html_url }] : [],
+        repair: ["Revoke df:ready and run the machine evaluator after the cause is resolved."]
+      }));
+    }
+    const recordClass = labels.has("milestone")
+      || labels.has("decision")
+      || labels.has("deferred")
+      || labels.has("dashboard")
+      || /<!--\s*(?:df-dashboard:|darkfactory:owner-executed|darkfactory:decision-record)/i.test(String(issue.body || ""));
+    if (recordClass && !labels.has("df:no-dispatch")) {
+      findings.push(doctorFinding(`issue-${issue.number}-no-dispatch-missing`, "issue lane", `Record-class issue #${issue.number} is missing categorical \`df:no-dispatch\`.`, {
+        severity: "error",
+        evidence: issue.html_url ? [{ label: `Issue #${issue.number}`, url: issue.html_url }] : [],
+        repair: ["Apply df:no-dispatch from the canonical taxonomy."]
+      }));
+    }
     const title = normalizeIssueTitle(issue.title || "");
     if (title) byTitle.set(title, [...(byTitle.get(title) || []), issue]);
     const marker = ownershipMarker(issue.body || "");
@@ -1352,14 +1412,56 @@ export function dedupeFindings(findings) {
 }
 
 export function doctorFinding(id, category, message, options = {}) {
+  const repairClass = options.repairClass ?? classifyDoctorRepairClass(id, category, message);
+  if (!DOCTOR_REPAIR_CLASSES.includes(repairClass)) {
+    throw new Error(`Unknown repository-doctor repair class: ${repairClass}`);
+  }
   return {
     id: slug(id),
     severity: options.severity || "warning",
     category,
     message,
+    repair_class: repairClass,
     evidence: options.evidence || [],
     repair: options.repair || []
   };
+}
+
+/**
+ * Classify the authorization boundary for a finding without performing a
+ * repair. Unknown or incomplete evidence is always blocked. The remaining
+ * categories are deliberately conservative: direct settings/runtime
+ * convergence is `auto`, protected-file changes are `pr`, and ambiguous
+ * human-owned state is `owner`.
+ */
+export function classifyDoctorRepairClass(id, category, message) {
+  const text = `${id} ${category} ${message}`.toLowerCase();
+  if (/\b(unobservable|unknown|inaccessible|malformed|unavailable|incomplete|truncated|ambiguous)\b/.test(text)) {
+    return "blocked";
+  }
+  if (/\b(required secret|credential|github app not installed)\b/.test(text)) return "owner";
+  if (["branch protection", "configuration prerequisites", "runner health"].includes(category)) return "auto";
+  if ([
+    "managed file drift",
+    "repository layout",
+    "product layout",
+    "product naming",
+    "state boundary",
+    "repository hygiene",
+    "nested repository state",
+    "runtime authority",
+    "release lane",
+    "branch convergence",
+    "issue lane",
+    "PRD drift",
+    "doc staleness",
+    "authority naming",
+    "submodule metadata",
+    "submodule pointer",
+    "worker isolation"
+  ].includes(category)) return "pr";
+  if (["branch hygiene", "pull request health", "local checkout"].includes(category)) return "owner";
+  return "owner";
 }
 
 export function doctorIssueBody(targetRepo, finding) {
@@ -1378,6 +1480,7 @@ export function doctorIssueBody(targetRepo, finding) {
     `Severity: \`${finding.severity}\``,
     `Priority: \`${priorityForFinding(finding)}\``,
     `Category: \`${finding.category}\``,
+    `Repair class: \`${finding.repair_class}\``,
     "",
     "## Observed State",
     "",
@@ -1562,6 +1665,24 @@ async function listRepositoryLabelNames(github, repository) {
     }
     for (const label of batch) {
       if (typeof label?.name === "string" && label.name.trim()) labels.add(label.name);
+    }
+    if (batch.length < 100) break;
+  }
+  return labels;
+}
+
+async function listRepositoryLabels(github, repository) {
+  const labels = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const batch = await github.request("GET", `/repos/${repoName(repository)}/labels?per_page=100&page=${page}`);
+    if (!Array.isArray(batch)) {
+      throw new Error(`Repository-doctor report label preflight returned a malformed payload for ${repoName(repository)}.`);
+    }
+    for (const label of batch) {
+      if (typeof label?.name !== "string" || !label.name.trim() || typeof label?.color !== "string") {
+        throw new Error(`Repository-doctor label enumeration returned a malformed label for ${repoName(repository)}.`);
+      }
+      labels.push({ name: label.name, color: label.color, description: typeof label.description === "string" ? label.description : "" });
     }
     if (batch.length < 100) break;
   }

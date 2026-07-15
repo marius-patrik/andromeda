@@ -3,10 +3,22 @@ import "dotenv/config";
 
 import { App } from "@octokit/app";
 import { Octokit } from "@octokit/core";
+import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createBot } from "./bot.js";
 import { loadAppCredentials, loadConfig } from "./config.js";
 import { ensureManagedRepositorySetup, orderManagedRepositoriesForSync } from "./managed-sync.js";
+import { readManagedFiles } from "./managed-files.js";
+import { applyCleanPlan, collectCleanEvidence, type OperatorGitHubRequester } from "./clean-evidence.js";
+import {
+  buildCleanPlan,
+  persistCleanPlan,
+  planSetupConvergence,
+  readCleanPlan,
+  type DoctorReport
+} from "./operator.js";
+import { convergeRepositorySettings, SetupOwnerActionRequired, type LabelDefinition, type SetupReceipt } from "./setup.js";
 import {
   CONTROL_OWNER,
   CONTROL_REPO,
@@ -46,6 +58,16 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
 
   if (command === "doctor") {
     await runDoctor(args.slice(1));
+    return;
+  }
+
+  if (command === "setup") {
+    await runSetup(args.slice(1));
+    return;
+  }
+
+  if (command === "clean") {
+    await runClean(args.slice(1));
     return;
   }
 
@@ -199,6 +221,16 @@ async function runDoctor(args: string[]): Promise<void> {
   const options = parseDoctorCliArgs(args);
   const credentials = loadAppCredentials();
   const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
+  const { doctor, reports } = await collectDoctorReports(app, options);
+
+  if (options.json) console.log(JSON.stringify(reports, null, 2));
+  else console.log(doctor.formatDoctorReports(reports));
+}
+
+async function collectDoctorReports(app: App, options: DoctorCliOptions): Promise<{
+  doctor: { formatDoctorReports: (reports: DoctorReport[]) => string };
+  reports: DoctorReport[];
+}> {
   const owner = options.all ? CONTROL_OWNER : options.target.split("/", 1)[0];
   const octokit = await getScopedInstallationOctokit(app, owner, {
     administration: "read",
@@ -216,8 +248,8 @@ async function runDoctor(args: string[]): Promise<void> {
     : undefined;
   const moduleUrl = new URL("../.github/scripts/df-audit.mjs", import.meta.url);
   const doctor = await import(moduleUrl.href) as {
-    runRepositoryDoctor: (github: unknown, options: Record<string, unknown>) => Promise<unknown[]>;
-    formatDoctorReports: (reports: unknown[]) => string;
+    runRepositoryDoctor: (github: unknown, options: Record<string, unknown>) => Promise<DoctorReport[]>;
+    formatDoctorReports: (reports: DoctorReport[]) => string;
   };
   const packageRoot = fileURLToPath(new URL("..", import.meta.url));
   const reports = await doctor.runRepositoryDoctor(github, {
@@ -231,9 +263,330 @@ async function runDoctor(args: string[]): Promise<void> {
     localPath: options.localPath,
     agentsHome: options.agentsHome
   });
+  return { doctor, reports };
+}
 
-  if (options.json) console.log(JSON.stringify(reports, null, 2));
-  else console.log(doctor.formatDoctorReports(reports));
+export type SetupCliOptions = Omit<DoctorCliOptions, "writeIssues"> & { watch: boolean };
+
+export function parseSetupCliArgs(args: string[]): SetupCliOptions {
+  for (const argument of args) {
+    if (["--force", "--bypass", "--prune"].includes(argument)) throw new Error(`${argument} is intentionally unavailable for setup`);
+  }
+  const doctor = parseDoctorCliArgs(args.filter((argument) => argument !== "--watch"));
+  if (doctor.writeIssues) throw new Error("setup does not accept --write-issues; setup receipts are written to canonical DarkFactory data");
+  return { ...doctor, watch: args.includes("--watch") };
+}
+
+async function runSetup(args: string[]): Promise<void> {
+  const options = parseSetupCliArgs(args);
+  const credentials = loadAppCredentials();
+  const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
+  const dataGithub = await operatorLedgerGithub(app);
+  const ledger = await operatorLedgerModule();
+  const receipts: SetupReceipt[] = [];
+  const dispatchedIssueLanePlans = new Set<string>();
+  const maxPasses = options.watch ? boundedInteger(process.env.DF_SETUP_WATCH_PASSES, 40, 1, 240) : 1;
+  let finalPlan = planSetupConvergence([]);
+
+  for (let pass = 1; pass <= maxPasses; pass += 1) {
+    const { reports } = await collectDoctorReports(app, { ...options, writeIssues: false });
+    const plan = planSetupConvergence(reports);
+    finalPlan = plan;
+    await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "setup-admission", options.all ? "fleet" : options.target, {
+      plan_id: plan.planId,
+      evidence_hash: plan.evidenceHash,
+      pass,
+      planned_actions: plan.actions,
+      residue: plan.residue
+    });
+    const passReceipts = await executeSetupPlan(app, reports, plan, dispatchedIssueLanePlans);
+    receipts.push(...passReceipts);
+    await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "setup-completion", options.all ? "fleet" : options.target, {
+      plan_id: plan.planId,
+      evidence_hash: plan.evidenceHash,
+      pass,
+      receipts: passReceipts,
+      residue: plan.residue,
+      watch_requested: options.watch
+    });
+    if (!options.watch || plan.actions.length === 0 || plan.actions.every((action) => !action.supported)) break;
+    if (pass < maxPasses) await delay(15_000);
+  }
+
+  const result = {
+    schemaVersion: 1,
+    plan: finalPlan,
+    receipts,
+    converged: finalPlan.actions.length === 0 && finalPlan.residue.length === 0
+  };
+  if (options.json) console.log(JSON.stringify(result, null, 2));
+  else printSetupResult(result);
+}
+
+async function executeSetupPlan(
+  app: App,
+  reports: DoctorReport[],
+  plan: ReturnType<typeof planSetupConvergence>,
+  dispatchedIssueLanePlans: Set<string>
+): Promise<SetupReceipt[]> {
+  const receipts: SetupReceipt[] = [];
+  for (const report of reports) {
+    if (report.lifecycle !== "active") {
+      receipts.push({ action: "lifecycle", target: report.target_repository, status: "owner-required", detail: `Repository lifecycle is ${report.lifecycle}; setup refuses it.` });
+      continue;
+    }
+    const [owner, repo] = splitRepository(report.target_repository);
+    const octokit = await getInstallationOctokit(app, owner);
+    const github = createOperatorRequester(octokit);
+    const operations = new Set(plan.actions.filter((action) => action.repository === report.target_repository && action.supported).map((action) => action.operation));
+
+    if (operations.has("open-managed-setup-pr")) {
+      const metadata = await octokit.request("GET /repos/{owner}/{repo}", { owner, repo });
+      const value: Record<string, unknown> = isRecord(metadata.data) ? metadata.data : {};
+      const result = await ensureManagedRepositorySetup(createOctokitRequester(octokit), {
+        owner,
+        repo,
+        defaultBranch: typeof value.default_branch === "string" ? value.default_branch : undefined,
+        archived: value.archived === true
+      });
+      receipts.push({
+        action: "managed-setup-pr",
+        target: report.target_repository,
+        status: result.status === "current" ? "current" : result.status === "skipped" ? "owner-required" : "applied",
+        detail: result.pullRequestUrl || result.reason || `${result.changedPaths.length} managed paths reconciled`
+      });
+    }
+
+    if (operations.has("converge-settings")) {
+      try {
+        const files = readManagedFiles({ owner, repo });
+        const labels = parseLabelDefinitions(files.find((file) => file.path === ".darkfactory/labels.json")?.content || "");
+        const workflows = files.map((file) => file.path).filter((path) => path.startsWith(".github/workflows/") && path.endsWith(".yml"));
+        receipts.push(...await convergeRepositorySettings(github, { owner, repo }, labels, workflows));
+      } catch (error) {
+        if (!(error instanceof SetupOwnerActionRequired)) throw error;
+        receipts.push({ action: error.action, target: report.target_repository, status: "owner-required", detail: error.message });
+      }
+    }
+
+    if (operations.has("reconcile-issue-lane")) {
+      const dispatchKey = `${plan.planId}:${report.target_repository}`;
+      if (!dispatchedIssueLanePlans.has(dispatchKey)) {
+        const control = await getInstallationOctokit(app, CONTROL_OWNER);
+        await control.request("POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", {
+          owner: CONTROL_OWNER,
+          repo: CONTROL_REPO,
+          workflow_id: "df-plan.yml",
+          ref: "main",
+          inputs: { repo: report.target_repository, ref: report.source_refs.default_branch || "main" }
+        });
+        dispatchedIssueLanePlans.add(dispatchKey);
+        receipts.push({ action: "issue-lane", target: report.target_repository, status: "applied", detail: "Dispatched trusted PRD reconciliation; workflow-run chaining will re-evaluate readiness." });
+      } else {
+        receipts.push({ action: "issue-lane", target: report.target_repository, status: "current", detail: "This exact evidence plan already dispatched PRD reconciliation; waiting for its trusted run." });
+      }
+    }
+
+    for (const operation of operations) {
+      if (["open-managed-setup-pr", "converge-settings", "reconcile-issue-lane"].includes(operation)) continue;
+      receipts.push({ action: operation, target: report.target_repository, status: "owner-required", detail: "The owning prerequisite has not yet exposed a trusted setup executor; setup refused to improvise." });
+    }
+  }
+
+  return receipts;
+}
+
+export type CleanCliOptions = {
+  mode: "plan" | "apply" | "verify";
+  target: string;
+  planId: string;
+  localPath: string;
+  agentsHome: string;
+  json: boolean;
+  watch: boolean;
+};
+
+export function parseCleanCliArgs(args: string[]): CleanCliOptions {
+  const options: CleanCliOptions = {
+    mode: "plan",
+    target: `${CONTROL_OWNER}/${CONTROL_REPO}`,
+    planId: "",
+    localPath: "",
+    agentsHome: process.env.AGENTS_HOME?.trim() || "",
+    json: false,
+    watch: false
+  };
+  let index = 0;
+  if (["plan", "apply", "verify"].includes(args[0])) {
+    options.mode = args[0] as CleanCliOptions["mode"];
+    index += 1;
+  }
+  if (options.mode === "apply") {
+    options.planId = args[index]?.trim() || "";
+    if (!options.planId) throw new Error("clean apply requires a durable plan ID");
+    index += 1;
+  }
+  let targetSeen = false;
+  for (; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--json") { options.json = true; continue; }
+    if (argument === "--watch") { options.watch = true; continue; }
+    if (["--force", "--bypass", "--prune"].includes(argument)) throw new Error(`${argument} is intentionally unavailable for clean`);
+    if (argument === "--local" || argument === "--agents-home") {
+      const value = args[index + 1]?.trim();
+      if (!value || value.startsWith("--")) throw new Error(`${argument} requires a path`);
+      if (argument === "--local") options.localPath = value;
+      else options.agentsHome = value;
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("-")) throw new Error(`unknown clean option: ${argument}`);
+    if (options.mode === "apply" || targetSeen || !/^[^/\s]+\/[^/\s]+$/.test(argument)) throw new Error(`invalid or ambiguous clean repository: ${argument}`);
+    options.target = argument;
+    targetSeen = true;
+  }
+  if (!options.agentsHome) throw new Error("clean requires canonical AGENTS_HOME for durable plan storage");
+  return options;
+}
+
+async function runClean(args: string[]): Promise<void> {
+  const options = parseCleanCliArgs(args);
+  const credentials = loadAppCredentials();
+  const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
+  let target = options.target;
+  let saved = options.planId ? await readCleanPlan(options.agentsHome, options.planId) : null;
+  if (saved) target = saved.repository;
+  const [owner, repo] = splitRepository(target);
+  const octokit = await getInstallationOctokit(app, owner);
+  const github = createOperatorRequester(octokit);
+  const evidence = await collectCleanEvidence(github, { owner, repo }, options.localPath);
+  const plan = buildCleanPlan(evidence);
+  const dataGithub = await operatorLedgerGithub(app);
+  const ledger = await operatorLedgerModule();
+
+  if (options.mode === "plan") {
+    const path = await persistCleanPlan(options.agentsHome, plan);
+    await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-plan", target, {
+      plan_id: plan.planId,
+      evidence_hash: plan.evidenceHash,
+      entries: plan.entries,
+      local_plan_path_id: stableLocalPathId(path)
+    });
+    const result = { schemaVersion: 1, mode: "plan", plan, durable: true };
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else printCleanPlan(plan);
+    return;
+  }
+
+  if (options.mode === "verify") {
+    const actionable = plan.entries.filter((entry) => entry.action !== "preserve");
+    const result = { schemaVersion: 1, mode: "verify", repository: target, clean: actionable.length === 0, actionable };
+    await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-verify", target, result);
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(result.clean ? `${target}: clean (proven no-op)` : `${target}: ${actionable.length} admitted hygiene actions remain; run df clean plan.`);
+    return;
+  }
+
+  if (!saved) throw new Error("clean apply plan disappeared before admission");
+  await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-apply-admission", target, {
+    plan_id: saved.planId,
+    evidence_hash: saved.evidenceHash,
+    intended_actions: saved.entries.filter((entry) => entry.action !== "preserve")
+  });
+  const receipt = await applyCleanPlan(github, { owner, repo }, saved, evidence, {
+    localPath: options.localPath,
+    onApplied: async (action) => {
+      await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-action-receipt", target, {
+        plan_id: saved!.planId,
+        evidence_hash: saved!.evidenceHash,
+        action
+      });
+    }
+  });
+  await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-apply-completion", target, {
+    plan_id: saved.planId,
+    evidence_hash: saved.evidenceHash,
+    actions: receipt.actions,
+    watch_requested: options.watch
+  });
+  if (options.json) console.log(JSON.stringify(receipt, null, 2));
+  else console.log(`${target}: applied ${receipt.actions.filter((action) => action.status === "applied").length} admitted actions; ${receipt.actions.filter((action) => action.status === "skipped").length} entries preserved.`);
+}
+
+function splitRepository(value: string): [string, string] {
+  const match = value.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (!match) throw new Error(`invalid repository: ${value}`);
+  return [match[1], match[2]];
+}
+
+function parseLabelDefinitions(source: string): LabelDefinition[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(source);
+  } catch (error) {
+    throw new Error(`canonical label taxonomy is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.labels)) {
+    throw new Error("canonical label taxonomy must use schemaVersion 1 with a labels array");
+  }
+  return value.labels.map((item) => {
+    if (!isRecord(item) || typeof item.name !== "string" || typeof item.color !== "string" || typeof item.description !== "string") {
+      throw new Error("canonical label taxonomy contains a malformed label");
+    }
+    return { name: item.name, color: item.color, description: item.description };
+  });
+}
+
+async function operatorLedgerModule(): Promise<{
+  writeRunLedger: (github: unknown, dataRepo: string, kind: string, target: string, ledger: Record<string, unknown>) => Promise<unknown>;
+}> {
+  const moduleUrl = new URL("../.github/scripts/df-lib.mjs", import.meta.url);
+  return await import(moduleUrl.href) as {
+    writeRunLedger: (github: unknown, dataRepo: string, kind: string, target: string, ledger: Record<string, unknown>) => Promise<unknown>;
+  };
+}
+
+async function operatorLedgerGithub(app: App): Promise<ReturnType<typeof createDoctorRequester>> {
+  return createDoctorRequester(await getScopedInstallationOctokit(app, CONTROL_OWNER, { contents: "write" }, ["darkfactory-data"]));
+}
+
+function createOperatorRequester(octokit: Octokit): OperatorGitHubRequester {
+  return {
+    async request(route, parameters) {
+      const response = await octokit.request(route, parameters);
+      return { data: response.data };
+    }
+  };
+}
+
+function stableLocalPathId(path: string): string {
+  return `local-${createHash("sha256").update(path.toLowerCase()).digest("hex").slice(0, 16)}`;
+}
+
+function boundedInteger(value: string | undefined, fallback: number, minimum: number, maximum: number): number {
+  if (!value?.trim()) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`bounded integer must be between ${minimum} and ${maximum}`);
+  }
+  return parsed;
+}
+
+function printSetupResult(result: {
+  plan: ReturnType<typeof planSetupConvergence>;
+  receipts: SetupReceipt[];
+  converged: boolean;
+}): void {
+  console.log(`Setup plan ${result.plan.planId}: ${result.plan.actions.length} ordered actions, ${result.plan.residue.length} owner/blocked findings.`);
+  for (const receipt of result.receipts) console.log(`- ${receipt.status}: ${receipt.action} ${receipt.target} — ${receipt.detail}`);
+  console.log(result.converged ? "Setup is a proven no-op." : "Setup is resumable; rerun after reviewed PRs and owner residue resolve.");
+}
+
+function printCleanPlan(plan: ReturnType<typeof buildCleanPlan>): void {
+  const actions = plan.entries.filter((entry) => entry.action !== "preserve");
+  console.log(`Clean plan ${plan.planId} for ${plan.repository}: ${actions.length} admitted actions, ${plan.entries.length - actions.length} preserved entries.`);
+  for (const entry of plan.entries) console.log(`- ${entry.action}: ${entry.kind} ${entry.target} @ ${entry.head.slice(0, 12)} (${entry.classification})`);
+  console.log(`Apply only with: df clean apply ${plan.planId}`);
 }
 
 async function getInstallationOctokit(app: App, owner: string): Promise<Octokit> {
@@ -319,6 +672,10 @@ Usage:
   darkfactory status [--json]
   darkfactory doctor [owner/repo | --all] [--json] [--local PATH] [--agents-home PATH]
   darkfactory doctor [owner/repo | --all] --write-issues [--json]
+  df setup [owner/repo | --all] [--watch] [--json] [--local PATH] [--agents-home PATH]
+  df clean [plan] [owner/repo] [--local PATH] [--json]
+  df clean apply <plan-id> [--local PATH] [--watch] [--json]
+  df clean verify [owner/repo] [--local PATH] [--json]
 
 Command information:
   serve         Run the GitHub App webhook server.
@@ -326,11 +683,17 @@ Command information:
   sync-managed  Reconcile managed setup PRs for installed repositories.
   status        Read DarkFactory orchestration and backlog status.
   doctor        Diagnose deterministic repository, workflow, branch, issue, and local-state drift.
+  setup         Run doctor, execute ordered auto/PR convergence, and stop only at exact owner/blocked residue.
+  clean         Plan, apply, or verify evidence-backed hygiene without force or prune bypasses.
 
 Doctor safety:
   Diagnose mode is the default and performs no writes or repairs.
   --write-issues explicitly enables stable per-finding issue reconciliation and the doctor ledger.
   Repair is intentionally a separate reviewed work lane; --repair is rejected.
+Setup and clean safety:
+  setup is resumable; reviewed PR repairs continue on later --watch or scheduled invocations.
+  clean defaults to a read-only durable plan. Apply re-fetches every fact and aborts on drift.
+  Dirty, unpublished, protected, open-PR, and ambiguous work is always preserved.
 Secrets are read from environment variables first, then AGENTS_SECRETS/*.secret.`);
 }
 

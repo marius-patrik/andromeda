@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+const EXECUTABLE_BODY = "## Goal\n\nImplement the requested behavior with explicit boundaries and durable evidence.\n\n## Acceptance\n\n- [ ] The observable behavior is verified by focused regression tests.";
+
 function blockedComment(createdAt: string) {
   return {
     body: "DarkFactory worker blocked.\n\nBlocker:\n\n```text\nfailure\n```",
@@ -69,7 +71,8 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
         return [
           {
             number: 42,
-            body: "Directly queued issue without a PRD marker.",
+            title: "Directly queued implementation",
+            body: EXECUTABLE_BODY,
             labels: [{ name: "df:ready" }]
           }
         ];
@@ -155,7 +158,7 @@ test("orchestrator does not dispatch issues that already have an open worker PR"
       calls.push({ method, path, body });
 
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
-        return [{ number: 8, labels: [{ name: "df:ready" }] }];
+        return [{ number: 8, title: "Existing worker PR", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }] }];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") {
         return [];
@@ -255,6 +258,50 @@ test("orchestrator selects ready issues by priority and blocked-by state", async
     selected.map((issue: { number: number }) => issue.number),
     [13, 14, 12, 10]
   );
+});
+
+test("readiness evaluator accepts a bounded executable issue contract", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueReadiness } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-readiness-positive-test");
+  const result = evaluateIssueReadiness({
+    number: 40,
+    title: "Implement bounded readiness",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "P1" }]
+  }, { currentRepoOpenIssueNumbers: new Set() });
+
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.findings, []);
+});
+
+test("readiness evaluator rejects and explains a contentless issue contract", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueReadiness } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-readiness-negative-test");
+  const result = evaluateIssueReadiness({
+    number: 41,
+    title: "Alignment",
+    body: "## Goal\n\nKeep implementation aligned.",
+    labels: [{ name: "df:ready" }]
+  }, { currentRepoOpenIssueNumbers: new Set() });
+
+  assert.equal(result.ready, false);
+  assert.ok(result.findings.some((finding: { id: string }) => finding.id === "acceptance-missing"));
+  assert.ok(result.findings.some((finding: { id: string }) => finding.id === "contentless-boilerplate"));
+});
+
+test("readiness evaluator treats df:no-dispatch as categorical even for a valid contract", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueReadiness, selectDispatchableIssues, shouldAutoReadySequencedIssue } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-readiness-edge-test");
+  const issue = {
+    number: 42,
+    title: "Owner-executed contract",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:ready" }, { name: "df:no-dispatch" }]
+  };
+
+  assert.equal(evaluateIssueReadiness(issue, { currentRepoOpenIssueNumbers: new Set() }).ready, false);
+  assert.deepEqual(selectDispatchableIssues([issue], { enforceContract: true }), []);
+  assert.equal(shouldAutoReadySequencedIssue({ ...issue, body: `${EXECUTABLE_BODY}\n\nBlocked-by: #1`, labels: [{ name: "df:no-dispatch" }] }, { currentRepoOpenIssueNumbers: new Set() }), false);
 });
 
 test("orchestrator holds and escalates unknown cross-repo Blocked-by references", async () => {
@@ -691,7 +738,7 @@ test("orchestrator updates the L6 dashboard issue after dispatch", async () => {
       calls.push({ method, path, body });
 
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
-        return [{ number: 7, title: "Feature", body: "", labels: [{ name: "df:ready" }, { name: "stream:features" }] }];
+        return [{ number: 7, title: "Feature", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }, { name: "stream:features" }] }];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example") return { default_branch: "main", allow_auto_merge: true };
@@ -914,7 +961,7 @@ test("orchestrator dispatches owner-reset issues instead of re-escalating stale 
       calls.push({ method, path, body });
 
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
-        return [{ number: 30, title: "Reset lane", body: "", labels: [{ name: "df:ready" }] }];
+        return [{ number: 30, title: "Reset lane", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }] }];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/30/comments?per_page=100&page=1") {
@@ -992,8 +1039,8 @@ test("orchestrator turns trusted /df run comments into df:ready before dispatch"
       if (method === "POST" && path === "/repos/marius-patrik/example/issues/12/comments") return {};
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
         return [
-          { number: 12, title: "Run me", body: "", labels: [{ name: "df:ready" }] },
-          { number: 99, title: "Do not run me", body: "", labels: [{ name: "df:ready" }] }
+          { number: 12, title: "Run me", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }] },
+          { number: 99, title: "Do not run me", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }] }
         ];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
@@ -1113,8 +1160,8 @@ test("orchestrator turns scoped /df run dispatches into df:ready before dispatch
       if (method === "POST" && path === "/repos/marius-patrik/example/issues/12/comments") return {};
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
         return [
-          { number: 12, title: "Run me", body: "", labels: [{ name: "df:ready" }] },
-          { number: 99, title: "Do not run me", body: "", labels: [{ name: "df:ready" }] }
+          { number: 12, title: "Run me", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }] },
+          { number: 99, title: "Do not run me", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }] }
         ];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];

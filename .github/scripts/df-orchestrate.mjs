@@ -25,6 +25,7 @@ const ORCHESTRATION_POLICY_PATH = ".darkfactory/orchestration.json";
 export const DASHBOARD_MARKER = "df-dashboard:orchestration";
 export const ASK_OWNER_MARKER = "dark-factory:orchestrator-ask-owner";
 export const RESUME_MARKER = "dark-factory:worker-resume";
+export const READINESS_MARKER = "dark-factory:readiness-evaluation";
 export const REPEATED_FAILURE_THRESHOLD = 3;
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -84,9 +85,6 @@ export async function orchestrate(options) {
     const activeEventTarget = activeTargets.find((target) => repoName(target) === repoName(eventRequest.repository));
     if (activeEventTarget) {
       targets = [activeEventTarget];
-      if (eventRequest.slashRun) {
-        await readySlashRunIssue(gh, activeEventTarget, eventRequest.issueNumber);
-      }
     } else {
       warn(`DarkFactory ignored event for unmanaged repository ${repoName(eventRequest.repository)}.`);
     }
@@ -110,9 +108,18 @@ export async function orchestrate(options) {
       openIssues: (snapshot.openIssues || []).filter((issue) => issue.number === eventRequest.issueNumber)
     }))
     : snapshots;
-  const autoReadied = await autoReadySequencedIssues(gh, snapshots, warn, { targetIssue: eventRequest });
   const escalated = await escalateOwnerDecisionIssues(gh, scopedSnapshots, warn);
-  const plan = buildOrchestrationPlan(scopedSnapshots, policy, { targetIssue: eventRequest });
+  const readinessEvaluations = await evaluateIssueReadinessLabels(gh, snapshots, warn, {
+    targetIssue: eventRequest,
+    commentRequested: Boolean(eventRequest?.slashRun)
+  });
+  const autoReadied = readinessEvaluations
+    .filter((evaluation) => evaluation.action === "labeled-ready")
+    .map((evaluation) => ({ repo: evaluation.repo, issue: evaluation.issue }));
+  const plan = buildOrchestrationPlan(scopedSnapshots, policy, {
+    targetIssue: eventRequest,
+    enforceReadinessContract: true
+  });
 
   const interrupted = await detectInterruptedWorkerRuns(gh, scopedSnapshots, { warn });
   const recoveries = [];
@@ -149,6 +156,7 @@ export async function orchestrate(options) {
     dispatched,
     recovery: recoveries,
     auto_readied: autoReadied,
+    readiness_evaluations: readinessEvaluations,
     escalated,
     token_usage: {
       codex_calls: 0,
@@ -414,17 +422,8 @@ function requeueComment(target, issueNumber) {
   ].join("\n");
 }
 
-async function readySlashRunIssue(gh, repository, issueNumber) {
-  assertAllowedRepo(repository);
-  await ensureLabels(gh, repository, WORK_LABELS);
-  await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/labels`, { labels: ["df:ready"] });
-  await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/comments`, {
-    body: "DarkFactory received `/df run` and queued this issue with `df:ready`."
-  });
-}
-
 export async function listReadyIssues(gh, repository) {
-  return selectDispatchableIssues(await listOpenIssues(gh, repository));
+  return selectDispatchableIssues(await listOpenIssues(gh, repository), { repository, enforceContract: true });
 }
 
 export async function listOpenIssues(gh, repository) {
@@ -450,16 +449,184 @@ export function selectDispatchableIssues(openIssues, options = {}) {
     .filter((issue) => {
       const names = issueLabelNames(issue);
       if (!names.has("df:ready")) return false;
-      if (names.has("df:running") || names.has("df:blocked") || names.has("df:done") || names.has("df:ask-owner")) return false;
-      return blockedByRefsResolved(issue, {
+      if (!options.enforceContract) {
+        if (names.has("df:no-dispatch") || names.has("df:running") || names.has("df:blocked") || names.has("df:done") || names.has("df:ask-owner")) return false;
+        return blockedByRefsResolved(issue, {
+          repository: options.repository,
+          currentRepoOpenIssueNumbers: openIssueNumbers,
+          openIssueIndex: options.openIssueIndex,
+          knownRepositories: options.knownRepositories,
+          currentRepoName
+        });
+      }
+      const evaluation = evaluateIssueReadiness(issue, {
         repository: options.repository,
         currentRepoOpenIssueNumbers: openIssueNumbers,
         openIssueIndex: options.openIssueIndex,
         knownRepositories: options.knownRepositories,
         currentRepoName
       });
+      return evaluation.ready;
     })
     .sort(compareReadyIssues);
+}
+
+/**
+ * The interim evaluator is deliberately deterministic. It validates that an
+ * issue is an executable contract before the machine-owned df:ready cache can
+ * authorize dispatch. Provider review can replace the evaluation head later;
+ * these label and dispatch-time recomputation semantics remain authoritative.
+ */
+export function evaluateIssueReadiness(issue, options = {}) {
+  const findings = [];
+  const names = issueLabelNames(issue);
+
+  if (names.has("df:no-dispatch")) findings.push(readinessFinding("no-dispatch", "Issue is categorically non-dispatchable (`df:no-dispatch`)."));
+  if (names.has("df:running")) findings.push(readinessFinding("already-running", "Issue already has an active worker (`df:running`)."));
+  if (names.has("df:blocked")) findings.push(readinessFinding("blocked", "Resolve the recorded blocker; the system will re-evaluate automatically."));
+  if (names.has("df:ask-owner")) findings.push(readinessFinding("owner-decision", "Resolve the owner decision; the system will re-evaluate automatically."));
+  if (names.has("df:done")) findings.push(readinessFinding("already-done", "Issue is already complete (`df:done`)."));
+
+  findings.push(...issueContractFindings(issue, options));
+
+  if (!blockedByRefsResolved(issue, options)) {
+    findings.push(readinessFinding("blocked-by-open", "Close every `Blocked-by` dependency before dispatch."));
+  }
+  if (options.doctorPerfect === false) {
+    findings.push(readinessFinding("doctor-not-perfect", "Repair the repository doctor delta before dispatch."));
+  }
+  if (options.gatesHealthy === false) {
+    findings.push(readinessFinding("gates-unhealthy", "Restore the managed validation and review gates before dispatch."));
+  }
+  if (options.capacityAvailable === false) {
+    findings.push(readinessFinding("capacity-exhausted", "Wait for managed worker capacity; the next tick will re-evaluate."));
+  }
+
+  return { ready: findings.length === 0, findings };
+}
+
+export function issueContractFindings(issue, options = {}) {
+  const findings = [];
+  const title = String(issue?.title || "").trim();
+  const body = String(issue?.body || "").trim();
+  const prose = body
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#>*_`\-[\]()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (title.length < 4 || prose.length < 40 || !/(?:^|\n)#{1,6}\s+(?:goal|scope|objective|problem|summary|why)\b/i.test(body)) {
+    findings.push(readinessFinding("scope-missing", "Add a concrete Goal, Scope, Objective, Problem, Summary, or Why section."));
+  }
+  const acceptanceSection = /(?:^|\n)#{1,6}\s+(?:acceptance|success criteria|verification|definition of done)\b/i.test(body);
+  const testableChecks = /(?:^|\n)\s*[-*]\s+\[[ xX]\]\s+\S/m.test(body);
+  if (!acceptanceSection && !testableChecks) {
+    findings.push(readinessFinding("acceptance-missing", "Add testable acceptance or verification criteria."));
+  }
+  if (/\b(?:keep (?:the )?implementation aligned|implement as appropriate|do the needful|tbd|todo)\b/i.test(prose)) {
+    findings.push(readinessFinding("contentless-boilerplate", "Replace contentless boilerplate with observable behavior and boundaries."));
+  }
+
+  const malformedReferences = [...body.matchAll(/(?:blocked-by|depends on)\s*:?\s*([^\n]+)/gi)]
+    .flatMap((match) => String(match[1] || "").split(/[;,]/))
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .filter((value) => !/(?:[\w.-]+\/[\w.-]+)?#\d+|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/i.test(value));
+  if (malformedReferences.length > 0) {
+    findings.push(readinessFinding("reference-malformed", "Use resolvable GitHub issue references in every dependency declaration."));
+  }
+
+  if (options.knownRepositories) {
+    const currentRepoName = options.currentRepoName
+      ?? (options.repository ? normalizedRepoName(options.repository) : null);
+    const unknown = blockedByIssueRefs(body, options.repository)
+      .filter((ref) => ref.repository && ref.repository !== currentRepoName && !options.knownRepositories.has(ref.repository));
+    if (unknown.length > 0) {
+      findings.push(readinessFinding("reference-unmanaged", "Point cross-repository dependencies only at positively observed managed repositories."));
+    }
+  }
+  return findings;
+}
+
+function readinessFinding(id, message) {
+  return { id, message };
+}
+
+export async function evaluateIssueReadinessLabels(gh, snapshots, warn = console.warn, options = {}) {
+  const openIssueIndex = buildOpenIssueIndex(snapshots);
+  const knownRepositories = buildKnownRepositories(snapshots);
+  const targetIssue = options.targetIssue || null;
+  const evaluations = [];
+
+  for (const snapshot of snapshots) {
+    const repository = snapshot.repository;
+    const openIssues = Array.isArray(snapshot.openIssues) ? snapshot.openIssues : [];
+    const currentRepoName = normalizedRepoName(repository);
+    const currentRepoOpenIssueNumbers = new Set(openIssues.map((issue) => issue.number).filter(Number.isInteger));
+    const candidates = targetIssue
+      ? openIssues.filter((issue) => issue.number === targetIssue.issueNumber && normalizedRepoName(targetIssue.repository) === currentRepoName)
+      : openIssues;
+
+    for (const issue of candidates) {
+      const names = issueLabelNames(issue);
+      const evaluation = evaluateIssueReadiness(issue, {
+        repository,
+        currentRepoName,
+        currentRepoOpenIssueNumbers,
+        openIssueIndex,
+        knownRepositories
+      });
+      let action = "no-op";
+
+      try {
+        if (evaluation.ready && !names.has("df:ready")) {
+          await ensureLabels(gh, repository, WORK_LABELS);
+          await replaceIssueLabels(gh, repository, issue.number, ["df:ready"], []);
+          setIssueLabelNames(issue, [...names, "df:ready"]);
+          action = "labeled-ready";
+        } else if (!evaluation.ready && names.has("df:ready")) {
+          await replaceIssueLabels(gh, repository, issue.number, [], ["df:ready"]);
+          setIssueLabelNames(issue, [...names].filter((name) => name !== "df:ready"));
+          action = "revoked-stale-ready";
+        }
+
+        if (options.commentRequested) {
+          await createIssueComment(gh, repository, issue.number, formatReadinessEvaluationComment(issue.number, evaluation));
+          if (action === "no-op") action = "reported";
+        }
+      } catch (error) {
+        if (warnReadOnlyRepository(repository, error, "readiness evaluation", warn)) continue;
+        warn(`Failed to reconcile readiness for ${repoName(repository)}#${issue.number}: ${error.message || String(error)}`);
+        action = "error";
+      }
+
+      evaluations.push({
+        repo: repoName(repository),
+        issue: issue.number,
+        ready: evaluation.ready,
+        findings: evaluation.findings.map((finding) => finding.id),
+        action
+      });
+    }
+  }
+  return evaluations;
+}
+
+export function formatReadinessEvaluationComment(issueNumber, evaluation) {
+  const lines = [
+    `<!-- ${READINESS_MARKER} issue=${issueNumber} -->`,
+    "DarkFactory received `/df run` and performed the machine readiness evaluation.",
+    ""
+  ];
+  if (evaluation.ready) {
+    lines.push("Result: **ready**. The machine-owned `df:ready` label is applied; dispatch still recomputes the predicate.");
+  } else {
+    lines.push("Result: **not ready**. The machine-owned `df:ready` label is absent.", "", "Actionable findings:", "");
+    for (const finding of evaluation.findings) lines.push(`- \`${finding.id}\`: ${finding.message}`);
+    lines.push("", "Resolve the causes; DarkFactory re-evaluates automatically. Do not apply `df:ready` manually.");
+  }
+  return lines.join("\n");
 }
 
 export async function autoReadySequencedIssues(gh, snapshots, warn = console.warn, options = {}) {
@@ -516,7 +683,7 @@ export async function autoReadySequencedIssues(gh, snapshots, warn = console.war
 
 export function shouldAutoReadySequencedIssue(issue, options = {}) {
   const names = issueLabelNames(issue);
-  if (names.has("df:ready") || names.has("df:running") || names.has("df:blocked") || names.has("df:done") || names.has("df:ask-owner")) {
+  if (names.has("df:ready") || names.has("df:running") || names.has("df:blocked") || names.has("df:done") || names.has("df:ask-owner") || names.has("df:no-dispatch")) {
     return false;
   }
   // Spec (#168): this pass is for Blocked-by successors ONLY — an issue with
@@ -631,7 +798,12 @@ export function buildOrchestrationPlan(snapshots, policyInput, options = {}) {
     const openIssues = Array.isArray(snapshot.openIssues) ? snapshot.openIssues : [];
     const repositoryName = repoName(repository);
     const repositoryWave = repositoryGateWave(openIssues, policy);
-    const selected = selectDispatchableIssues(openIssues, { repository, openIssueIndex, knownRepositories })
+    const selected = selectDispatchableIssues(openIssues, {
+      repository,
+      openIssueIndex,
+      knownRepositories,
+      enforceContract: options.enforceReadinessContract === true
+    })
       .map((issue) => ({
         repository,
         issue,
@@ -1160,6 +1332,7 @@ function setIssueLabelNames(issue, labels) {
 
 function isWorkIssue(issue) {
   const names = issueLabelNames(issue);
+  if (names.has("df:no-dispatch")) return false;
   return [...names].some((label) => label.startsWith("df:") || label === "roadmap");
 }
 
@@ -1291,7 +1464,7 @@ async function blockIssueBeforeDispatch(gh, repository, issueNumber, baseBranch,
       `Repository auto-merge enabled: \`${mergePolicy.autoMergeSupported ? "yes" : "no"}\``,
       "",
       "This is target repository setup work, not a code implementation failure.",
-      "Resolve the repository merge policy, then remove `df:ask-owner`/`df:blocked` and reapply `df:ready`."
+      "Resolve the repository merge policy; the system clears the resolved cause and re-evaluates readiness automatically."
     ].join("\n")
   );
 }

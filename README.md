@@ -15,7 +15,7 @@ not DarkFactory's product or release owner.
 - Comments on newly opened pull requests.
 - Checks pull requests in installed repositories for the current DarkFactory
   policy and workflow scaffold.
-- Dispatches the orchestrator workflow immediately when an issue is labeled `df:ready` or when an owner/member/collaborator comments `/df run`, providing a low-latency path for managed repositories.
+- Dispatches the orchestrator workflow immediately when the machine evaluator labels an issue `df:ready`; an owner/member/collaborator can comment `/df run` to request immediate evaluation, never to force readiness.
 - Installs the current managed Codex Review migration gate. Issue #36 replaces
   it with provider-agnostic DarkFactory Autoreview through canonical Agent OS.
 - Reads repository-local agent context, `.darkfactory`, and `.github` policy
@@ -228,7 +228,7 @@ Managed files:
 
 Managed setup does not ship `.github/workflows/df-event-forward.yml`. That workflow uses control-repository app secrets and is kept only in `marius-patrik/DarkFactory`.
 
-When the DarkFactory webhook server is deployed, `df:ready` labels and `/df run` comments in any installed repository are dispatched immediately to the orchestrator workflow, eliminating the wait for the next scheduled tick. If the webhook server is not deployed or the dispatch fails, the schedule and workflow-run chaining still pick up the issue.
+When the DarkFactory webhook server is deployed, machine-applied `df:ready` labels and trusted `/df run` evaluation requests in any installed repository are dispatched immediately to the orchestrator workflow, eliminating the wait for the next scheduled tick. `/df run` performs the deterministic contract evaluation and reports actionable findings; it never writes `df:ready` directly. Dispatch recomputes readiness, so a stale label cannot authorize work. If the webhook server is not deployed or the dispatch fails, the schedule and workflow-run chaining still pick up the issue.
 
 Managed publication has path-level ownership: this package owns executable
 DarkFactory workflows and scripts, while canonical Andromeda-data owns
