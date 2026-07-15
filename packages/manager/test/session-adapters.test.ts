@@ -315,15 +315,19 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
         approvalPolicy: "never",
         reasoningEffort: policyRequest.effort,
         thread: { ephemeral: true, cwd: root },
+        activePermissionProfile: {
+          id: executionPolicy === "read-only" ? ":read-only" : ":workspace",
+          extends: null,
+        },
         sandbox:
           executionPolicy === "read-only"
             ? { type: "readOnly", networkAccess: false }
             : {
                 type: "workspaceWrite",
-                writableRoots: [root],
+                writableRoots: [],
                 networkAccess: false,
-                excludeTmpdirEnvVar: true,
-                excludeSlashTmp: true,
+                excludeTmpdirEnvVar: false,
+                excludeSlashTmp: false,
               },
       },
     };
@@ -374,11 +378,30 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
     ).toThrow("resolved execution policy does not match");
   });
 
+  test("pre-work denied: mismatched built-in permission profile is rejected", () => {
+    const root = path.resolve(os.tmpdir(), "agents-codex-prework-profile-denied");
+    const fixture = preworkFixture(root, "workspace-write");
+    fixture.started.activePermissionProfile = { id: ":read-only", extends: null };
+    expect(() =>
+      attestCodexPreworkResponse(
+        fixture.descriptor,
+        fixture.request,
+        fixture.initialized,
+        fixture.started,
+      ),
+    ).toThrow("does not match the canonical request");
+  });
+
   async function writeCodexRollout(
     root: string,
     descriptor: SessionDescriptor,
     request: TurnRequest,
-    options: { sandbox?: string; effort?: string; duplicateContext?: boolean } = {},
+    options: {
+      sandbox?: string;
+      sandboxPolicy?: Record<string, unknown>;
+      effort?: string;
+      duplicateContext?: boolean;
+    } = {},
   ): Promise<string> {
     const threadId = "019f-policy-attestation-0001";
     const now = new Date();
@@ -392,6 +415,16 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
       String(now.getUTCDate()).padStart(2, "0"),
     );
     await mkdir(directory, { recursive: true });
+    const resolvedSandbox = options.sandbox ?? request.executionPolicy ?? "read-only";
+    const sandboxPolicy = options.sandboxPolicy ??
+      (resolvedSandbox === "workspace-write"
+        ? {
+            type: resolvedSandbox,
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+          }
+        : { type: resolvedSandbox });
     const context = {
       timestamp: now.toISOString(),
       type: "turn_context",
@@ -400,7 +433,7 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
         cwd: root,
         workspace_roots: [root],
         approval_policy: "never",
-        sandbox_policy: { type: options.sandbox ?? request.executionPolicy ?? "read-only" },
+        sandbox_policy: sandboxPolicy,
         model: descriptor.model,
         effort: options.effort ?? request.effort,
       },
@@ -506,6 +539,54 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
       }
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("denied: weakened workspace-write native policy fails closed", async () => {
+    const variants: Record<string, unknown>[] = [
+      {
+        type: "workspace-write",
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+      },
+      {
+        type: "workspace-write",
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: true,
+      },
+      {
+        type: "workspace-write",
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+        writable_roots: [path.resolve(os.tmpdir(), "outside")],
+      },
+    ];
+    for (const [index, sandboxPolicy] of variants.entries()) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `agents-codex-policy-weakened-${index}-`));
+      try {
+        const descriptor: SessionDescriptor = {
+          sessionId: `canonical-weakened-${index}`,
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          mode: "task",
+          workdir: root,
+          stateDir: path.join(root, ".agents"),
+        };
+        const policyRequest: TurnRequest = {
+          prompt: "fixture",
+          effort: "high",
+          executionPolicy: "workspace-write",
+        };
+        const threadId = await writeCodexRollout(root, descriptor, policyRequest, { sandboxPolicy });
+        await expect(attestCodexExecutionPolicy(descriptor, policyRequest, threadId)).rejects.toThrow(
+          "resolved execution policy does not match",
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     }
   });
 });

@@ -644,7 +644,7 @@ export async function attestCodexExecutionPolicy(
   ) {
     throw new Error("Codex native execution receipt identity does not match the canonical turn");
   }
-  const sandbox = exactRecord(turnContext.sandbox_policy) ? turnContext.sandbox_policy.type : null;
+  const sandboxPolicy = exactRecord(turnContext.sandbox_policy) ? turnContext.sandbox_policy : null;
   const roots = Array.isArray(turnContext.workspace_roots) ? turnContext.workspace_roots : [];
   if (
     !samePath(String(turnContext.cwd ?? ""), descriptor.workdir) ||
@@ -659,7 +659,19 @@ export async function attestCodexExecutionPolicy(
   if (request.effort && turnContext.effort !== request.effort) {
     throw new Error("Codex native execution receipt does not match the requested effort");
   }
-  if (sandbox !== requested) {
+  if (!sandboxPolicy || sandboxPolicy.type !== requested) {
+    throw new Error("Codex resolved execution policy does not match the requested policy");
+  }
+  if (
+    requested === "workspace-write" &&
+    (
+      sandboxPolicy.network_access !== false ||
+      sandboxPolicy.exclude_tmpdir_env_var !== true ||
+      sandboxPolicy.exclude_slash_tmp !== true ||
+      ("writable_roots" in sandboxPolicy &&
+        (!Array.isArray(sandboxPolicy.writable_roots) || sandboxPolicy.writable_roots.length !== 0))
+    )
+  ) {
     throw new Error("Codex resolved execution policy does not match the requested policy");
   }
   return requested;

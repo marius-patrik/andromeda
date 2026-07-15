@@ -32,6 +32,10 @@ function requestedPolicy(request: TurnRequest): NarrowExecutionPolicy {
   return policy;
 }
 
+function permissionProfile(policy: NarrowExecutionPolicy): ":read-only" | ":workspace" {
+  return policy === "read-only" ? ":read-only" : ":workspace";
+}
+
 function preflightConfig(request: TurnRequest, policy: NarrowExecutionPolicy): Record<string, unknown> {
   return {
     ...(request.effort ? { model_reasoning_effort: request.effort } : {}),
@@ -66,6 +70,9 @@ export function attestCodexPreworkResponse(
   if (!isRecord(started) || !isRecord(started.thread) || !isRecord(started.sandbox)) {
     throw new CodexPreflightError("Codex preflight receipt is malformed");
   }
+  if (!isRecord(started.activePermissionProfile)) {
+    throw new CodexPreflightError("Codex preflight receipt is malformed");
+  }
   const roots = Array.isArray(started.runtimeWorkspaceRoots) ? started.runtimeWorkspaceRoots : [];
   if (
     started.model !== descriptor.model ||
@@ -76,7 +83,9 @@ export function attestCodexPreworkResponse(
     started.approvalPolicy !== "never" ||
     (request.effort !== undefined && started.reasoningEffort !== request.effort) ||
     started.thread.ephemeral !== true ||
-    !samePath(String(started.thread.cwd ?? ""), descriptor.workdir)
+    !samePath(String(started.thread.cwd ?? ""), descriptor.workdir) ||
+    started.activePermissionProfile.id !== permissionProfile(policy) ||
+    started.activePermissionProfile.extends !== null
   ) {
     throw new CodexPreflightError("Codex preflight receipt does not match the canonical request");
   }
@@ -93,12 +102,8 @@ export function attestCodexPreworkResponse(
     : [];
   if (
     started.sandbox.type !== "workspaceWrite" ||
-    writableRoots.length !== 1 ||
-    typeof writableRoots[0] !== "string" ||
-    !samePath(writableRoots[0], descriptor.workdir) ||
-    started.sandbox.networkAccess !== false ||
-    started.sandbox.excludeTmpdirEnvVar !== true ||
-    started.sandbox.excludeSlashTmp !== true
+    writableRoots.length !== 0 ||
+    started.sandbox.networkAccess !== false
   ) {
     throw new CodexPreflightError("Codex resolved execution policy does not match the requested policy");
   }
@@ -309,7 +314,7 @@ export async function preflightCodexExecutionPolicy(
         cwd: descriptor.workdir,
         runtimeWorkspaceRoots: [descriptor.workdir],
         approvalPolicy: "never",
-        sandbox: policy,
+        permissions: permissionProfile(policy),
         config: preflightConfig(request, policy),
         ephemeral: true,
         historyMode: "legacy",

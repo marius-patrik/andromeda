@@ -265,6 +265,13 @@ that exact effective policy before a successful result is accepted. Exactly one
 prompt source is allowed: one positional value, one absolute `--prompt-file`, or
 `--prompt-stdin`. File and stdin input stay out of downstream process argv.
 
+Codex resolves the matching built-in `:read-only` or `:workspace` permission
+profile through an ephemeral, zero-token app-server thread before provider work.
+That receipt must bind the canonical model, provider home, worktree, approval
+policy, effort, and sole runtime workspace root. A completed native rollout then
+re-attests the exact CLI sandbox, including network denial, temporary-directory
+exclusions, and the absence of extra writable roots for `workspace-write`.
+
 `--receipt` must name an absolute, nonexistent file inside the physical
 worktree. The manager reserves it with a blocked `execution_pending` receipt
 before provider work begins, then replaces it through the same file identity
