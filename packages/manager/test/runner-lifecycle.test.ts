@@ -2049,7 +2049,8 @@ describe("runner process stop boundary", () => {
     expect(scripts[0]).toContain(instance.startedAt);
     expect(scripts[0]).toContain("Invoke-CimMethod -InputObject $before[0] -MethodName Terminate");
     expect(scripts[0]).not.toContain("Stop-Process");
-    expect(scripts[0]).toContain("return $null");
+    expect(scripts[0]).not.toContain("return $null");
+    expect(scripts[0]).toContain("if ($found.Count -eq 0) { return }");
   });
 
   test("captures nonterminating stop errors, verifies the postcondition, and stops serially", async () => {
@@ -2089,14 +2090,52 @@ describe("runner process stop boundary", () => {
   });
 
   test.skipIf(process.platform !== "win32")(
-    "treats positively absent as success and nonterminating stop failure as stable failure without real processes",
+    "success: real PowerShell observes exact termination and then no process output",
     async () => {
-      let mode: "absent" | "blocked" = "absent";
+      const instance = runnerProcess(31337);
+      const host = createWindowsRunnerHost({
+        runPowerShell: async (script) => {
+          const getProcess =
+            `$script:runnerQueries = 0; ` +
+            `function Get-CimInstance { [CmdletBinding()] param([string]$ClassName, [string]$Filter) ` +
+            `$script:runnerQueries += 1; if ($script:runnerQueries -eq 1) { ` +
+            `[pscustomobject]@{ ProcessId = 31337; ExecutablePath = ${psQuote(instance.executablePath)}; ` +
+            `CreationDate = [datetime]::Parse(${psQuote(instance.startedAt)}) } } }`;
+          const stopProcess =
+            `function Invoke-CimMethod { [CmdletBinding()] param($InputObject, [string]$MethodName) ` +
+            `[pscustomobject]@{ ReturnValue = 0 } }`;
+          return runPowerShellText(`${getProcess}; ${stopProcess}; ${script}`);
+        },
+      });
+
+      await expect(host.stopInstances([instance])).resolves.toBeUndefined();
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "edge-input: real PowerShell treats an already absent exact process as idempotent success",
+    async () => {
+      const host = createWindowsRunnerHost({
+        runPowerShell: async (script) => {
+          const getProcess =
+            `function Get-CimInstance { [CmdletBinding()] param([string]$ClassName, [string]$Filter) return }`;
+          const stopProcess =
+            `function Invoke-CimMethod { throw 'termination must not be attempted for an absent process' }`;
+          return runPowerShellText(`${getProcess}; ${stopProcess}; ${script}`);
+        },
+      });
+
+      await expect(host.stopInstances([runnerProcess(31337)])).resolves.toBeUndefined();
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "denied-failure: real PowerShell maps a nonterminating stop denial to a stable redacted error",
+    async () => {
+      const instance = runnerProcess(31337);
       const sentinel = "STOP_ACCESS_DENIED_SENTINEL_2b";
       const host = createWindowsRunnerHost({
         runPowerShell: async (script) => {
-          const instance = runnerProcess(31337);
-          if (mode === "absent") return { code: 0, stdout: "", stderr: "" };
           const getProcess =
             `function Get-CimInstance { [CmdletBinding()] param([string]$ClassName, [string]$Filter) ` +
             `[pscustomobject]@{ ProcessId = 31337; ExecutablePath = ${psQuote(instance.executablePath)}; ` +
@@ -2108,9 +2147,7 @@ describe("runner process stop boundary", () => {
         },
       });
 
-      await expect(host.stopInstances([runnerProcess(31337)])).resolves.toBeUndefined();
-      mode = "blocked";
-      const error = (await host.stopInstances([runnerProcess(31337)]).catch((caught) => caught)) as Error;
+      const error = (await host.stopInstances([instance]).catch((caught) => caught)) as Error;
 
       expect(error.message).toBe("failed to stop runner process 31337");
       expect(error.message).not.toContain(sentinel);

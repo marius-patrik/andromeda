@@ -1156,14 +1156,14 @@ export function createWindowsRunnerHost(options: WindowsRunnerHostOptions = {}):
           `-ErrorAction SilentlyContinue -ErrorVariable queryErr); ` +
           `$queryErr = @($queryErr); ` +
           `if ($queryErr.Count -gt 0) { throw $queryErr[0] }; ` +
-          `if ($found.Count -eq 0) { return $null }; ` +
+          `if ($found.Count -eq 0) { return }; ` +
           `if ($found.Count -ne 1) { throw 'ambiguous runner process identity' }; ` +
           `$candidate = $found[0]; ` +
           `if ($null -eq $candidate.ExecutablePath -or $null -eq $candidate.CreationDate) { ` +
           `throw 'runner process identity is inaccessible' }; ` +
           `$created = $candidate.CreationDate.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ'); ` +
           `if ($candidate.ExecutablePath -ine ${powerShellQuote(instance.executablePath)} -or ` +
-          `$created -ne ${powerShellQuote(instance.startedAt)}) { return $null }; ` +
+          `$created -ne ${powerShellQuote(instance.startedAt)}) { return }; ` +
           `return $candidate ` +
           `}; ` +
           `$before = @(Get-RunnerProcess); ` +
