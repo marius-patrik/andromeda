@@ -3,6 +3,7 @@ import "./cli.test.js";
 import "./clean-evidence.test.js";
 import "./config.test.js";
 import "./df-audit.test.js";
+import "./df-autoreview.test.js";
 import "./df-orchestrate.test.js";
 import "./df-plan.test.js";
 import "./df-verify.test.js";
