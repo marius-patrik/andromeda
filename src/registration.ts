@@ -9,7 +9,7 @@ const REGISTRATION_PR_MARKER = "<!-- darkfactory:managed-registration-pr -->";
 const REGISTRATION_PROVENANCE_PREFIX = "<!-- darkfactory:managed-registration";
 const REGISTRATION_GATE_APP_ID = 15368;
 const REGISTRATION_VALIDATE_CHECK = "Validate";
-const REGISTRATION_REVIEW_CHECKS = ["DarkFactory Autoreview", "Codex Review"] as const;
+const REGISTRATION_REVIEW_CHECK = "DarkFactory Autoreview";
 const REGISTRATION_NOTE = "Managed code repository admitted through the reviewed df setup registration lane.";
 
 interface RegistrationProvenance {
@@ -409,16 +409,12 @@ async function registrationCompletionGate(
     return { ready: false, detail: "Waiting for the exact App-bound Validate check on the registration head.", reviewCheck: "" };
   }
   assertGreenRegistrationGate(validate, REGISTRATION_VALIDATE_CHECK);
-  const reviewName = latest.has(REGISTRATION_REVIEW_CHECKS[0])
-    ? REGISTRATION_REVIEW_CHECKS[0]
-    : latest.has(REGISTRATION_REVIEW_CHECKS[1])
-      ? REGISTRATION_REVIEW_CHECKS[1]
-      : null;
-  if (!reviewName) {
-    return { ready: false, detail: "Waiting for an exact App-bound DarkFactory Autoreview (or retained Codex Review migration gate).", reviewCheck: "" };
+  const review = latest.get(REGISTRATION_REVIEW_CHECK);
+  if (!review) {
+    return { ready: false, detail: "Waiting for the exact App-bound DarkFactory Autoreview check on the registration head.", reviewCheck: "" };
   }
-  assertGreenRegistrationGate(latest.get(reviewName)!, reviewName);
-  return { ready: true, detail: "Exact App-bound Validate and review checks are green.", reviewCheck: reviewName };
+  assertGreenRegistrationGate(review, REGISTRATION_REVIEW_CHECK);
+  return { ready: true, detail: "Exact App-bound Validate and DarkFactory Autoreview checks are green.", reviewCheck: REGISTRATION_REVIEW_CHECK };
 }
 
 function assertGreenRegistrationGate(check: RegistrationCheckRun, name: string): void {

@@ -34,7 +34,7 @@ function exactReviewComment(issue: Record<string, any>, targetVersion = issueVer
   };
 }
 
-function exactReviewHarness(repository: string, rawIssue: Record<string, any>, extraComments: any[] = []) {
+function exactReviewHarness(repository: string, rawIssue: Record<string, any>, extraComments: any[] = [], timeline?: any[]) {
   const issue = reviewedIssue(rawIssue);
   const comments = [...extraComments, exactReviewComment(issue)];
   return {
@@ -42,6 +42,11 @@ function exactReviewHarness(repository: string, rawIssue: Record<string, any>, e
     respond(method: string, path: string, body?: any): any {
       if (method === "GET" && path === `/repos/${repository}/issues/${issue.number}`) return issue;
       if (method === "GET" && path === `/repos/${repository}/issues/${issue.number}/comments?per_page=100&page=1`) return comments;
+      if (method === "GET" && path === `/repos/${repository}/issues/${issue.number}/timeline?per_page=100&page=1`) {
+        if (timeline) return timeline;
+        const hasReady = (issue.labels || []).some((label: any) => (typeof label === "string" ? label : label?.name) === "df:ready");
+        return hasReady ? [labeledEvent("df:ready", "2026-07-16T12:00:00Z")] : [];
+      }
       if (method === "POST" && path === `/repos/${repository}/issues/${issue.number}/labels`) {
         const current = new Set((issue.labels || []).map((label: any) => typeof label === "string" ? label : label?.name));
         for (const label of body?.labels || []) current.add(label);
@@ -102,11 +107,12 @@ function blockedComment(createdAt: string) {
   };
 }
 
-function labeledEvent(label: string, createdAt: string) {
+function labeledEvent(label: string, createdAt: string, actor: Record<string, unknown> = { login: "darkfactory-agent[bot]", type: "Bot" }) {
   return {
     event: "labeled",
     label: { name: label },
-    created_at: createdAt
+    created_at: createdAt,
+    actor
   };
 }
 
@@ -478,6 +484,7 @@ test("dispatch-time admission revokes a cached ready label when the reviewed iss
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") return [queued];
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/402") return live;
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/402/comments?per_page=100&page=1") return [reviewComment];
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues/402/timeline?per_page=100&page=1") return [labeledEvent("df:ready", "2026-07-16T10:00:00Z")];
       if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/402/labels/df%3Aready") return {};
       throw new Error(`Unexpected GitHub request: ${method} ${path}`);
     }
@@ -575,6 +582,86 @@ test("readiness evaluator treats df:no-dispatch as categorical even for a valid 
   assert.equal(evaluateIssueReadiness(issue, { currentRepoOpenIssueNumbers: new Set() }).ready, false);
   assert.deepEqual(selectDispatchableIssues([issue], { enforceContract: true }), []);
   assert.equal(shouldAutoReadySequencedIssue({ ...issue, body: `${EXECUTABLE_BODY}\n\nBlocked-by: #1`, labels: [{ name: "df:no-dispatch" }] }, { currentRepoOpenIssueNumbers: new Set() }), false);
+});
+
+test("readiness revokes a human or near-miss ready label before any full-predicate reapplication", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { currentReadyLabelOwnership, evaluateIssueReadinessLabels } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-ready-label-reconciliation-test");
+  async function run(repositoryState: Record<string, unknown>, actor: Record<string, unknown>) {
+    const issue = reviewedIssue({ number: 71, title: "Trust the ready owner", body: EXECUTABLE_BODY, state: "open", labels: [{ name: "df:ready" }] });
+    const timeline = [labeledEvent("df:ready", "2026-07-16T10:00:00Z", actor)];
+    const calls: Array<{ method: string; path: string }> = [];
+    const gh = {
+      async request(method: string, path: string, body?: any) {
+        calls.push({ method, path });
+        if (method === "GET" && path.endsWith("/issues/71/timeline?per_page=100&page=1")) return timeline;
+        if (method === "GET" && path.endsWith("/issues/71/comments?per_page=100&page=1")) return [exactReviewComment(issue)];
+        if (method === "DELETE" && path.endsWith("/issues/71/labels/df%3Aready")) {
+          issue.labels = issue.labels.filter((label: any) => label.name !== "df:ready");
+          timeline.push({ ...labeledEvent("df:ready", "2026-07-16T10:01:00Z"), event: "unlabeled" });
+          return {};
+        }
+        if (method === "POST" && path.endsWith("/labels") && !path.includes("/issues/")) return {};
+        if (method === "POST" && path.endsWith("/issues/71/labels")) {
+          issue.labels.push({ name: "df:ready" });
+          timeline.push(labeledEvent("df:ready", "2026-07-16T10:02:00Z"));
+          return {};
+        }
+        throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+      }
+    };
+    const evaluations = await evaluateIssueReadinessLabels(gh, [{
+      repository: { owner: "marius-patrik", repo: "example" },
+      openIssues: [issue]
+    }], () => {}, {
+      policy: healthyPolicy(),
+      readinessByRepository: new Map([["marius-patrik/example", repositoryState]])
+    });
+    return { issue, timeline, calls, evaluation: evaluations[0], currentReadyLabelOwnership };
+  }
+
+  const healthy = await run({ observable: true, doctorPerfect: true, gatesHealthy: true }, { login: "marius-patrik", type: "User" });
+  assert.equal(healthy.evaluation.action, "replaced-untrusted-ready");
+  assert.equal(healthy.currentReadyLabelOwnership(healthy.timeline).trusted, true);
+  const removal = healthy.calls.findIndex((call) => call.method === "DELETE" && call.path.endsWith("df%3Aready"));
+  const reapply = healthy.calls.findIndex((call) => call.method === "POST" && call.path.endsWith("/issues/71/labels"));
+  assert.ok(removal >= 0 && reapply > removal);
+
+  const degraded = await run({ observable: true, doctorPerfect: false, gatesHealthy: true }, { login: "darkfactory-agent", type: "Bot" });
+  assert.equal(degraded.evaluation.action, "revoked-untrusted-ready");
+  assert.equal(degraded.issue.labels.some((label: any) => label.name === "df:ready"), false);
+  assert.equal(degraded.calls.some((call) => call.method === "POST" && call.path.endsWith("/issues/71/labels")), false);
+});
+
+test("dispatch admission accepts current App ownership and rejects human or stale ready events", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { revalidateDispatchAdmission } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-ready-label-dispatch-admission-test");
+  async function admit(timeline: any[]) {
+    const issue = reviewedIssue({ number: 72, title: "Dispatch only trusted ready", body: EXECUTABLE_BODY, state: "open", labels: [{ name: "df:ready" }] });
+    const gh = {
+      async request(method: string, path: string) {
+        if (method === "GET" && path.endsWith("/issues/72")) return issue;
+        if (method === "GET" && path.endsWith("/issues/72/comments?per_page=100&page=1")) return [exactReviewComment(issue)];
+        if (method === "GET" && path.endsWith("/issues/72/timeline?per_page=100&page=1")) return timeline;
+        throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+      }
+    };
+    return await revalidateDispatchAdmission(gh, { owner: "marius-patrik", repo: "example" }, 72, {
+      repositoryState: { observable: true, doctorPerfect: true, gatesHealthy: true },
+      knownRepositories: new Set(["marius-patrik/example"])
+    });
+  }
+
+  assert.equal((await admit([labeledEvent("df:ready", "2026-07-16T10:00:00Z")])).ready, true);
+  const human = await admit([labeledEvent("df:ready", "2026-07-16T10:00:00Z", { login: "marius-patrik", type: "User" })]);
+  assert.equal(human.ready, false);
+  assert.ok(human.findings.some((finding: any) => finding.id === "ready-label-untrusted"));
+  const stale = await admit([
+    labeledEvent("df:ready", "2026-07-16T10:00:00Z"),
+    { ...labeledEvent("df:ready", "2026-07-16T10:01:00Z"), event: "unlabeled" }
+  ]);
+  assert.equal(stale.ready, false);
+  assert.ok(stale.findings.some((finding: any) => finding.id === "ready-label-untrusted"));
 });
 
 test("orchestrator holds and escalates unknown cross-repo Blocked-by references", async () => {
@@ -1440,22 +1527,73 @@ test("parseEventRequest ignores untrusted /df run comments", async () => {
   assert.equal(request, null);
 });
 
-test("parseEventRequest accepts df:ready label events for one issue", async () => {
+test("parseEventRequest accepts only the exact current App ready actor as dispatch-capable", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { parseEventRequest } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-label-event-parse-test");
 
   const request = parseEventRequest(JSON.stringify({
+    action: "labeled",
     repository: { full_name: "marius-patrik/example" },
     issue: { number: 44 },
-    label: { name: "df:ready" }
+    label: { name: "df:ready" },
+    sender: { login: "darkfactory-agent[bot]", type: "Bot" }
   }), "issues", () => {});
 
   assert.deepEqual(request, {
     repository: { owner: "marius-patrik", repo: "example" },
     issueNumber: 44,
     slashRun: false,
-    readyLabel: true
+    readyLabel: true,
+    readyLabelActorTrusted: true,
+    evaluationOnly: false
   });
+});
+
+test("parseEventRequest scopes human and near-miss ready labels to evaluation-only cleanup", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { parseEventRequest } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-untrusted-label-event-test");
+  for (const sender of [
+    { login: "marius-patrik", type: "User" },
+    { login: "darkfactory-agent", type: "Bot" },
+    { login: "evil-darkfactory-agent[bot]", type: "Bot" },
+    { login: "darkfactory-agent[bot]", type: "User" }
+  ]) {
+    const request = parseEventRequest(JSON.stringify({
+      action: "labeled",
+      repository: { full_name: "marius-patrik/example" },
+      issue: { number: 44 },
+      label: { name: "df:ready" },
+      sender
+    }), "issues", () => {});
+    assert.equal(request?.readyLabelActorTrusted, false, JSON.stringify(sender));
+    assert.equal(request?.evaluationOnly, true, JSON.stringify(sender));
+  }
+  assert.equal(parseEventRequest(JSON.stringify({
+    action: "unlabeled",
+    repository: { full_name: "marius-patrik/example" },
+    issue: { number: 44 },
+    label: { name: "df:ready" },
+    sender: { login: "darkfactory-agent[bot]", type: "Bot" }
+  }), "issues", () => {}), null);
+});
+
+test("current ready ownership follows the latest current event and rejects stale or near-miss actors", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { currentReadyLabelOwnership } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-ready-event-ownership-test");
+  const trusted = labeledEvent("df:ready", "2026-07-16T10:00:00Z");
+  assert.equal(currentReadyLabelOwnership([trusted]).trusted, true);
+  assert.equal(currentReadyLabelOwnership([
+    trusted,
+    labeledEvent("df:ready", "2026-07-16T10:01:00Z", { login: "marius-patrik", type: "User" })
+  ]).trusted, false);
+  assert.equal(currentReadyLabelOwnership([
+    trusted,
+    labeledEvent("df:ready", "2026-07-16T10:02:00Z", { login: "darkfactory-agent", type: "Bot" })
+  ]).trusted, false);
+  assert.equal(currentReadyLabelOwnership([
+    trusted,
+    { ...labeledEvent("df:ready", "2026-07-16T10:03:00Z"), event: "unlabeled" }
+  ]).reason, "latest-ready-event-is-unlabeled");
 });
 
 test("parseWorkflowDispatchRequest scopes source events", async () => {

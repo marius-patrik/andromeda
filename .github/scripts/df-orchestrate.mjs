@@ -41,6 +41,7 @@ export const ASK_OWNER_MARKER = "dark-factory:orchestrator-ask-owner";
 export const RESUME_MARKER = "dark-factory:worker-resume";
 export const READINESS_MARKER = "dark-factory:readiness-evaluation";
 export const REPEATED_FAILURE_THRESHOLD = 3;
+export const TRUSTED_READY_LABEL_ACTOR = "darkfactory-agent[bot]";
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
@@ -149,7 +150,7 @@ export async function orchestrate(options) {
     issueReviews
   });
   const autoReadied = readinessEvaluations
-    .filter((evaluation) => evaluation.action === "labeled-ready")
+    .filter((evaluation) => ["labeled-ready", "replaced-untrusted-ready"].includes(evaluation.action))
     .map((evaluation) => ({ repo: evaluation.repo, issue: evaluation.issue }));
   const plan = buildOrchestrationPlan(scopedSnapshots, policy, {
     targetIssue: eventRequest,
@@ -415,13 +416,24 @@ export function parseEventRequest(payloadText, trigger = "unknown", warn = conso
     };
   }
 
-  if (payload.label?.name !== "df:ready") return null;
+  if (payload.action !== "labeled" || payload.label?.name !== "df:ready") return null;
+  const readyLabelActorTrusted = isTrustedReadyLabelActor(payload.sender);
   return {
     repository,
     issueNumber,
     slashRun: false,
-    readyLabel: true
+    readyLabel: true,
+    readyLabelActorTrusted,
+    evaluationOnly: !readyLabelActorTrusted
   };
+}
+
+export function isTrustedReadyLabelActor(actor) {
+  return actor !== null
+    && typeof actor === "object"
+    && !Array.isArray(actor)
+    && actor.type === "Bot"
+    && actor.login === TRUSTED_READY_LABEL_ACTOR;
 }
 
 export function parseWorkflowDispatchRequest(repoInput, issueNumberInput, sourceEventInput = "", warn = console.warn) {
@@ -725,6 +737,9 @@ export function evaluateIssueReadiness(issue, options = {}) {
   if (names.has("df:running") && options.allowClaimedIssue !== true) findings.push(readinessFinding("already-running", "Issue already has an active worker (`df:running`)."));
   if (options.allowClaimedIssue === true && !names.has("df:running")) findings.push(readinessFinding("claim-missing", "The dispatch-time worker claim is not observable."));
   if (options.requireReadyLabel === true && !names.has("df:ready")) findings.push(readinessFinding("ready-label-missing", "The machine-owned df:ready cache is not present."));
+  if (options.requireReadyLabel === true && names.has("df:ready") && options.readyLabelOwnership?.trusted !== true) {
+    findings.push(readinessFinding("ready-label-untrusted", "The latest current df:ready label event was not created by the exact trusted DarkFactory App Bot."));
+  }
   if (names.has("df:blocked")) findings.push(readinessFinding("blocked", "Resolve the recorded blocker; the system will re-evaluate automatically."));
   if (names.has("df:ask-owner")) findings.push(readinessFinding("owner-decision", "Resolve the owner decision; the system will re-evaluate automatically."));
   if (names.has("df:done")) findings.push(readinessFinding("already-done", "Issue is already complete (`df:done`)."));
@@ -890,7 +905,11 @@ export async function evaluateIssueReadinessLabels(gh, snapshots, warn = console
   for (const candidate of candidates) {
     const { repository, currentRepoName, currentRepoOpenIssueNumbers, issue } = candidate;
     await clearResolvedMachineBrakes(gh, repository, issue, options.readinessByRepository?.get(currentRepoName), warn);
-    const names = issueLabelNames(issue);
+    let names = issueLabelNames(issue);
+    const readyLabelOwnership = names.has("df:ready")
+      ? await observeReadyLabelOwnership(gh, repository, issue.number)
+      : null;
+    const readyLabelWasUntrusted = names.has("df:ready") && readyLabelOwnership?.trusted !== true;
     const baseEvaluationOptions = {
       repository,
       currentRepoName,
@@ -927,11 +946,17 @@ export async function evaluateIssueReadinessLabels(gh, snapshots, warn = console
     let action = "no-op";
 
     try {
+      if (readyLabelWasUntrusted) {
+        await replaceIssueLabels(gh, repository, issue.number, [], ["df:ready"]);
+        names = new Set([...names].filter((name) => name !== "df:ready"));
+        setIssueLabelNames(issue, [...names]);
+        action = "revoked-untrusted-ready";
+      }
       if (evaluation.ready && !names.has("df:ready")) {
         await ensureLabels(gh, repository, WORK_LABELS);
         await replaceIssueLabels(gh, repository, issue.number, ["df:ready"], []);
         setIssueLabelNames(issue, [...names, "df:ready"]);
-        action = "labeled-ready";
+        action = readyLabelWasUntrusted ? "replaced-untrusted-ready" : "labeled-ready";
       } else if (!evaluation.ready && names.has("df:ready")) {
         await replaceIssueLabels(gh, repository, issue.number, [], ["df:ready"]);
         setIssueLabelNames(issue, [...names].filter((name) => name !== "df:ready"));
@@ -955,6 +980,7 @@ export async function evaluateIssueReadinessLabels(gh, snapshots, warn = console
       ready: evaluation.ready,
       findings: evaluation.findings.map((finding) => finding.id),
       target_version: issueReview?.targetVersion || null,
+      ready_label_ownership: readyLabelOwnership,
       action
     });
   }
@@ -1422,6 +1448,53 @@ function readyRelabelEvents(items) {
     .map((item) => ({ kind: "ready", createdAt: historyTimestamp(item) }));
 }
 
+export function currentReadyLabelOwnership(timeline) {
+  if (!Array.isArray(timeline)) {
+    return Object.freeze({ trusted: false, reason: "timeline-malformed", actor: null, createdAt: null });
+  }
+  const relevant = [];
+  for (const [index, item] of timeline.entries()) {
+    if (!item || !["labeled", "unlabeled"].includes(item.event) || labelName(item) !== "df:ready") continue;
+    const createdAt = historyTimestamp(item);
+    if (!createdAt) {
+      return Object.freeze({ trusted: false, reason: "ready-event-time-malformed", actor: null, createdAt: null });
+    }
+    relevant.push({ item, index, createdAt });
+  }
+  if (relevant.length === 0) {
+    return Object.freeze({ trusted: false, reason: "ready-event-missing", actor: null, createdAt: null });
+  }
+  relevant.sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt) || left.index - right.index);
+  const latest = relevant.at(-1);
+  if (latest.item.event !== "labeled") {
+    return Object.freeze({ trusted: false, reason: "latest-ready-event-is-unlabeled", actor: null, createdAt: latest.createdAt });
+  }
+  const actor = latest.item.actor;
+  const trusted = isTrustedReadyLabelActor(actor);
+  return Object.freeze({
+    trusted,
+    reason: trusted ? "exact-current-app" : "latest-ready-actor-untrusted",
+    actor: actor && typeof actor === "object"
+      ? Object.freeze({ login: String(actor.login || ""), type: String(actor.type || "") })
+      : null,
+    createdAt: latest.createdAt
+  });
+}
+
+async function observeReadyLabelOwnership(gh, repository, issueNumber) {
+  try {
+    return currentReadyLabelOwnership(await listIssueTimeline(gh, repository, issueNumber));
+  } catch (error) {
+    return Object.freeze({
+      trusted: false,
+      reason: "ready-timeline-unobservable",
+      actor: null,
+      createdAt: null,
+      error: error.message || String(error)
+    });
+  }
+}
+
 function isRepeatedFailureEvidence(item) {
   const body = String(item?.body || "");
   return (
@@ -1474,11 +1547,12 @@ async function listIssueTimeline(gh, repository, issueNumber) {
       "GET",
       `/repos/${repoName(repository)}/issues/${issueNumber}/timeline?per_page=100&page=${page}`
     );
-    if (!Array.isArray(batch) || batch.length === 0) break;
+    if (!Array.isArray(batch)) throw new Error(`Issue timeline for ${repoName(repository)}#${issueNumber} page ${page} was not an array`);
+    if (batch.length === 0) return events;
     events.push(...batch);
-    if (batch.length < 100) break;
+    if (batch.length < 100) return events;
   }
-  return events;
+  throw new Error(`Issue timeline for ${repoName(repository)}#${issueNumber} exceeded 1000 records; refusing incomplete ready-label provenance`);
 }
 
 function askOwnerComment(repository, issue, escalation) {
@@ -1848,7 +1922,12 @@ export async function revalidateDispatchAdmission(gh, repository, issueNumber, o
   if (issue?.number !== issueNumber) {
     return { ready: false, findings: [readinessFinding("target-mismatch", "GitHub did not return the exact requested issue.")] };
   }
-  const comments = await listIssueComments(gh, repository, issueNumber);
+  const [comments, readyLabelOwnership] = await Promise.all([
+    listIssueComments(gh, repository, issueNumber),
+    options.allowClaimedIssue === true
+      ? Promise.resolve(null)
+      : observeReadyLabelOwnership(gh, repository, issueNumber)
+  ]);
   let effectiveIssue = issue;
   let dependencies = [];
   try {
@@ -1865,6 +1944,7 @@ export async function revalidateDispatchAdmission(gh, repository, issueNumber, o
       requireIssueReview: true,
       issueReview,
       requireReadyLabel: options.allowClaimedIssue !== true,
+      readyLabelOwnership,
       allowClaimedIssue: options.allowClaimedIssue === true
     });
   }
@@ -1879,6 +1959,7 @@ export async function revalidateDispatchAdmission(gh, repository, issueNumber, o
     requireIssueReview: true,
     issueReview,
     requireReadyLabel: options.allowClaimedIssue !== true,
+    readyLabelOwnership,
     allowClaimedIssue: options.allowClaimedIssue === true
   });
 }
@@ -1906,18 +1987,18 @@ async function readLiveDependencyStates(gh, repository, issue, knownRepositories
 }
 
 export async function dispatchWorker(gh, controlRepo, repository, issueNumber, admission) {
-  const existingPullRequest = await findOpenWorkerPullRequestForIssue(gh, repository, issueNumber);
-  if (existingPullRequest) {
-    await replaceIssueLabels(gh, repository, issueNumber, ["df:running"], ["df:ready"]);
-    return false;
-  }
-
   if (!admission?.repositoryState || !admission?.knownRepositories) {
     throw new Error("Worker dispatch requires current repository readiness and managed-repository authority.");
   }
   const beforeClaim = await revalidateDispatchAdmission(gh, repository, issueNumber, admission);
   if (!beforeClaim.ready) {
     await replaceIssueLabels(gh, repository, issueNumber, [], ["df:ready"]);
+    return false;
+  }
+
+  const existingPullRequest = await findOpenWorkerPullRequestForIssue(gh, repository, issueNumber);
+  if (existingPullRequest) {
+    await replaceIssueLabels(gh, repository, issueNumber, ["df:running"], ["df:ready"]);
     return false;
   }
 

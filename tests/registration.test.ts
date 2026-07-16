@@ -72,15 +72,18 @@ test("managed registration lands only an exact green App-bound reviewed pull req
   assert.equal(calls.includes("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge"), true);
 });
 
-test("managed registration accepts the retained App-bound Codex Review migration gate", async () => {
-  const result = await convergeManagedRegistration(fixtureGithub([], {
+test("managed registration blocks a Codex Review-only registration head", async () => {
+  const calls: string[] = [];
+  const result = await convergeManagedRegistration(fixtureGithub(calls, {
     repositories: { "marius-patrik/Andromeda": { state: "active" } },
     registrationChecks: "green",
     registrationReviewCheck: "Codex Review"
   }), TARGET);
 
-  assert.equal(result.sourceActive, true);
-  assert.match(result.receipt.detail, /App-bound Validate and Codex Review/);
+  assert.equal(result.sourceActive, false);
+  assert.equal(result.receipt.action, "managed-registration-pr");
+  assert.match(result.receipt.detail, /exact App-bound DarkFactory Autoreview/);
+  assert.equal(calls.includes("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge"), false);
 });
 
 test("managed registration refuses a green-looking review from the wrong App", async () => {

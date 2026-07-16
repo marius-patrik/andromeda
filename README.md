@@ -252,8 +252,8 @@ instead of enforceable branch protection and repository auto-merge, setup
 completes its exact App-owned registration PR through an application-enforced
 gate: the current provenance-bound head must have no red or pending latest
 checks, and both `Validate` and `DarkFactory Autoreview` must be green from the
-GitHub Actions App (`15368`). The retained `Codex Review` name is accepted only
-when the replacement Autoreview context is absent. Setup then performs an
+GitHub Actions App (`15368`); `Codex Review` is never an admissible substitute.
+Setup then performs an
 SHA-bound squash merge and re-proves the App merge actor, ancestry, and exact
 active registry entry before dispatching managed sync; it has no bypass path.
 
