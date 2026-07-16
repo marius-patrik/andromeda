@@ -246,6 +246,16 @@ export interface CleanEvidence {
     findingIds: string[];
     reviewable: boolean;
     autoreview: AutoreviewState;
+    scopeDigest?: string;
+    fold?: {
+      findingId: string;
+      findingFingerprint: string;
+      successorNumber: number;
+      successorVersion: string;
+      sourceScopeDigest: string;
+      successorScopeDigest: string;
+      proof: "line-containment-v1";
+    };
   }>;
   reviewFindings: Array<{
     id: string;
@@ -259,14 +269,52 @@ export interface CleanEvidence {
   pullRequestFingerprint: string;
   issueLaneFingerprint: string;
   prdFingerprint: string;
+  artifactRepairs?: Array<{
+    findingId: string;
+    findingFingerprint: string;
+    path: string;
+    blobSha: string;
+    mode: "100644" | "100755" | "120000";
+    base: "dev";
+    baseSha: string;
+    branch: string;
+    state: "needed" | "watch" | "resolved";
+    pull?: {
+      number: number;
+      version: string;
+      headRef: string;
+      head: string;
+      autoMerge: boolean;
+      merged: boolean;
+    };
+  }>;
+  managedLabels?: Array<{
+    findingId: string;
+    findingFingerprint: string;
+    name: string;
+    color: string;
+    description: string;
+    policyPath: ".darkfactory/labels.json";
+    policyBlob: string;
+    policyRef: "dev";
+    policyRevision: string;
+  }>;
+  markerIssues?: Array<{
+    number: number;
+    version: string;
+    marker: string;
+    reason: "resolved-doctor" | "duplicate-doctor" | "legacy-audit" | "duplicate-dashboard";
+    findingSetFingerprint: string;
+    successor?: { number: number; version: string };
+  }>;
 }
 
 export interface CleanPlanEntry {
-  kind: "remote-branch" | "local-branch" | "worktree" | "orphan-ref" | "pull-request" | "issue" | "lane-finding";
+  kind: "remote-branch" | "local-branch" | "worktree" | "orphan-ref" | "pull-request" | "issue" | "lane-finding" | "artifact" | "managed-label" | "marker-issue";
   target: string;
   head: string;
   classification: CleanClassification;
-  action: "preserve" | "delete" | "remove" | "autoreview" | "close";
+  action: "preserve" | "delete" | "remove" | "autoreview" | "close" | "fold" | "repair-artifact" | "delete-label" | "watch";
   version?: string;
   base?: string;
   baseSha?: string;
@@ -280,6 +328,10 @@ export interface CleanPlanEntry {
     head: string;
     proof: "head-ancestry" | "tree-equivalence";
   };
+  issueFold?: NonNullable<CleanEvidence["issues"][number]["fold"]>;
+  artifact?: NonNullable<CleanEvidence["artifactRepairs"]>[number];
+  managedLabel?: NonNullable<CleanEvidence["managedLabels"]>[number];
+  markerIssue?: NonNullable<CleanEvidence["markerIssues"]>[number];
   reasons: string[];
 }
 
@@ -295,6 +347,7 @@ export interface CleanPlan {
 
 export function buildCleanPlan(evidence: CleanEvidence, now = new Date()): CleanPlan {
   const entries: CleanPlanEntry[] = [];
+  const admittedFindingRepairs = new Set<string>();
   for (const branch of [...evidence.branches].sort((a, b) => a.name.localeCompare(b.name))) {
     const classification = classifyBranch(branch);
     const safe = classification === "proven-merged" || classification === "proven-redundant";
@@ -418,7 +471,11 @@ export function buildCleanPlan(evidence: CleanEvidence, now = new Date()): Clean
     });
   }
   for (const issue of [...evidence.issues].sort((a, b) => a.number - b.number)) {
-    const shouldReview = issue.classification === "finding"
+    const shouldFold = issue.fold !== undefined;
+    const ambiguousDuplicate = issue.findingIds.some((id) => id.startsWith("duplicate-issue-") || /-issue-duplicate$/.test(id));
+    const shouldReview = !shouldFold
+      && !ambiguousDuplicate
+      && issue.classification === "finding"
       && issue.reviewable
       && issue.autoreview !== "current"
       && issue.autoreview !== "pending"
@@ -428,9 +485,12 @@ export function buildCleanPlan(evidence: CleanEvidence, now = new Date()): Clean
       target: `#${issue.number}`,
       head: issue.fingerprint,
       classification: issue.classification,
-      action: shouldReview ? "autoreview" : "preserve",
+      action: shouldFold ? "fold" : shouldReview ? "autoreview" : "preserve",
       version: issue.fingerprint,
-      reasons: shouldReview
+      ...(issue.fold ? { issueFold: issue.fold } : {}),
+      reasons: shouldFold
+        ? [`Exact source scope ${issue.fold!.sourceScopeDigest} is contained by open successor #${issue.fold!.successorNumber} at ${issue.fold!.successorVersion}; close only after revalidating both versions and publishing a durable receipt.`]
+        : shouldReview
         ? ["The exact issue version has reviewable lane defects; invoke the shared issue Autoreview/autofix protocol without closing or dropping scope.", ...issue.findingIds]
         : issue.autoreview === "pending"
         ? ["The exact issue version already has an in-progress Autoreview; duplicate dispatch is suppressed.", ...issue.findingIds]
@@ -442,8 +502,54 @@ export function buildCleanPlan(evidence: CleanEvidence, now = new Date()): Clean
         ? ["The finding is blocked or owner-owned; issue text and scope remain immutable.", ...issue.findingIds]
         : ["Issue contract is current under deterministic lane review."]
     });
+    if (issue.fold) admittedFindingRepairs.add(issue.fold.findingId);
   }
+
+  for (const artifact of [...(evidence.artifactRepairs ?? [])].sort((a, b) => a.path.localeCompare(b.path))) {
+    admittedFindingRepairs.add(artifact.findingId);
+    entries.push({
+      kind: "artifact",
+      target: artifact.path,
+      head: artifact.blobSha,
+      classification: "review-finding",
+      action: artifact.state === "needed" ? "repair-artifact" : artifact.state === "watch" ? "watch" : "preserve",
+      artifact,
+      reasons: artifact.state === "needed"
+        ? [`Exact generated blob ${artifact.blobSha} on ${artifact.base}@${artifact.baseSha} can be removed only through the marker-owned reviewed cleanup PR.`]
+        : artifact.state === "watch"
+        ? [`Exact cleanup PR #${artifact.pull!.number} is already admitted${artifact.pull!.autoMerge ? " with protected auto-merge armed" : ""}; wait for GitHub's green gates.`]
+        : [`Merged cleanup PR #${artifact.pull!.number} is the durable exact receipt for this generated blob removal.`]
+    });
+  }
+
+  for (const label of [...(evidence.managedLabels ?? [])].sort((a, b) => a.name.localeCompare(b.name))) {
+    admittedFindingRepairs.add(label.findingId);
+    entries.push({
+      kind: "managed-label",
+      target: label.name,
+      head: label.findingFingerprint,
+      classification: "review-finding",
+      action: "delete-label",
+      managedLabel: label,
+      reasons: [`Exact policy-owned label is absent from the current managed taxonomy and may be deleted only while its color and description remain unchanged.`]
+    });
+  }
+
+  for (const markerIssue of [...(evidence.markerIssues ?? [])].sort((a, b) => a.number - b.number)) {
+    entries.push({
+      kind: "marker-issue",
+      target: `#${markerIssue.number}`,
+      head: markerIssue.version,
+      classification: "review-finding",
+      action: "close",
+      version: markerIssue.version,
+      markerIssue,
+      reasons: [`Exact trusted ${markerIssue.reason} marker is stale; close only after actor, marker, version${markerIssue.successor ? ", and successor" : ""} revalidation.`]
+    });
+  }
+
   for (const finding of [...evidence.reviewFindings].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (admittedFindingRepairs.has(finding.id)) continue;
     entries.push({
       kind: "lane-finding",
       target: finding.id,

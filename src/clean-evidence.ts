@@ -5,6 +5,7 @@ import {
   AUTOREVIEW_RESULT_MARKER,
   AUTOREVIEW_TARGET_VERSION_MARKER_PREFIX,
   isTrustedDarkFactoryComment,
+  issueVersion,
   resolveEffectiveIssueContent
 } from "./issue-spec.js";
 
@@ -26,6 +27,15 @@ const TRUSTED_ACTIONS_APP_ID = 15368;
 const AUTOREVIEW_WORKFLOW = "darkfactory-autoreview.yml";
 const CLEAN_CLOSURE_MARKER = "<!-- darkfactory:clean-pr-closure";
 const CLEAN_AUTOREVIEW_MARKER = "<!-- darkfactory:clean-autoreview";
+const CLEAN_ISSUE_FOLD_MARKER = "<!-- darkfactory:clean-issue-fold";
+const CLEAN_MARKER_ISSUE_CLOSURE = "<!-- darkfactory:clean-marker-issue-closure";
+const CLEAN_ARTIFACT_MARKER = "<!-- darkfactory:clean-artifact";
+const CLEAN_ARTIFACT_BRANCH_PREFIX = "darkfactory/clean-artifact-";
+const MANAGED_LABEL_POLICY_PATH = ".darkfactory/labels.json";
+const DASHBOARD_MARKER = "df-dashboard:orchestration";
+const TRUSTED_ISSUE_ACTORS = new Set(["darkfactory-agent[bot]", "mp-agents[bot]"]);
+const REQUIRED_PROTECTED_CHECKS = ["Validate", "DarkFactory Autoreview"] as const;
+const EXACT_COMMIT = /^[0-9a-f]{40}$/;
 const AUTOREVIEW_PENDING_MAX_AGE_MS = 3 * 60 * 60 * 1_000;
 const ISSUE_VERSION = /^[0-9a-f]{64}$/;
 const PULL_REQUEST_VERSION = /^[0-9a-f]{40}:[0-9a-f]{40}$/;
@@ -198,6 +208,12 @@ export async function collectCleanEvidence(
     });
   }
   const openIssues: CleanEvidence["issues"] = [];
+  const effectiveIssues = new Map<number, {
+    issue: Record<string, unknown>;
+    comments: Record<string, unknown>[];
+    effective: ReturnType<typeof resolveEffectiveIssueContent>;
+    scope: IssueScopeEvidence;
+  }>();
   for (const issue of issues.filter((candidate) => !asRecord(candidate, "issue").pull_request)) {
     const value = asRecord(issue, "issue");
     const number = requiredNumber(value.number, "issue number");
@@ -206,15 +222,24 @@ export async function collectCleanEvidence(
     const issueComments = commentsByIssue.get(number) ?? [];
     const effective = resolveEffectiveIssueContent(value, issueComments);
     const fingerprint = effective.version;
+    const scope = issueScopeEvidence(effective.title, effective.body);
+    effectiveIssues.set(number, { issue: value, comments: issueComments, effective, scope });
+    if (ownedMarker(value) !== null) continue;
     openIssues.push({
       number,
       fingerprint,
       classification: findingIds.length ? "finding" as const : "current" as const,
       findingIds,
       reviewable: issueFindings.length > 0 && issueFindings.every((finding) => finding.repair_class === "pr"),
-      autoreview: observeIssueAutoreview(issueComments, fingerprint)
+      autoreview: observeIssueAutoreview(issueComments, fingerprint),
+      scopeDigest: scope.digest
     });
   }
+  assignIssueFoldEvidence(openIssues, stableReviewFindings, effectiveIssues);
+  const findingSetFingerprint = stableHash(stableReviewFindings.map((finding) => ({ id: finding.id, fingerprint: finding.fingerprint })));
+  const markerIssues = collectMarkerIssueEvidence(effectiveIssues, stableReviewFindings, repository, findingSetFingerprint);
+  const artifactRepairs = await collectArtifactRepairEvidence(github, repository, branchHeads, normalizedPulls, stableReviewFindings);
+  const managedLabels = await collectManagedLabelEvidence(github, repository, branchHeads, stableReviewFindings);
 
   const prdFingerprint = await contentFingerprint(github, repository, "PRD.md", defaultBranch);
   return {
@@ -238,16 +263,458 @@ export async function collectCleanEvidence(
       baseSha: pull.baseSha,
       body: pull.body,
       sameRepository: pull.sameRepository,
+      trustedActor: pull.trustedActor,
+      autoMerge: pull.autoMerge,
       updatedAt: pull.updatedAt
     }))),
     issueLaneFingerprint: stableHash(openIssues.map((issue) => ({
       number: issue.number,
       version: issue.fingerprint,
       autoreview: issue.autoreview,
-      findingIds: issue.findingIds
+      findingIds: issue.findingIds,
+      scopeDigest: issue.scopeDigest,
+      fold: issue.fold
     }))),
-    prdFingerprint
+    prdFingerprint,
+    artifactRepairs,
+    managedLabels,
+    markerIssues
   };
+}
+
+interface IssueScopeEvidence {
+  title: string;
+  lines: string[];
+  digest: string;
+}
+
+function issueScopeEvidence(title: string, body: string): IssueScopeEvidence {
+  const normalizedTitle = normalizeScopeLine(title);
+  const lines = [...new Set(body
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map(normalizeScopeLine)
+    .filter((line) => line && !/^(?:[-*]\s*)?(?:status\s*:\s*)?superseded[- ]by\s*:/i.test(line)))]
+    .sort();
+  return { title: normalizedTitle, lines, digest: stableHash({ title: normalizedTitle, lines }) };
+}
+
+function normalizeScopeLine(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function issueScopeContains(source: IssueScopeEvidence, successor: IssueScopeEvidence): boolean {
+  if (!source.title || source.title !== successor.title || source.lines.length === 0) return false;
+  const successorLines = new Set(successor.lines);
+  return source.lines.every((line) => successorLines.has(line));
+}
+
+function assignIssueFoldEvidence(
+  issues: CleanEvidence["issues"],
+  findings: CleanEvidence["reviewFindings"],
+  effectiveIssues: Map<number, { scope: IssueScopeEvidence }>
+): void {
+  const issuesByNumber = new Map(issues.map((issue) => [issue.number, issue]));
+  const proposals = new Map<number, Array<{
+    findingId: string;
+    findingFingerprint: string;
+    successorNumber: number;
+    successorVersion: string;
+    sourceScopeDigest: string;
+    successorScopeDigest: string;
+    proof: "line-containment-v1";
+  }>>();
+  const groups: Array<{ sources: number[] }> = [];
+
+  for (const finding of findings) {
+    const match = /^duplicate-issue-contract-(\d+(?:-\d+)+)$/.exec(finding.id);
+    if (!match) continue;
+    const numbers = [...new Set(match[1].split("-").map(Number))].sort((a, b) => a - b);
+    if (numbers.length < 2 || numbers.some((number) => !Number.isSafeInteger(number) || !issuesByNumber.has(number) || !effectiveIssues.has(number))) continue;
+    const completeSuccessors = numbers.filter((candidateNumber) => {
+      const candidate = effectiveIssues.get(candidateNumber)!.scope;
+      return numbers.every((sourceNumber) => issueScopeContains(effectiveIssues.get(sourceNumber)!.scope, candidate));
+    });
+    const successorNumber = completeSuccessors[0];
+    if (successorNumber === undefined) continue;
+    const successor = issuesByNumber.get(successorNumber)!;
+    const successorScope = effectiveIssues.get(successorNumber)!.scope;
+    const sources = numbers.filter((number) => number !== successorNumber);
+    groups.push({ sources });
+    for (const sourceNumber of sources) {
+      const sourceScope = effectiveIssues.get(sourceNumber)!.scope;
+      const proposal = {
+        findingId: finding.id,
+        findingFingerprint: finding.fingerprint,
+        successorNumber,
+        successorVersion: successor.fingerprint,
+        sourceScopeDigest: sourceScope.digest,
+        successorScopeDigest: successorScope.digest,
+        proof: "line-containment-v1" as const
+      };
+      proposals.set(sourceNumber, [...(proposals.get(sourceNumber) ?? []), proposal]);
+    }
+  }
+
+  for (const group of groups) {
+    if (group.sources.some((number) => (proposals.get(number) ?? []).length !== 1)) continue;
+    for (const sourceNumber of group.sources) issuesByNumber.get(sourceNumber)!.fold = proposals.get(sourceNumber)![0];
+  }
+}
+
+function collectMarkerIssueEvidence(
+  effectiveIssues: Map<number, {
+    issue: Record<string, unknown>;
+    effective: ReturnType<typeof resolveEffectiveIssueContent>;
+  }>,
+  findings: CleanEvidence["reviewFindings"],
+  repository: RepositoryRef,
+  findingSetFingerprint: string
+): NonNullable<CleanEvidence["markerIssues"]> {
+  const currentFindingIds = new Set(findings.map((finding) => finding.id));
+  const repositorySlug = cleanSlug(`${repository.owner}-${repository.repo}`);
+  const doctorPrefix = `df-doctor:${repositorySlug}:`;
+  const doctors = new Map<string, Array<{ number: number; version: string }>>();
+  const dashboards: Array<{ number: number; version: string; updatedAt: number }> = [];
+  const legacy: Array<{ number: number; version: string }> = [];
+
+  for (const [number, observed] of effectiveIssues) {
+    const marker = ownedMarker(observed.issue);
+    if (!marker) continue;
+    if (marker.kind === "doctor" && marker.value.startsWith(doctorPrefix)) {
+      doctors.set(marker.value, [...(doctors.get(marker.value) ?? []), { number, version: observed.effective.version }]);
+    } else if (marker.kind === "dashboard") {
+      const updatedAt = timestamp(observed.issue.updated_at);
+      if (updatedAt > 0) dashboards.push({ number, version: observed.effective.version, updatedAt });
+    } else if (marker.kind === "legacy-audit" && marker.value === `df-audit:${repositorySlug}`) {
+      legacy.push({ number, version: observed.effective.version });
+    }
+  }
+
+  const result: NonNullable<CleanEvidence["markerIssues"]> = [];
+  for (const [marker, matches] of doctors) {
+    const ordered = [...matches].sort((a, b) => a.number - b.number);
+    const findingId = marker.slice(doctorPrefix.length);
+    if (!currentFindingIds.has(findingId)) {
+      for (const issue of ordered) result.push({ ...issue, marker, reason: "resolved-doctor", findingSetFingerprint });
+      continue;
+    }
+    const successor = ordered[0];
+    for (const issue of ordered.slice(1)) {
+      result.push({ ...issue, marker, reason: "duplicate-doctor", findingSetFingerprint, successor });
+    }
+  }
+  for (const issue of legacy.sort((a, b) => a.number - b.number)) {
+    result.push({ ...issue, marker: `df-audit:${repositorySlug}`, reason: "legacy-audit", findingSetFingerprint });
+  }
+  if (dashboards.length > 1) {
+    const ordered = [...dashboards].sort((a, b) => b.updatedAt - a.updatedAt || a.number - b.number);
+    const successor = { number: ordered[0]!.number, version: ordered[0]!.version };
+    for (const issue of ordered.slice(1)) {
+      result.push({ number: issue.number, version: issue.version, marker: DASHBOARD_MARKER, reason: "duplicate-dashboard", findingSetFingerprint, successor });
+    }
+  }
+  return result.sort((a, b) => a.number - b.number);
+}
+
+function ownedMarker(issue: Record<string, unknown>): { kind: "doctor" | "dashboard" | "legacy-audit"; value: string } | null {
+  const user = issue.user && typeof issue.user === "object" && !Array.isArray(issue.user) ? issue.user as Record<string, unknown> : {};
+  if (user.type !== "Bot" || typeof user.login !== "string" || !TRUSTED_ISSUE_ACTORS.has(user.login)) return null;
+  const body = typeof issue.body === "string" ? issue.body : "";
+  const matches = [
+    ...[...body.matchAll(/<!--\s*(df-doctor:[a-z0-9-]+:[a-z0-9-]+)\s*-->/gi)].map((match) => ({ kind: "doctor" as const, value: match[1]!.toLowerCase() })),
+    ...[...body.matchAll(/<!--\s*(df-audit:[a-z0-9-]+)\s*-->/gi)].map((match) => ({ kind: "legacy-audit" as const, value: match[1]!.toLowerCase() })),
+    ...[...body.matchAll(/<!--\s*(df-dashboard:orchestration)\s*-->/gi)].map((match) => ({ kind: "dashboard" as const, value: match[1]!.toLowerCase() }))
+  ];
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+async function collectArtifactRepairEvidence(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  branchHeads: Map<string, string>,
+  pulls: ReturnType<typeof normalizePull>[],
+  findings: CleanEvidence["reviewFindings"]
+): Promise<NonNullable<CleanEvidence["artifactRepairs"]>> {
+  const candidates = findings.flatMap((finding) => {
+    const match = /^Generated\/runtime artifact `([^`]+)` is committed\.$/.exec(finding.message);
+    return match && finding.category === "repository hygiene" && finding.repairClass === "pr"
+      ? [{ finding, path: match[1]! }]
+      : [];
+  });
+  const baseSha = branchHeads.get("dev");
+  if (candidates.length === 0 || !baseSha || !EXACT_COMMIT.test(baseSha)) return [];
+  const tree = await readCompleteTree(github, repository, baseSha);
+  const entries = new Map(tree.map((entry) => [entry.path, entry]));
+  const repairs: NonNullable<CleanEvidence["artifactRepairs"]> = [];
+
+  for (const candidate of candidates) {
+    if (!safeRepositoryPath(candidate.path)) continue;
+    const conflicting = findings.some((finding) => finding.id !== candidate.finding.id
+      && finding.message.includes(`\`${candidate.path}\``)
+      && ["state boundary", "nested repository state"].includes(finding.category));
+    if (conflicting) continue;
+    const entry = entries.get(candidate.path);
+    const mergedReceipt: NormalizedPull[] = [];
+    for (const pull of exactArtifactPulls(pulls, candidate.finding.id, candidate.path, null, null).filter((pull) => pull.merged)) {
+      const marker = parseArtifactMarker(pull.body)!;
+      if (await artifactPullReceiptIsExact(github, repository, pull, marker)) mergedReceipt.push(pull);
+    }
+    if (!entry) {
+      if (mergedReceipt.length !== 1) continue;
+      const pull = mergedReceipt[0]!;
+      const marker = parseArtifactMarker(pull.body)!;
+      repairs.push({
+        findingId: candidate.finding.id,
+        findingFingerprint: candidate.finding.fingerprint,
+        path: candidate.path,
+        blobSha: marker.blobSha,
+        mode: marker.mode,
+        base: "dev",
+        baseSha,
+        branch: artifactBranch(candidate.finding.id, candidate.path, marker.blobSha, marker.baseSha),
+        state: "resolved",
+        pull: artifactPullEvidence(pull)
+      });
+      continue;
+    }
+    if (entry.type !== "blob" || !EXACT_COMMIT.test(entry.sha) || !isBlobMode(entry.mode)) continue;
+    const branch = artifactBranch(candidate.finding.id, candidate.path, entry.sha, baseSha);
+    const openReceipt: NormalizedPull[] = [];
+    for (const pull of exactArtifactPulls(pulls, candidate.finding.id, candidate.path, entry.sha, baseSha)
+      .filter((pull) => pull.state === "open" && pull.headRef === branch && pull.baseSha === baseSha)) {
+      const marker = parseArtifactMarker(pull.body)!;
+      if (await artifactPullReceiptIsExact(github, repository, pull, marker)) openReceipt.push(pull);
+    }
+    if (openReceipt.length > 1) continue;
+    const pull = openReceipt[0];
+    repairs.push({
+      findingId: candidate.finding.id,
+      findingFingerprint: candidate.finding.fingerprint,
+      path: candidate.path,
+      blobSha: entry.sha,
+      mode: entry.mode,
+      base: "dev",
+      baseSha,
+      branch,
+      state: pull?.autoMerge ? "watch" : "needed",
+      ...(pull ? { pull: artifactPullEvidence(pull) } : {})
+    });
+  }
+  return repairs.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+async function collectManagedLabelEvidence(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  branchHeads: Map<string, string>,
+  findings: CleanEvidence["reviewFindings"]
+): Promise<NonNullable<CleanEvidence["managedLabels"]>> {
+  const candidates = findings.flatMap((finding) => {
+    const match = /^Managed label `([^`]+)` is absent from the canonical taxonomy\.$/.exec(finding.message);
+    return match && finding.id.endsWith("-orphan") ? [{ finding, name: match[1]! }] : [];
+  });
+  const policyRevision = branchHeads.get("dev");
+  if (candidates.length === 0 || !policyRevision || !EXACT_COMMIT.test(policyRevision)) return [];
+  const policyFile = await readTextFile(github, repository, MANAGED_LABEL_POLICY_PATH, policyRevision);
+  let policy: unknown;
+  try {
+    policy = JSON.parse(policyFile.content);
+  } catch {
+    return [];
+  }
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return [];
+  const policyLabels = (policy as Record<string, unknown>).labels;
+  if ((policy as Record<string, unknown>).schemaVersion !== 1 || !Array.isArray(policyLabels)) return [];
+  const desired = new Set(policyLabels.flatMap((label) => {
+    if (!label || typeof label !== "object" || Array.isArray(label) || typeof (label as Record<string, unknown>).name !== "string") return [];
+    return [String((label as Record<string, unknown>).name).toLowerCase()];
+  }));
+  const rawLabels = await listPages(github, "GET /repos/{owner}/{repo}/labels", { ...repository });
+  const actual = rawLabels.map((label, index) => {
+    const value = asRecord(label, `repository label ${index}`);
+    return {
+      name: requiredString(value.name, `repository label ${index} name`),
+      color: requiredString(value.color, `repository label ${index} color`).toLowerCase(),
+      description: typeof value.description === "string" ? value.description : ""
+    };
+  });
+  const result: NonNullable<CleanEvidence["managedLabels"]> = [];
+  for (const candidate of candidates) {
+    if (!candidate.name.startsWith("df:") || desired.has(candidate.name.toLowerCase())) continue;
+    const matches = actual.filter((label) => label.name.toLowerCase() === candidate.name.toLowerCase());
+    if (matches.length !== 1 || !/^[0-9a-f]{6}$/.test(matches[0]!.color)) continue;
+    result.push({
+      findingId: candidate.finding.id,
+      findingFingerprint: candidate.finding.fingerprint,
+      ...matches[0]!,
+      policyPath: MANAGED_LABEL_POLICY_PATH,
+      policyBlob: policyFile.sha,
+      policyRef: "dev",
+      policyRevision
+    });
+  }
+  return result.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function readCompleteTree(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  treeSha: string
+): Promise<Array<{ path: string; type: string; sha: string; mode: string }>> {
+  const tree = asRecord((await github.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+    ...repository,
+    tree_sha: treeSha,
+    recursive: "1"
+  })).data, `recursive tree ${treeSha}`);
+  if (tree.truncated === true || !Array.isArray(tree.tree)) throw new Error(`recursive tree ${treeSha} is incomplete`);
+  return tree.tree.map((item, index) => {
+    const entry = asRecord(item, `recursive tree ${treeSha} entry ${index}`);
+    return {
+      path: requiredString(entry.path, `recursive tree ${treeSha} entry ${index} path`),
+      type: requiredString(entry.type, `recursive tree ${treeSha} entry ${index} type`),
+      sha: requiredString(entry.sha, `recursive tree ${treeSha} entry ${index} sha`).toLowerCase(),
+      mode: requiredString(entry.mode, `recursive tree ${treeSha} entry ${index} mode`)
+    };
+  });
+}
+
+async function readTextFile(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  path: string,
+  ref: string
+): Promise<{ sha: string; content: string }> {
+  const value = asRecord((await github.request("GET /repos/{owner}/{repo}/contents/{path}", {
+    ...repository,
+    path,
+    ref
+  })).data, `${path} at ${ref}`);
+  const sha = requiredString(value.sha, `${path} blob`).toLowerCase();
+  if (!EXACT_COMMIT.test(sha) || value.encoding !== "base64" || typeof value.content !== "string") throw new Error(`${path} at ${ref} is not an exact observable text blob`);
+  return { sha, content: Buffer.from(value.content.replace(/\s/g, ""), "base64").toString("utf8") };
+}
+
+function safeRepositoryPath(path: string): boolean {
+  return Boolean(path)
+    && !path.startsWith("/")
+    && !path.includes("\\")
+    && !path.includes("\0")
+    && !/[\u0000-\u001f\u007f]/.test(path)
+    && path.split("/").every((segment) => segment && segment !== "." && segment !== "..");
+}
+
+function isBlobMode(value: string): value is "100644" | "100755" | "120000" {
+  return value === "100644" || value === "100755" || value === "120000";
+}
+
+function cleanSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+interface ArtifactMarker {
+  findingId: string;
+  path: string;
+  blobSha: string;
+  mode: "100644" | "100755" | "120000";
+  baseSha: string;
+  headSha: string;
+}
+
+function artifactBranch(findingId: string, path: string, blobSha: string, baseSha: string): string {
+  return `${CLEAN_ARTIFACT_BRANCH_PREFIX}${stableHash({ findingId, path, blobSha, baseSha }).slice(0, 24)}`;
+}
+
+function artifactMarker(marker: ArtifactMarker): string {
+  const encodedPath = Buffer.from(marker.path, "utf8").toString("base64url");
+  return `${CLEAN_ARTIFACT_MARKER} schema=1 finding=${marker.findingId} path=${encodedPath} blob=${marker.blobSha} mode=${marker.mode} base=${marker.baseSha} head=${marker.headSha} -->`;
+}
+
+function parseArtifactMarker(body: string): ArtifactMarker | null {
+  const lines = body.split(/\r?\n/);
+  const matches = lines.filter((line) => line.startsWith(CLEAN_ARTIFACT_MARKER));
+  if (matches.length !== 1) return null;
+  if (lines[0] !== matches[0]) return null;
+  const match = /^<!-- darkfactory:clean-artifact schema=1 finding=([^\s]+) path=([A-Za-z0-9_-]+) blob=([0-9a-f]{40}) mode=(100644|100755|120000) base=([0-9a-f]{40}) head=([0-9a-f]{40}) -->$/.exec(matches[0]!);
+  if (!match) return null;
+  let path: string;
+  try {
+    path = Buffer.from(match[2]!, "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+  if (!safeRepositoryPath(path) || Buffer.from(path, "utf8").toString("base64url") !== match[2]) return null;
+  return {
+    findingId: match[1]!,
+    path,
+    blobSha: match[3]!,
+    mode: match[4]! as ArtifactMarker["mode"],
+    baseSha: match[5]!,
+    headSha: match[6]!
+  };
+}
+
+function exactArtifactPulls(
+  pulls: NormalizedPull[],
+  findingId: string,
+  path: string,
+  blobSha: string | null,
+  baseSha: string | null
+): NormalizedPull[] {
+  return pulls.filter((pull) => {
+    const marker = parseArtifactMarker(pull.body);
+    return marker !== null
+      && pull.trustedActor
+      && pull.sameRepository
+      && !pull.draft
+      && pull.baseRef === "dev"
+      && pull.baseSha === marker.baseSha
+      && pull.title === artifactPullTitle(path)
+      && marker.findingId === findingId
+      && marker.path === path
+      && marker.headSha === pull.headSha
+      && pull.headRef === artifactBranch(marker.findingId, marker.path, marker.blobSha, marker.baseSha)
+      && (blobSha === null || marker.blobSha === blobSha)
+      && (baseSha === null || marker.baseSha === baseSha);
+  });
+}
+
+function artifactPullEvidence(pull: NormalizedPull): NonNullable<NonNullable<CleanEvidence["artifactRepairs"]>[number]["pull"]> {
+  return {
+    number: pull.number,
+    version: pullVersion(pull),
+    headRef: pull.headRef,
+    head: pull.headSha,
+    autoMerge: pull.autoMerge,
+    merged: pull.merged
+  };
+}
+
+async function artifactPullReceiptIsExact(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  pull: NormalizedPull,
+  marker: ArtifactMarker
+): Promise<boolean> {
+  try {
+    if (pull.baseSha !== marker.baseSha || pull.title !== artifactPullTitle(marker.path)) return false;
+    const commit = asRecord((await github.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+      ...repository,
+      commit_sha: marker.headSha
+    })).data, `artifact receipt commit ${marker.headSha}`);
+    if (commit.message !== artifactCommitMessage(marker.path) || !Array.isArray(commit.parents) || commit.parents.length !== 1) return false;
+    if (asRecord(commit.parents[0], `artifact receipt commit ${marker.headSha} parent`).sha !== marker.baseSha) return false;
+    if (await exactArtifactBlob(github, repository, marker.headSha, marker.path) !== null) return false;
+    const files = await listPages(github, "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+      ...repository,
+      pull_number: pull.number
+    });
+    if (files.length !== 1) return false;
+    const file = asRecord(files[0], `artifact receipt pull #${pull.number} file`);
+    return file.filename === marker.path && file.status === "removed" && file.sha === marker.blobSha;
+  } catch {
+    return false;
+  }
 }
 
 export interface CleanApplyReceipt {
@@ -378,6 +845,26 @@ export async function applyCleanPlan(
 
   for (const entry of saved.entries.filter((candidate) => candidate.kind === "pull-request" && candidate.action === "close")) {
     await applyPullClosureAction(github, repository, entry, actions, options);
+  }
+
+  for (const entry of saved.entries.filter((candidate) => candidate.kind === "issue" && candidate.action === "fold")) {
+    await applyIssueFoldAction(github, repository, entry, actions, options);
+  }
+
+  for (const entry of saved.entries.filter((candidate) => candidate.kind === "marker-issue" && candidate.action === "close")) {
+    await applyMarkerIssueClosure(github, repository, entry, actions, options);
+  }
+
+  for (const entry of saved.entries.filter((candidate) => candidate.kind === "managed-label" && candidate.action === "delete-label")) {
+    await applyManagedLabelDeletion(github, repository, entry, actions, options);
+  }
+
+  for (const entry of saved.entries.filter((candidate) => candidate.kind === "artifact" && candidate.action === "repair-artifact")) {
+    await applyArtifactRepairAction(github, repository, entry, actions, options);
+  }
+
+  for (const entry of saved.entries.filter((candidate) => candidate.action === "watch")) {
+    await recordCompleted(actions, actionReceipt(entry, "skipped", entry.reasons.join(" ")), options.onCompletion);
   }
 
   for (const entry of saved.entries.filter((candidate) => candidate.action === "preserve")) {
@@ -572,6 +1059,593 @@ async function applyPullClosureAction(
   await recordCompleted(
     actions,
     actionReceipt(entry, "applied", `Closed with exact ${entry.successor.proof} successor PR #${entry.successor.number}; source and successor versions are receipt-bound.`),
+    options.onCompletion
+  );
+}
+
+interface ExactIssueObservation {
+  issue: Record<string, unknown>;
+  comments: Record<string, unknown>[];
+  effective: ReturnType<typeof resolveEffectiveIssueContent>;
+}
+
+async function readExactOpenIssue(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  number: number,
+  label: string
+): Promise<ExactIssueObservation> {
+  const issue = asRecord((await github.request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
+    ...repository,
+    issue_number: number
+  })).data, label);
+  const comments = (await listPages(github, "GET /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+    ...repository,
+    issue_number: number
+  })).map((comment, index) => asRecord(comment, `${label} comment ${index}`));
+  if (issue.pull_request !== undefined || issue.state !== "open") throw new Error(`${label} is no longer an open issue`);
+  return { issue, comments, effective: resolveEffectiveIssueContent(issue, comments) };
+}
+
+async function revalidateIssueFold(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  entry: CleanPlanEntry
+): Promise<{ source: ExactIssueObservation; successor: ExactIssueObservation }> {
+  if (!entry.version || !entry.issueFold || !ISSUE_VERSION.test(entry.version)) {
+    throw new Error(`clean issue fold ${entry.target} lacks exact containment evidence`);
+  }
+  const sourceNumber = cleanTargetNumber(entry);
+  const { successorNumber, successorVersion, sourceScopeDigest, successorScopeDigest } = entry.issueFold;
+  if (successorNumber === sourceNumber || !ISSUE_VERSION.test(successorVersion)) {
+    throw new Error(`clean issue fold ${entry.target} has an invalid successor identity`);
+  }
+  const [source, successor] = await Promise.all([
+    readExactOpenIssue(github, repository, sourceNumber, `issue ${entry.target}`),
+    readExactOpenIssue(github, repository, successorNumber, `successor issue #${successorNumber}`)
+  ]);
+  if (source.effective.version !== entry.version || successor.effective.version !== successorVersion) {
+    throw new Error(`issue ${entry.target} or successor #${successorNumber} drifted from its exact version`);
+  }
+  const sourceScope = issueScopeEvidence(source.effective.title, source.effective.body);
+  const successorScope = issueScopeEvidence(successor.effective.title, successor.effective.body);
+  if (sourceScope.digest !== sourceScopeDigest
+    || successorScope.digest !== successorScopeDigest
+    || !issueScopeContains(sourceScope, successorScope)) {
+    throw new Error(`issue ${entry.target} successor no longer contains the complete source scope`);
+  }
+  return { source, successor };
+}
+
+function issueFoldMarker(entry: CleanPlanEntry): string {
+  if (!entry.version || !entry.issueFold) throw new Error(`clean issue fold ${entry.target} lacks exact evidence`);
+  const fold = entry.issueFold;
+  return `${CLEAN_ISSUE_FOLD_MARKER} schema=1 source=${entry.version} successor=${fold.successorNumber} successor-version=${fold.successorVersion} source-scope=${fold.sourceScopeDigest} successor-scope=${fold.successorScopeDigest} finding=${fold.findingId} finding-fingerprint=${fold.findingFingerprint} proof=${fold.proof} -->`;
+}
+
+function renderIssueFoldComment(entry: CleanPlanEntry): string {
+  if (!entry.issueFold) throw new Error(`clean issue fold ${entry.target} lacks exact evidence`);
+  return [
+    issueFoldMarker(entry),
+    "## DarkFactory duplicate issue fold",
+    "",
+    `Closing this exact duplicate only because open issue #${entry.issueFold.successorNumber} contains every normalized source scope line.`,
+    "",
+    `Source scope: \`${entry.issueFold.sourceScopeDigest}\``,
+    `Successor scope: \`${entry.issueFold.successorScopeDigest}\``
+  ].join("\n");
+}
+
+function isTrustedIssueFoldComment(value: unknown, entry: CleanPlanEntry): boolean {
+  return isTrustedDarkFactoryComment(value)
+    && typeof (value as Record<string, unknown>).body === "string"
+    && ((value as Record<string, unknown>).body as string).split(/\r?\n/, 1)[0] === issueFoldMarker(entry);
+}
+
+async function applyIssueFoldAction(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  entry: CleanPlanEntry,
+  actions: CleanApplyReceipt["actions"],
+  options: CleanApplyOptions
+): Promise<void> {
+  await revalidateIssueFold(github, repository, entry);
+  await recordAdmission(
+    actionReceipt(entry, "applied", `Admitted exact scope-preserving fold into #${entry.issueFold!.successorNumber}.`),
+    options.onAdmission
+  );
+  let observed = await revalidateIssueFold(github, repository, entry);
+  if (!observed.source.comments.some((comment) => isTrustedIssueFoldComment(comment, entry))) {
+    const response = await github.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+      ...repository,
+      issue_number: cleanTargetNumber(entry),
+      body: renderIssueFoldComment(entry)
+    });
+    if (!isTrustedIssueFoldComment(response.data, entry)) throw new Error(`issue ${entry.target} fold receipt actor or marker is untrusted`);
+  }
+  observed = await revalidateIssueFold(github, repository, entry);
+  if (!observed.source.comments.some((comment) => isTrustedIssueFoldComment(comment, entry))) {
+    throw new Error(`issue ${entry.target} fold receipt was not durably re-observed`);
+  }
+  await github.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
+    ...repository,
+    issue_number: cleanTargetNumber(entry),
+    state: "closed"
+  });
+  const closedIssue = asRecord((await github.request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
+    ...repository,
+    issue_number: cleanTargetNumber(entry)
+  })).data, `closed issue ${entry.target}`);
+  if (closedIssue.state !== "closed" || closedIssue.pull_request !== undefined) throw new Error(`issue ${entry.target} closure was not confirmed`);
+  const closedComments = (await listPages(github, "GET /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+    ...repository,
+    issue_number: cleanTargetNumber(entry)
+  })).map((comment, index) => asRecord(comment, `closed issue ${entry.target} comment ${index}`));
+  const closedEffective = resolveEffectiveIssueContent(closedIssue, closedComments);
+  if (closedEffective.title !== observed.source.effective.title || closedEffective.body !== observed.source.effective.body) {
+    throw new Error(`issue ${entry.target} content changed during closure`);
+  }
+  if (!closedComments.some((comment) => isTrustedIssueFoldComment(comment, entry))) {
+    throw new Error(`issue ${entry.target} fold receipt disappeared during closure`);
+  }
+  await recordCompleted(
+    actions,
+    actionReceipt(entry, "applied", `Closed after exact source/successor revalidation; #${entry.issueFold!.successorNumber} preserves the complete source scope.`),
+    options.onCompletion
+  );
+}
+
+function markerIssueClosureMarker(entry: CleanPlanEntry): string {
+  if (!entry.markerIssue) throw new Error(`clean marker issue ${entry.target} lacks exact evidence`);
+  const evidence = entry.markerIssue;
+  return `${CLEAN_MARKER_ISSUE_CLOSURE} schema=1 issue=${evidence.number} version=${evidence.version} marker=${Buffer.from(evidence.marker, "utf8").toString("base64url")} reason=${evidence.reason} findings=${evidence.findingSetFingerprint}${evidence.successor ? ` successor=${evidence.successor.number} successor-version=${evidence.successor.version}` : ""} -->`;
+}
+
+function isTrustedMarkerIssueClosureComment(value: unknown, entry: CleanPlanEntry): boolean {
+  return isTrustedDarkFactoryComment(value)
+    && typeof (value as Record<string, unknown>).body === "string"
+    && ((value as Record<string, unknown>).body as string).split(/\r?\n/, 1)[0] === markerIssueClosureMarker(entry);
+}
+
+async function revalidateMarkerIssue(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  entry: CleanPlanEntry
+): Promise<ExactIssueObservation> {
+  if (!entry.markerIssue || !entry.version || entry.version !== entry.markerIssue.version) {
+    throw new Error(`clean marker issue ${entry.target} lacks exact evidence`);
+  }
+  const evidence = entry.markerIssue;
+  const observed = await readExactOpenIssue(github, repository, evidence.number, `marker issue ${entry.target}`);
+  const marker = ownedMarker(observed.issue);
+  if (!marker || marker.value !== evidence.marker || observed.effective.version !== evidence.version) {
+    throw new Error(`marker issue ${entry.target} actor, marker, or exact version drifted`);
+  }
+  if (evidence.successor) {
+    const successor = await readExactOpenIssue(github, repository, evidence.successor.number, `marker successor #${evidence.successor.number}`);
+    const successorMarker = ownedMarker(successor.issue);
+    if (!successorMarker || successorMarker.value !== evidence.marker || successor.effective.version !== evidence.successor.version) {
+      throw new Error(`marker issue ${entry.target} successor drifted`);
+    }
+  }
+  return observed;
+}
+
+async function applyMarkerIssueClosure(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  entry: CleanPlanEntry,
+  actions: CleanApplyReceipt["actions"],
+  options: CleanApplyOptions
+): Promise<void> {
+  await revalidateMarkerIssue(github, repository, entry);
+  await recordAdmission(actionReceipt(entry, "applied", `Admitted exact trusted ${entry.markerIssue!.reason} marker closure.`), options.onAdmission);
+  let observed = await revalidateMarkerIssue(github, repository, entry);
+  if (!observed.comments.some((comment) => isTrustedMarkerIssueClosureComment(comment, entry))) {
+    const body = [markerIssueClosureMarker(entry), "## DarkFactory marker cleanup", "", "This exact machine-owned marker issue is stale and is closed without mutating any human-owned issue."].join("\n");
+    const response = await github.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+      ...repository,
+      issue_number: entry.markerIssue!.number,
+      body
+    });
+    if (!isTrustedMarkerIssueClosureComment(response.data, entry)) throw new Error(`marker issue ${entry.target} closure receipt is untrusted`);
+  }
+  observed = await revalidateMarkerIssue(github, repository, entry);
+  if (!observed.comments.some((comment) => isTrustedMarkerIssueClosureComment(comment, entry))) {
+    throw new Error(`marker issue ${entry.target} closure receipt was not durably re-observed`);
+  }
+  await github.request("PATCH /repos/{owner}/{repo}/issues/{issue_number}", {
+    ...repository,
+    issue_number: entry.markerIssue!.number,
+    state: "closed"
+  });
+  const closed = asRecord((await github.request("GET /repos/{owner}/{repo}/issues/{issue_number}", {
+    ...repository,
+    issue_number: entry.markerIssue!.number
+  })).data, `closed marker issue ${entry.target}`);
+  if (closed.state !== "closed" || ownedMarker(closed)?.value !== entry.markerIssue!.marker) {
+    throw new Error(`marker issue ${entry.target} closure was not confirmed against the exact owned marker`);
+  }
+  await recordCompleted(actions, actionReceipt(entry, "applied", `Closed exact trusted ${entry.markerIssue!.reason} marker issue.`), options.onCompletion);
+}
+
+async function revalidateManagedLabel(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  entry: CleanPlanEntry
+): Promise<void> {
+  const label = entry.managedLabel;
+  if (!label || entry.target !== label.name || !label.name.startsWith("df:")) {
+    throw new Error(`clean managed label ${entry.target} lacks exact policy ownership evidence`);
+  }
+  const revision = await readRefSha(github, repository, label.policyRef);
+  if (revision !== label.policyRevision) throw new Error(`managed label ${entry.target} policy revision drifted`);
+  const policy = await readTextFile(github, repository, label.policyPath, revision);
+  if (policy.sha !== label.policyBlob) throw new Error(`managed label ${entry.target} policy blob drifted`);
+  let parsed: unknown;
+  try { parsed = JSON.parse(policy.content); } catch { throw new Error(`managed label ${entry.target} policy is malformed`); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || (parsed as Record<string, unknown>).schemaVersion !== 1 || !Array.isArray((parsed as Record<string, unknown>).labels)) {
+    throw new Error(`managed label ${entry.target} policy is malformed`);
+  }
+  const desired = ((parsed as Record<string, unknown>).labels as unknown[]).some((candidate) => {
+    return candidate !== null && typeof candidate === "object" && !Array.isArray(candidate)
+      && typeof (candidate as Record<string, unknown>).name === "string"
+      && String((candidate as Record<string, unknown>).name).toLowerCase() === label.name.toLowerCase();
+  });
+  if (desired) throw new Error(`managed label ${entry.target} became part of the canonical taxonomy`);
+  const current = asRecord((await github.request("GET /repos/{owner}/{repo}/labels/{name}", {
+    ...repository,
+    name: label.name
+  })).data, `managed label ${entry.target}`);
+  if (String(current.name).toLowerCase() !== label.name.toLowerCase()
+    || String(current.color).toLowerCase() !== label.color
+    || String(current.description ?? "") !== label.description) {
+    throw new Error(`managed label ${entry.target} drifted from its exact identity`);
+  }
+}
+
+async function applyManagedLabelDeletion(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  entry: CleanPlanEntry,
+  actions: CleanApplyReceipt["actions"],
+  options: CleanApplyOptions
+): Promise<void> {
+  await revalidateManagedLabel(github, repository, entry);
+  await recordAdmission(actionReceipt(entry, "applied", "Admitted deletion of an exact orphaned df: label after current policy proof."), options.onAdmission);
+  await revalidateManagedLabel(github, repository, entry);
+  await github.request("DELETE /repos/{owner}/{repo}/labels/{name}", { ...repository, name: entry.target });
+  try {
+    await github.request("GET /repos/{owner}/{repo}/labels/{name}", { ...repository, name: entry.target });
+  } catch (error) {
+    if (isStatus(error, 404)) {
+      await recordCompleted(actions, actionReceipt(entry, "applied", "Deleted and re-observed absence of the exact orphaned policy-owned label."), options.onCompletion);
+      return;
+    }
+    throw error;
+  }
+  throw new Error(`managed label ${entry.target} deletion was not confirmed`);
+}
+
+async function readRefSha(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  branch: string
+): Promise<string> {
+  const ref = asRecord((await github.request("GET /repos/{owner}/{repo}/git/ref/{ref}", {
+    ...repository,
+    ref: `heads/${branch}`
+  })).data, `branch ${branch}`);
+  const sha = requiredString(asRecord(ref.object, `branch ${branch} object`).sha, `branch ${branch} head`).toLowerCase();
+  if (!EXACT_COMMIT.test(sha)) throw new Error(`branch ${branch} head is not an exact commit`);
+  return sha;
+}
+
+async function readRefShaIfPresent(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  branch: string
+): Promise<string | null> {
+  try {
+    return await readRefSha(github, repository, branch);
+  } catch (error) {
+    if (isStatus(error, 404)) return null;
+    throw error;
+  }
+}
+
+function assertExactDevProtection(value: unknown): void {
+  const protection = asRecord(value, "dev branch protection");
+  const statuses = asRecord(protection.required_status_checks, "dev required status checks");
+  if (statuses.strict !== true || !Array.isArray(statuses.checks)) throw new Error("dev protection does not enforce strict App-bound checks");
+  const checks = statuses.checks.map((value, index) => {
+    const check = asRecord(value, `dev required check ${index}`);
+    return { context: requiredString(check.context, `dev required check ${index} context`), appId: requiredNumber(check.app_id, `dev required check ${index} app`) };
+  }).sort((left, right) => left.context.localeCompare(right.context));
+  const required = [...REQUIRED_PROTECTED_CHECKS].sort();
+  if (checks.length !== required.length || checks.some((check, index) => check.context !== required[index] || check.appId !== TRUSTED_ACTIONS_APP_ID)) {
+    throw new Error("dev protection is not bound exactly to Validate and DarkFactory Autoreview on the trusted Actions App");
+  }
+  const admins = asRecord(protection.enforce_admins, "dev admin enforcement");
+  const force = asRecord(protection.allow_force_pushes, "dev force-push policy");
+  const deletion = asRecord(protection.allow_deletions, "dev deletion policy");
+  if (admins.enabled !== true || force.enabled !== false || deletion.enabled !== false) {
+    throw new Error("dev protection permits a bypass, force push, or deletion");
+  }
+}
+
+async function assertProtectedDevLane(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef
+): Promise<void> {
+  const response = await github.request("GET /repos/{owner}/{repo}/branches/{branch}/protection", {
+    ...repository,
+    branch: "dev"
+  });
+  assertExactDevProtection(response.data);
+}
+
+async function exactArtifactBlob(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  revision: string,
+  path: string
+): Promise<{ sha: string; mode: "100644" | "100755" | "120000" } | null> {
+  const matches = (await readCompleteTree(github, repository, revision)).filter((entry) => entry.path === path);
+  if (matches.length === 0) return null;
+  if (matches.length !== 1 || matches[0]!.type !== "blob" || !EXACT_COMMIT.test(matches[0]!.sha) || !isBlobMode(matches[0]!.mode)) {
+    throw new Error(`artifact path ${path} is ambiguous or is not an exact blob`);
+  }
+  return { sha: matches[0]!.sha, mode: matches[0]!.mode };
+}
+
+function requireArtifactEntry(entry: CleanPlanEntry): NonNullable<CleanPlanEntry["artifact"]> {
+  const artifact = entry.artifact;
+  if (!artifact
+    || entry.target !== artifact.path
+    || entry.head !== artifact.blobSha
+    || artifact.base !== "dev"
+    || artifact.state !== "needed"
+    || !safeRepositoryPath(artifact.path)
+    || !EXACT_COMMIT.test(artifact.blobSha)
+    || !EXACT_COMMIT.test(artifact.baseSha)
+    || !isBlobMode(artifact.mode)
+    || artifact.branch !== artifactBranch(artifact.findingId, artifact.path, artifact.blobSha, artifact.baseSha)) {
+    throw new Error(`clean artifact ${entry.target} lacks exact marker-owned repair evidence`);
+  }
+  return artifact;
+}
+
+async function revalidateArtifactSource(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  entry: CleanPlanEntry
+): Promise<void> {
+  const artifact = requireArtifactEntry(entry);
+  const head = await readRefSha(github, repository, artifact.base);
+  if (head !== artifact.baseSha) throw new Error(`artifact ${artifact.path} base drifted from exact dev head`);
+  const blob = await exactArtifactBlob(github, repository, artifact.baseSha, artifact.path);
+  if (!blob || blob.sha !== artifact.blobSha || blob.mode !== artifact.mode) {
+    throw new Error(`artifact ${artifact.path} blob or mode drifted before repair`);
+  }
+  await assertProtectedDevLane(github, repository);
+}
+
+function artifactCommitMessage(path: string): string {
+  return `chore(clean): remove generated artifact ${path}`;
+}
+
+function artifactPullTitle(path: string): string {
+  return `chore(clean): remove generated artifact ${path}`;
+}
+
+function artifactPullBody(artifact: NonNullable<CleanPlanEntry["artifact"]>, headSha: string): string {
+  return [
+    artifactMarker({
+      findingId: artifact.findingId,
+      path: artifact.path,
+      blobSha: artifact.blobSha,
+      mode: artifact.mode,
+      baseSha: artifact.baseSha,
+      headSha
+    }),
+    "## DarkFactory generated artifact cleanup",
+    "",
+    `Removes only \`${artifact.path}\` at exact blob \`${artifact.blobSha}\` from \`dev@${artifact.baseSha}\`.`,
+    "",
+    "This pull request is marker-owned, protected by Validate and DarkFactory Autoreview, and may land only through GitHub auto-merge after both trusted App-bound checks are green."
+  ].join("\n");
+}
+
+async function verifyArtifactCommit(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  artifact: NonNullable<CleanPlanEntry["artifact"]>,
+  headSha: string
+): Promise<void> {
+  const ref = await readRefSha(github, repository, artifact.branch);
+  if (ref !== headSha) throw new Error(`artifact cleanup branch ${artifact.branch} drifted`);
+  const commit = asRecord((await github.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+    ...repository,
+    commit_sha: headSha
+  })).data, `artifact cleanup commit ${headSha}`);
+  if (commit.message !== artifactCommitMessage(artifact.path) || !Array.isArray(commit.parents) || commit.parents.length !== 1) {
+    throw new Error(`artifact cleanup commit ${headSha} is not the exact single-parent marker-owned change`);
+  }
+  const parent = asRecord(commit.parents[0], `artifact cleanup commit ${headSha} parent`);
+  if (parent.sha !== artifact.baseSha) throw new Error(`artifact cleanup commit ${headSha} parent drifted`);
+  if (await exactArtifactBlob(github, repository, headSha, artifact.path) !== null) {
+    throw new Error(`artifact cleanup commit ${headSha} did not remove ${artifact.path}`);
+  }
+}
+
+async function createOrResumeArtifactCommit(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  artifact: NonNullable<CleanPlanEntry["artifact"]>
+): Promise<string> {
+  const existing = await readRefShaIfPresent(github, repository, artifact.branch);
+  if (existing) {
+    await verifyArtifactCommit(github, repository, artifact, existing);
+    return existing;
+  }
+  const baseCommit = asRecord((await github.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+    ...repository,
+    commit_sha: artifact.baseSha
+  })).data, `artifact base commit ${artifact.baseSha}`);
+  const baseTree = requiredString(asRecord(baseCommit.tree, `artifact base commit ${artifact.baseSha} tree`).sha, `artifact base tree`);
+  const tree = asRecord((await github.request("POST /repos/{owner}/{repo}/git/trees", {
+    ...repository,
+    base_tree: baseTree,
+    tree: [{ path: artifact.path, mode: artifact.mode, type: "blob", sha: null }]
+  })).data, `artifact cleanup tree for ${artifact.path}`);
+  const treeSha = requiredString(tree.sha, `artifact cleanup tree for ${artifact.path}`).toLowerCase();
+  if (!EXACT_COMMIT.test(treeSha)) throw new Error(`artifact cleanup tree for ${artifact.path} is malformed`);
+  const commit = asRecord((await github.request("POST /repos/{owner}/{repo}/git/commits", {
+    ...repository,
+    message: artifactCommitMessage(artifact.path),
+    tree: treeSha,
+    parents: [artifact.baseSha]
+  })).data, `artifact cleanup commit for ${artifact.path}`);
+  const headSha = requiredString(commit.sha, `artifact cleanup commit for ${artifact.path}`).toLowerCase();
+  if (!EXACT_COMMIT.test(headSha)) throw new Error(`artifact cleanup commit for ${artifact.path} is malformed`);
+  try {
+    await github.request("POST /repos/{owner}/{repo}/git/refs", {
+      ...repository,
+      ref: `refs/heads/${artifact.branch}`,
+      sha: headSha
+    });
+  } catch (error) {
+    const concurrent = await readRefShaIfPresent(github, repository, artifact.branch);
+    if (concurrent === null) throw error;
+    await verifyArtifactCommit(github, repository, artifact, concurrent);
+    return concurrent;
+  }
+  await verifyArtifactCommit(github, repository, artifact, headSha);
+  return headSha;
+}
+
+async function findExactArtifactPull(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  artifact: NonNullable<CleanPlanEntry["artifact"]>,
+  headSha: string
+): Promise<NormalizedPull | null> {
+  const values = await listPages(github, "GET /repos/{owner}/{repo}/pulls", {
+    ...repository,
+    state: "open",
+    base: "dev",
+    head: `${repository.owner}:${artifact.branch}`
+  });
+  const pulls = values.map((value, index) => normalizePull(value, index, repository));
+  if (pulls.length > 1) throw new Error(`artifact ${artifact.path} has ambiguous open cleanup pull requests`);
+  if (pulls.length === 0) return null;
+  const pull = pulls[0]!;
+  const marker = parseArtifactMarker(pull.body);
+  if (!pull.trustedActor
+    || !pull.sameRepository
+    || pull.draft
+    || pull.state !== "open"
+    || pull.baseRef !== "dev"
+    || pull.baseSha !== artifact.baseSha
+    || pull.headRef !== artifact.branch
+    || pull.headSha !== headSha
+    || pull.title !== artifactPullTitle(artifact.path)
+    || !marker
+    || marker.findingId !== artifact.findingId
+    || marker.path !== artifact.path
+    || marker.blobSha !== artifact.blobSha
+    || marker.mode !== artifact.mode
+    || marker.baseSha !== artifact.baseSha
+    || marker.headSha !== headSha) {
+    throw new Error(`artifact ${artifact.path} cleanup pull request is not the exact trusted marker-owned lane`);
+  }
+  const files = await listPages(github, "GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+    ...repository,
+    pull_number: pull.number
+  });
+  if (files.length !== 1) throw new Error(`artifact ${artifact.path} cleanup pull contains additional changes`);
+  const file = asRecord(files[0], `artifact cleanup pull #${pull.number} file`);
+  if (file.filename !== artifact.path || file.status !== "removed" || file.sha !== artifact.blobSha) {
+    throw new Error(`artifact ${artifact.path} cleanup pull did not preserve the exact removal identity`);
+  }
+  await verifyArtifactCommit(github, repository, artifact, headSha);
+  return pull;
+}
+
+async function createOrResumeArtifactPull(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  artifact: NonNullable<CleanPlanEntry["artifact"]>,
+  headSha: string
+): Promise<NormalizedPull> {
+  let pull = await findExactArtifactPull(github, repository, artifact, headSha);
+  if (!pull) {
+    const response = await github.request("POST /repos/{owner}/{repo}/pulls", {
+      ...repository,
+      title: artifactPullTitle(artifact.path),
+      body: artifactPullBody(artifact, headSha),
+      head: artifact.branch,
+      base: "dev",
+      draft: false,
+      maintainer_can_modify: false
+    });
+    const created = normalizePull(response.data, 0, repository);
+    if (!created.trustedActor || created.headSha !== headSha || created.headRef !== artifact.branch || created.baseSha !== artifact.baseSha) {
+      throw new Error(`artifact ${artifact.path} cleanup pull was not created under the trusted exact actor and refs`);
+    }
+    pull = await findExactArtifactPull(github, repository, artifact, headSha);
+    if (!pull || pull.number !== created.number) throw new Error(`artifact ${artifact.path} cleanup pull was not durably re-observed`);
+  }
+  return pull;
+}
+
+async function armArtifactAutoMerge(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  artifact: NonNullable<CleanPlanEntry["artifact"]>,
+  headSha: string,
+  pull: NormalizedPull
+): Promise<NormalizedPull> {
+  let current = await findExactArtifactPull(github, repository, artifact, headSha);
+  if (!current || current.number !== pull.number) throw new Error(`artifact ${artifact.path} cleanup pull drifted before auto-merge`);
+  if (!current.autoMerge) {
+    if (!current.nodeId || !github.graphql) throw new Error(`artifact ${artifact.path} cleanup pull cannot arm exact protected auto-merge`);
+    const response = asRecord(await github.graphql(
+      "mutation EnableDarkFactoryCleanAutoMerge($pullRequestId: ID!) { enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) { pullRequest { number autoMergeRequest { enabledAt } } } }",
+      { pullRequestId: current.nodeId }
+    ), `artifact cleanup pull #${current.number} auto-merge response`);
+    const enabled = asRecord(response.enablePullRequestAutoMerge, `artifact cleanup pull #${current.number} enable auto-merge`);
+    const resultPull = asRecord(enabled.pullRequest, `artifact cleanup pull #${current.number} auto-merge pull`);
+    if (resultPull.number !== current.number || !resultPull.autoMergeRequest || typeof resultPull.autoMergeRequest !== "object") {
+      throw new Error(`artifact ${artifact.path} cleanup pull auto-merge was not accepted`);
+    }
+  }
+  current = await findExactArtifactPull(github, repository, artifact, headSha);
+  if (!current || !current.autoMerge) throw new Error(`artifact ${artifact.path} cleanup pull auto-merge was not durably confirmed`);
+  return current;
+}
+
+async function applyArtifactRepairAction(
+  github: OperatorGitHubRequester,
+  repository: RepositoryRef,
+  entry: CleanPlanEntry,
+  actions: CleanApplyReceipt["actions"],
+  options: CleanApplyOptions
+): Promise<void> {
+  const artifact = requireArtifactEntry(entry);
+  await revalidateArtifactSource(github, repository, entry);
+  await recordAdmission(actionReceipt(entry, "applied", `Admitted exact generated blob removal through protected dev PR ${artifact.branch}.`), options.onAdmission);
+  await revalidateArtifactSource(github, repository, entry);
+  const headSha = await createOrResumeArtifactCommit(github, repository, artifact);
+  await revalidateArtifactSource(github, repository, entry);
+  const pull = await createOrResumeArtifactPull(github, repository, artifact, headSha);
+  await revalidateArtifactSource(github, repository, entry);
+  const armed = await armArtifactAutoMerge(github, repository, artifact, headSha, pull);
+  await revalidateArtifactSource(github, repository, entry);
+  await recordCompleted(
+    actions,
+    actionReceipt(entry, "applied", `Opened exact cleanup PR #${armed.number}, confirmed only ${artifact.path} is removed, and armed protected squash auto-merge behind trusted green checks.`),
     options.onCompletion
   );
 }
@@ -1266,6 +2340,11 @@ function normalizePull(value: unknown, index: number, repository: RepositoryRef)
   baseRef: string;
   baseSha: string;
   sameRepository: boolean;
+  trustedActor: boolean;
+  autoMerge: boolean;
+  nodeId: string | null;
+  draft: boolean;
+  title: string;
   updatedAt: string;
 } {
   const pull = asRecord(value, `pull request ${index}`);
@@ -1273,6 +2352,7 @@ function normalizePull(value: unknown, index: number, repository: RepositoryRef)
   const base = asRecord(pull.base, `pull request ${index} base`);
   const headRepo = head.repo ? asRecord(head.repo, `pull request ${index} head repo`) : {};
   const owner = headRepo.owner ? asRecord(headRepo.owner, `pull request ${index} head owner`) : {};
+  const user = pull.user && typeof pull.user === "object" && !Array.isArray(pull.user) ? pull.user as Record<string, unknown> : {};
   return {
     number: requiredNumber(pull.number, `pull request ${index} number`),
     state: requiredString(pull.state, `pull request ${index} state`),
@@ -1284,6 +2364,11 @@ function normalizePull(value: unknown, index: number, repository: RepositoryRef)
     baseSha: requiredString(base.sha, `pull request ${index} base sha`),
     sameRepository: String(owner.login || "").toLowerCase() === repository.owner.toLowerCase()
       && String(headRepo.name || "").toLowerCase() === repository.repo.toLowerCase(),
+    trustedActor: user.login === "darkfactory-agent[bot]" && user.type === "Bot",
+    autoMerge: pull.auto_merge !== null && pull.auto_merge !== undefined,
+    nodeId: typeof pull.node_id === "string" && pull.node_id ? pull.node_id : null,
+    draft: pull.draft === true,
+    title: typeof pull.title === "string" ? pull.title : "",
     updatedAt: requiredString(pull.updated_at, `pull request ${index} updated_at`)
   };
 }

@@ -301,6 +301,52 @@ test("clean plan closes only superseded or abandoned PRs with an exact independe
   ]);
 });
 
+test("clean plan consumes a duplicate finding only with exact complete-scope fold evidence", () => {
+  const duplicate = { id: "duplicate-issue-contract-7-8", category: "issue lane", severity: "warning", repairClass: "pr" as const, message: "Issues #7 and #8 duplicate scope.", evidence: [], fingerprint: "f".repeat(64) };
+  const fold = {
+    findingId: duplicate.id,
+    findingFingerprint: duplicate.fingerprint,
+    successorNumber: 8,
+    successorVersion: "8".repeat(64),
+    sourceScopeDigest: "1".repeat(64),
+    successorScopeDigest: "2".repeat(64),
+    proof: "line-containment-v1" as const
+  };
+  const admitted = buildCleanPlan(evidence([], {
+    issues: [
+      { number: 7, fingerprint: "7".repeat(64), classification: "finding", findingIds: [duplicate.id], reviewable: true, autoreview: "missing", fold },
+      { number: 8, fingerprint: "8".repeat(64), classification: "finding", findingIds: [duplicate.id], reviewable: true, autoreview: "missing" }
+    ],
+    reviewFindings: [duplicate]
+  }));
+  const denied = buildCleanPlan(evidence([], {
+    issues: [
+      { number: 7, fingerprint: "7".repeat(64), classification: "finding", findingIds: [duplicate.id], reviewable: true, autoreview: "missing" },
+      { number: 8, fingerprint: "8".repeat(64), classification: "finding", findingIds: [duplicate.id], reviewable: true, autoreview: "missing" }
+    ],
+    reviewFindings: [duplicate]
+  }));
+
+  assert.equal(admitted.entries.find((entry) => entry.target === "#7")?.action, "fold");
+  assert.equal(admitted.entries.some((entry) => entry.kind === "lane-finding" && entry.target === duplicate.id), false);
+  assert.equal(denied.entries.filter((entry) => entry.kind === "issue").every((entry) => entry.action === "preserve"), true);
+  assert.equal(denied.entries.some((entry) => entry.kind === "lane-finding" && entry.target === duplicate.id), true);
+});
+
+test("clean plan consumes artifact and label findings only through typed exact repair evidence", () => {
+  const artifactFinding = { id: "generated-artifact-log", category: "repository hygiene", severity: "warning", repairClass: "pr" as const, message: "Generated/runtime artifact `debug.log` is committed.", evidence: [], fingerprint: "a".repeat(64) };
+  const labelFinding = { id: "label-df-old-orphan", category: "repository hygiene", severity: "warning", repairClass: "pr" as const, message: "Managed label `df:old` is absent from the canonical taxonomy.", evidence: [], fingerprint: "b".repeat(64) };
+  const plan = buildCleanPlan(evidence([], {
+    reviewFindings: [artifactFinding, labelFinding],
+    artifactRepairs: [{ findingId: artifactFinding.id, findingFingerprint: artifactFinding.fingerprint, path: "debug.log", blobSha: "1".repeat(40), mode: "100644", base: "dev", baseSha: "2".repeat(40), branch: "darkfactory/clean-artifact-test", state: "needed" }],
+    managedLabels: [{ findingId: labelFinding.id, findingFingerprint: labelFinding.fingerprint, name: "df:old", color: "abcdef", description: "old", policyPath: ".darkfactory/labels.json", policyBlob: "3".repeat(40), policyRef: "dev", policyRevision: "2".repeat(40) }]
+  }));
+
+  assert.equal(plan.entries.find((entry) => entry.kind === "artifact")?.action, "repair-artifact");
+  assert.equal(plan.entries.find((entry) => entry.kind === "managed-label")?.action, "delete-label");
+  assert.equal(plan.entries.some((entry) => entry.kind === "lane-finding"), false);
+});
+
 test("clean apply admission aborts when any observed fact drifts", () => {
   const original = buildCleanPlan(evidence([branch({ name: "merged", containedBy: ["main"] })]), new Date("2026-07-15T00:00:00Z"));
   const drifted = buildCleanPlan(evidence([branch({ name: "merged", head: "new-head", containedBy: ["main"] })]), new Date("2026-07-15T00:01:00Z"));

@@ -17,7 +17,7 @@ import {
   issueVersion,
   renderIssueAutofixComment
 } from "../src/issue-spec.js";
-import { buildCleanPlan, type CleanEvidence, type DoctorFinding } from "../src/operator.js";
+import { buildCleanPlan, stableHash, type CleanEvidence, type DoctorFinding } from "../src/operator.js";
 
 test("clean evidence binds the checkout identity and preserves detached worktrees and non-cleanup refs", async () => {
   const parent = await mkdtemp(join(tmpdir(), "df-clean-evidence-"));
@@ -323,6 +323,45 @@ test("clean issue evidence fails closed on a malformed trusted pending marker", 
   );
 });
 
+test("clean duplicate issue evidence folds only when one exact successor contains all source scope", async () => {
+  const finding = duplicateIssueFinding();
+  const safe = duplicateIssueState(false);
+  const unique = duplicateIssueState(true);
+  const safeEvidence = await collectCleanEvidence(duplicateIssueGithub(safe), REPOSITORY, "", [finding]);
+  const uniqueEvidence = await collectCleanEvidence(duplicateIssueGithub(unique), REPOSITORY, "", [finding]);
+
+  assert.equal(safeEvidence.issues.find((issue) => issue.number === 7)?.fold?.successorNumber, 8);
+  assert.equal(buildCleanPlan(safeEvidence).entries.find((entry) => entry.target === "#7")?.action, "fold");
+  assert.equal(buildCleanPlan(safeEvidence).entries.some((entry) => entry.kind === "lane-finding" && entry.target === finding.id), false);
+  assert.equal(uniqueEvidence.issues.some((issue) => issue.fold !== undefined), false);
+  assert.equal(buildCleanPlan(uniqueEvidence).entries.some((entry) => entry.kind === "lane-finding" && entry.target === finding.id), true);
+});
+
+test("clean duplicate issue fold publishes an exact receipt and revalidates before closure", async () => {
+  const state = duplicateIssueState(false);
+  const github = duplicateIssueGithub(state);
+  const evidence = await collectCleanEvidence(github, REPOSITORY, "", [duplicateIssueFinding()]);
+  const plan = buildCleanPlan(evidence, new Date("2026-07-16T11:30:00Z"));
+  const receipt = await applyCleanPlan(github, REPOSITORY, plan, evidence);
+
+  assert.equal(state.issues[0]!.state, "closed");
+  assert.equal(state.comments.some((comment) => String(comment.body).startsWith("<!-- darkfactory:clean-issue-fold schema=1")), true);
+  assert.match(receipt.actions.find((action) => action.target === "#7")?.reason ?? "", /complete source scope/);
+});
+
+test("clean duplicate issue fold blocks successor scope drift after admission", async () => {
+  const state = duplicateIssueState(false);
+  const github = duplicateIssueGithub(state);
+  const evidence = await collectCleanEvidence(github, REPOSITORY, "", [duplicateIssueFinding()]);
+  const plan = buildCleanPlan(evidence, new Date("2026-07-16T11:30:00Z"));
+
+  await assert.rejects(applyCleanPlan(github, REPOSITORY, plan, evidence, {
+    onAdmission: async () => { state.issues[1]!.body = "# Goal\n\nConcurrent owner replacement."; }
+  }), /drifted from its exact version/);
+  assert.equal(state.issues[0]!.state, "open");
+  assert.equal(state.comments.length, 0);
+});
+
 test("clean successor proof admits same-repository same-base head ancestry", async () => {
   const evidence = await collectCleanEvidence(successorEvidenceGithub("ancestry"), REPOSITORY);
   const source = evidence.pullRequests.find((pull) => pull.number === 1);
@@ -498,12 +537,94 @@ test("clean PR closure re-fetches after admission and blocks successor/source dr
   assert.equal(events.includes("completion"), false);
 });
 
+test("clean artifact repair opens one exact dev PR and arms only protected green auto-merge", async () => {
+  const state = artifactState();
+  const evidence = artifactActionEvidence();
+  const plan = buildCleanPlan(evidence, new Date("2026-07-16T12:00:00Z"));
+  const receipt = await applyCleanPlan(artifactGithub(state), REPOSITORY, plan, evidence);
+
+  assert.equal(state.branchHead, ARTIFACT_HEAD);
+  assert.equal(state.pull?.auto_merge !== null, true);
+  assert.equal(state.events.includes("create-ref:refs/heads/darkfactory/clean-artifact-" + artifactBranchSuffix()), true);
+  assert.equal(state.events.some((event) => event.includes("refs/heads/dev")), false);
+  assert.equal(state.events.includes("graphql:auto-merge"), true);
+  assert.match(receipt.actions.find((action) => action.kind === "artifact")?.reason ?? "", /protected squash auto-merge/);
+});
+
+test("clean artifact repair blocks a dev base race before creating repository objects", async () => {
+  const state = artifactState();
+  const evidence = artifactActionEvidence();
+  const plan = buildCleanPlan(evidence, new Date("2026-07-16T12:00:00Z"));
+
+  await assert.rejects(applyCleanPlan(artifactGithub(state), REPOSITORY, plan, evidence, {
+    onAdmission: async () => { state.baseSha = "9".repeat(40); }
+  }), /base drifted/);
+  assert.equal(state.events.some((event) => event.startsWith("post:")), false);
+});
+
+test("clean artifact repair blocks an exact blob race before creating repository objects", async () => {
+  const state = artifactState();
+  const evidence = artifactActionEvidence();
+  const plan = buildCleanPlan(evidence, new Date("2026-07-16T12:00:00Z"));
+
+  await assert.rejects(applyCleanPlan(artifactGithub(state), REPOSITORY, plan, evidence, {
+    onAdmission: async () => { state.blobSha = "8".repeat(40); }
+  }), /blob or mode drifted/);
+  assert.equal(state.events.some((event) => event.startsWith("post:")), false);
+});
+
+test("clean managed-label deletion revalidates exact policy and label identity before confirming absence", async () => {
+  const state = managedLabelState();
+  const evidence = managedLabelEvidence();
+  const plan = buildCleanPlan(evidence, new Date("2026-07-16T12:00:00Z"));
+  const receipt = await applyCleanPlan(managedLabelGithub(state), REPOSITORY, plan, evidence);
+
+  assert.equal(state.exists, false);
+  assert.deepEqual(state.events, ["delete:df:old"]);
+  assert.match(receipt.actions.find((action) => action.kind === "managed-label")?.reason ?? "", /re-observed absence/);
+});
+
+test("clean managed-label deletion blocks identity drift and never touches human labels", async () => {
+  const state = managedLabelState();
+  const evidence = managedLabelEvidence();
+  const plan = buildCleanPlan(evidence, new Date("2026-07-16T12:00:00Z"));
+  await assert.rejects(applyCleanPlan(managedLabelGithub(state), REPOSITORY, plan, evidence, {
+    onAdmission: async () => { state.color = "123456"; }
+  }), /drifted from its exact identity/);
+  assert.equal(state.exists, true);
+  assert.deepEqual(state.events, []);
+  assert.equal(plan.entries.some((entry) => entry.kind === "managed-label" && !entry.target.startsWith("df:")), false);
+});
+
+test("clean marker issue closure accepts only an exact trusted marker and blocks actor drift", async () => {
+  const first = markerIssueState();
+  const evidence = markerIssueEvidence(first.issue);
+  const plan = buildCleanPlan(evidence, new Date("2026-07-16T12:00:00Z"));
+  await applyCleanPlan(markerIssueGithub(first), REPOSITORY, plan, evidence);
+  assert.equal(first.issue.state, "closed");
+  assert.equal(first.comments.some((comment) => String(comment.body).startsWith("<!-- darkfactory:clean-marker-issue-closure schema=1")), true);
+
+  const drift = markerIssueState();
+  const driftEvidence = markerIssueEvidence(drift.issue);
+  const driftPlan = buildCleanPlan(driftEvidence, new Date("2026-07-16T12:00:00Z"));
+  await assert.rejects(applyCleanPlan(markerIssueGithub(drift), REPOSITORY, driftPlan, driftEvidence, {
+    onAdmission: async () => { drift.issue.user = { login: "octocat", type: "User" }; }
+  }), /actor, marker, or exact version drifted/);
+  assert.equal(drift.issue.state, "open");
+  assert.equal(drift.comments.length, 0);
+});
+
 const REPOSITORY = { owner: "marius-patrik", repo: "example" } as const;
 const MAIN_SHA = "a".repeat(40);
 const MAIN_TREE = "1".repeat(40);
 const SOURCE_SHA = "b".repeat(40);
 const SUCCESSOR_SHA = "c".repeat(40);
 const BASE_SHA = "d".repeat(40);
+const ARTIFACT_BLOB = "4".repeat(40);
+const ARTIFACT_BASE = "5".repeat(40);
+const ARTIFACT_BASE_TREE = "6".repeat(40);
+const ARTIFACT_TREE = "7".repeat(40);
+const ARTIFACT_HEAD = "8".repeat(40);
 const TRUSTED_ACTOR = { login: "darkfactory-agent[bot]", type: "Bot" } as const;
 
 function issueFixture(): Record<string, unknown> {
@@ -546,6 +667,89 @@ function reviewableIssueFinding(): DoctorFinding {
     repair_class: "pr",
     evidence: [],
     repair: ["Run issue Autoreview."]
+  };
+}
+
+function duplicateIssueFinding(): DoctorFinding {
+  return {
+    id: "duplicate-issue-contract-7-8",
+    category: "issue lane",
+    message: "Issues #7 and #8 duplicate scope.",
+    severity: "warning",
+    repair_class: "pr",
+    evidence: [],
+    repair: ["Fold only after exact scope containment proof."]
+  };
+}
+
+function duplicateIssueState(uniqueSource: boolean): {
+  issues: Array<Record<string, unknown>>;
+  comments: Array<Record<string, unknown>>;
+} {
+  return {
+    issues: [
+      {
+        number: 7,
+        title: "Shared contract",
+        body: uniqueSource ? "# Goal\n\nShared.\n\n## Acceptance\n\n- Unique source promise." : "# Goal\n\nShared.",
+        state: "open",
+        labels: [],
+        updated_at: "2026-07-16T09:00:00Z"
+      },
+      {
+        number: 8,
+        title: "Shared contract",
+        body: "# Goal\n\nShared.\n\n## Acceptance\n\n- Complete successor promise.",
+        state: "open",
+        labels: [],
+        updated_at: "2026-07-16T09:05:00Z"
+      }
+    ],
+    comments: []
+  };
+}
+
+function duplicateIssueGithub(state: { issues: Array<Record<string, unknown>>; comments: Array<Record<string, unknown>> }): OperatorGitHubRequester {
+  let nextComment = 500;
+  return {
+    async request(route, parameters) {
+      if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "main" } };
+      if (route === "GET /repos/{owner}/{repo}/branches") return { data: parameters.page === 1 ? [{ name: "main", protected: true, commit: { sha: MAIN_SHA } }] : [] };
+      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: [] };
+      if (route === "GET /repos/{owner}/{repo}/issues") return { data: parameters.page === 1 ? state.issues.filter((issue) => issue.state === "open") : [] };
+      if (route === "GET /repos/{owner}/{repo}/issues/comments") return { data: parameters.page === 1 ? state.comments : [] };
+      if (route === "GET /repos/{owner}/{repo}/git/commits/{commit_sha}") return { data: { tree: { sha: MAIN_TREE } } };
+      if (route === "GET /repos/{owner}/{repo}/contents/{path}") throw Object.assign(new Error("missing"), { status: 404 });
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}") {
+        const issue = state.issues.find((candidate) => candidate.number === parameters.issue_number);
+        if (!issue) throw Object.assign(new Error("missing"), { status: 404 });
+        return { data: { ...issue } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") {
+        const number = Number(parameters.issue_number);
+        const comments = state.comments.filter((comment) => String(comment.issue_url).endsWith(`/issues/${number}`));
+        return { data: parameters.page === 1 ? comments : [] };
+      }
+      if (route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments") {
+        const number = Number(parameters.issue_number);
+        const comment = {
+          id: nextComment++,
+          issue_url: `https://api.github.com/repos/marius-patrik/example/issues/${number}`,
+          body: String(parameters.body),
+          user: TRUSTED_ACTOR,
+          created_at: "2026-07-16T12:00:00Z",
+          updated_at: "2026-07-16T12:00:00Z"
+        };
+        state.comments.push(comment);
+        return { data: comment };
+      }
+      if (route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}") {
+        const issue = state.issues.find((candidate) => candidate.number === parameters.issue_number)!;
+        issue.state = parameters.state;
+        return { data: { ...issue } };
+      }
+      throw new Error(`unexpected route ${route}`);
+    }
   };
 }
 
@@ -876,6 +1080,214 @@ function remoteDeletionEvidence(): CleanEvidence {
     pullRequestFingerprint: "prs-v1",
     issueLaneFingerprint: "issues-v1",
     prdFingerprint: "prd-v1"
+  };
+}
+
+function artifactBranchSuffix(): string {
+  return stableHash({ findingId: "generated-artifact-debug-log", path: "debug.log", blobSha: ARTIFACT_BLOB, baseSha: ARTIFACT_BASE }).slice(0, 24);
+}
+
+function artifactActionEvidence(): CleanEvidence {
+  const finding = {
+    id: "generated-artifact-debug-log",
+    category: "repository hygiene",
+    severity: "warning",
+    repairClass: "pr" as const,
+    message: "Generated/runtime artifact `debug.log` is committed.",
+    evidence: [],
+    fingerprint: "f".repeat(64)
+  };
+  return {
+    repository: "marius-patrik/example",
+    defaultBranch: "main",
+    observedRefs: { main: MAIN_SHA, dev: ARTIFACT_BASE },
+    branches: [],
+    localBranches: [],
+    orphanRefs: [],
+    detachedWorktrees: [],
+    pullRequests: [],
+    issues: [],
+    reviewFindings: [finding],
+    pullRequestFingerprint: "prs-artifact-v1",
+    issueLaneFingerprint: "issues-artifact-v1",
+    prdFingerprint: "prd-v1",
+    artifactRepairs: [{
+      findingId: finding.id,
+      findingFingerprint: finding.fingerprint,
+      path: "debug.log",
+      blobSha: ARTIFACT_BLOB,
+      mode: "100644",
+      base: "dev",
+      baseSha: ARTIFACT_BASE,
+      branch: `darkfactory/clean-artifact-${artifactBranchSuffix()}`,
+      state: "needed"
+    }]
+  };
+}
+
+function artifactState(): {
+  baseSha: string;
+  blobSha: string;
+  branchHead: string | null;
+  pull: Record<string, unknown> | null;
+  events: string[];
+} {
+  return { baseSha: ARTIFACT_BASE, blobSha: ARTIFACT_BLOB, branchHead: null, pull: null, events: [] };
+}
+
+function artifactGithub(state: ReturnType<typeof artifactState>): OperatorGitHubRequester {
+  const branch = `darkfactory/clean-artifact-${artifactBranchSuffix()}`;
+  const pull = (): Record<string, unknown> => ({
+    number: 41,
+    node_id: "PR_artifact_41",
+    state: "open",
+    merged_at: null,
+    draft: false,
+    title: "chore(clean): remove generated artifact debug.log",
+    body: String(state.pull?.body ?? ""),
+    user: TRUSTED_ACTOR,
+    auto_merge: state.pull?.auto_merge ?? null,
+    head: { ref: branch, sha: ARTIFACT_HEAD, repo: { name: "example", owner: { login: "marius-patrik" } } },
+    base: { ref: "dev", sha: ARTIFACT_BASE },
+    updated_at: "2026-07-16T12:00:00Z"
+  });
+  return {
+    async request(route, parameters) {
+      if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") {
+        if (parameters.ref === "heads/dev") return { data: { object: { sha: state.baseSha } } };
+        if (parameters.ref === `heads/${branch}` && state.branchHead) return { data: { object: { sha: state.branchHead } } };
+        throw Object.assign(new Error("missing"), { status: 404 });
+      }
+      if (route === "GET /repos/{owner}/{repo}/git/trees/{tree_sha}") {
+        if (parameters.tree_sha === ARTIFACT_BASE) {
+          return { data: { truncated: false, tree: [{ path: "debug.log", type: "blob", sha: state.blobSha, mode: "100644" }, { path: "README.md", type: "blob", sha: "1".repeat(40), mode: "100644" }] } };
+        }
+        if (parameters.tree_sha === ARTIFACT_HEAD) return { data: { truncated: false, tree: [{ path: "README.md", type: "blob", sha: "1".repeat(40), mode: "100644" }] } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/branches/{branch}/protection") {
+        return { data: { required_status_checks: { strict: true, checks: [{ context: "Validate", app_id: 15368 }, { context: "DarkFactory Autoreview", app_id: 15368 }] }, enforce_admins: { enabled: true }, allow_force_pushes: { enabled: false }, allow_deletions: { enabled: false } } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/git/commits/{commit_sha}") {
+        if (parameters.commit_sha === ARTIFACT_BASE) return { data: { tree: { sha: ARTIFACT_BASE_TREE } } };
+        if (parameters.commit_sha === ARTIFACT_HEAD) return { data: { message: "chore(clean): remove generated artifact debug.log", tree: { sha: ARTIFACT_TREE }, parents: [{ sha: ARTIFACT_BASE }] } };
+      }
+      if (route === "POST /repos/{owner}/{repo}/git/trees") {
+        state.events.push("post:tree");
+        assert.deepEqual(parameters.tree, [{ path: "debug.log", mode: "100644", type: "blob", sha: null }]);
+        return { data: { sha: ARTIFACT_TREE } };
+      }
+      if (route === "POST /repos/{owner}/{repo}/git/commits") {
+        state.events.push("post:commit");
+        return { data: { sha: ARTIFACT_HEAD } };
+      }
+      if (route === "POST /repos/{owner}/{repo}/git/refs") {
+        state.events.push(`create-ref:${String(parameters.ref)}`);
+        state.branchHead = String(parameters.sha);
+        return { data: { ref: parameters.ref, object: { sha: parameters.sha } } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/pulls") return { data: parameters.page === 1 && state.pull ? [pull()] : [] };
+      if (route === "POST /repos/{owner}/{repo}/pulls") {
+        state.events.push("post:pull");
+        state.pull = { body: parameters.body, auto_merge: null };
+        return { data: pull() };
+      }
+      if (route === "GET /repos/{owner}/{repo}/pulls/{pull_number}/files") {
+        return { data: parameters.page === 1 ? [{ filename: "debug.log", status: "removed", sha: ARTIFACT_BLOB }] : [] };
+      }
+      throw new Error(`unexpected route ${route}`);
+    },
+    async graphql(_query, variables) {
+      state.events.push("graphql:auto-merge");
+      assert.deepEqual(variables, { pullRequestId: "PR_artifact_41" });
+      state.pull!.auto_merge = { enabled_at: "2026-07-16T12:01:00Z" };
+      return { enablePullRequestAutoMerge: { pullRequest: { number: 41, autoMergeRequest: { enabledAt: "2026-07-16T12:01:00Z" } } } };
+    }
+  };
+}
+
+function managedLabelEvidence(): CleanEvidence {
+  const finding = { id: "label-df-old-orphan", category: "repository hygiene", severity: "warning", repairClass: "pr" as const, message: "Managed label `df:old` is absent from the canonical taxonomy.", evidence: [], fingerprint: "b".repeat(64) };
+  return {
+    repository: "marius-patrik/example", defaultBranch: "main", observedRefs: { dev: ARTIFACT_BASE }, branches: [], localBranches: [], orphanRefs: [], detachedWorktrees: [], pullRequests: [], issues: [],
+    reviewFindings: [finding], pullRequestFingerprint: "prs-label-v1", issueLaneFingerprint: "issues-label-v1", prdFingerprint: "prd-v1",
+    managedLabels: [{ findingId: finding.id, findingFingerprint: finding.fingerprint, name: "df:old", color: "abcdef", description: "old label", policyPath: ".darkfactory/labels.json", policyBlob: "3".repeat(40), policyRef: "dev", policyRevision: ARTIFACT_BASE }]
+  };
+}
+
+function managedLabelState(): { exists: boolean; color: string; events: string[] } {
+  return { exists: true, color: "abcdef", events: [] };
+}
+
+function managedLabelGithub(state: ReturnType<typeof managedLabelState>): OperatorGitHubRequester {
+  const policy = JSON.stringify({ schemaVersion: 1, labels: [{ name: "df:ready", color: "0e8a16", description: "ready" }] });
+  return {
+    async request(route, parameters) {
+      if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { data: { object: { sha: ARTIFACT_BASE } } };
+      if (route === "GET /repos/{owner}/{repo}/contents/{path}") return { data: { sha: "3".repeat(40), encoding: "base64", content: Buffer.from(policy).toString("base64") } };
+      if (route === "GET /repos/{owner}/{repo}/labels/{name}") {
+        if (!state.exists) throw Object.assign(new Error("missing"), { status: 404 });
+        return { data: { name: "df:old", color: state.color, description: "old label" } };
+      }
+      if (route === "DELETE /repos/{owner}/{repo}/labels/{name}") {
+        state.events.push(`delete:${String(parameters.name)}`);
+        state.exists = false;
+        return { data: {} };
+      }
+      throw new Error(`unexpected route ${route}`);
+    }
+  };
+}
+
+function markerIssueState(): { issue: Record<string, unknown>; comments: Record<string, unknown>[] } {
+  return {
+    issue: {
+      number: 55,
+      title: "DarkFactory orchestration dashboard",
+      body: "<!-- df-dashboard:orchestration -->\nCurrent machine dashboard.",
+      state: "open",
+      user: TRUSTED_ACTOR,
+      updated_at: "2026-07-16T12:00:00Z"
+    },
+    comments: []
+  };
+}
+
+function markerIssueEvidence(issue: Record<string, unknown>): CleanEvidence {
+  const version = issueVersion(issue);
+  const successor = markerIssueSuccessor();
+  return {
+    repository: "marius-patrik/example", defaultBranch: "main", observedRefs: { main: MAIN_SHA }, branches: [], localBranches: [], orphanRefs: [], detachedWorktrees: [], pullRequests: [], issues: [], reviewFindings: [],
+    pullRequestFingerprint: "prs-marker-v1", issueLaneFingerprint: "issues-marker-v1", prdFingerprint: "prd-v1",
+    markerIssues: [{ number: 55, version, marker: "df-dashboard:orchestration", reason: "duplicate-dashboard", findingSetFingerprint: "0".repeat(64), successor: { number: 56, version: issueVersion(successor) } }]
+  };
+}
+
+function markerIssueSuccessor(): Record<string, unknown> {
+  return { number: 56, title: "DarkFactory orchestration dashboard", body: "<!-- df-dashboard:orchestration -->\nSuccessor dashboard.", state: "open", user: TRUSTED_ACTOR, updated_at: "2026-07-16T12:01:00Z" };
+}
+
+function markerIssueGithub(state: ReturnType<typeof markerIssueState>): OperatorGitHubRequester {
+  const successor = markerIssueSuccessor();
+  return {
+    async request(route, parameters) {
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}") {
+        if (parameters.issue_number === 55) return { data: { ...state.issue } };
+        if (parameters.issue_number === 56) return { data: { ...successor } };
+      }
+      if (route === "GET /repos/{owner}/{repo}/issues/{issue_number}/comments") {
+        return { data: parameters.page === 1 && parameters.issue_number === 55 ? state.comments : [] };
+      }
+      if (route === "POST /repos/{owner}/{repo}/issues/{issue_number}/comments") {
+        const comment = { id: 800, issue_url: "https://api.github.com/repos/marius-patrik/example/issues/55", body: parameters.body, user: TRUSTED_ACTOR, created_at: "2026-07-16T12:02:00Z", updated_at: "2026-07-16T12:02:00Z" };
+        state.comments.push(comment);
+        return { data: comment };
+      }
+      if (route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}") {
+        state.issue.state = "closed";
+        return { data: { ...state.issue } };
+      }
+      throw new Error(`unexpected route ${route}`);
+    }
   };
 }
 
