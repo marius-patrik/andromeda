@@ -9,6 +9,7 @@ import {
   issueContentDigest,
   issueVersion,
   renderIssueDraft,
+  sha256,
   validateIssueAutofixProposal,
   validateIssueDraftResult,
   validateIssueVersion,
@@ -48,8 +49,30 @@ export type DraftDocument = Readonly<{
   digest: string;
 }>;
 
-export type IssueDraftState = Readonly<{
+export type OwnerIssueAnswer = Readonly<{
+  question: string;
+  answer: string;
+}>;
+
+export type OwnerIssueAnswers = Readonly<{
   schemaVersion: 1;
+  answers: readonly OwnerIssueAnswer[];
+}>;
+
+export type IssueDraftTurn = Readonly<{
+  sequence: number;
+  kind: "initial" | "owner-continuation";
+  inputVersion: string | null;
+  beforeDigest: string | null;
+  afterDigest: string;
+  ownerAnswers: readonly OwnerIssueAnswer[];
+  request: ModelRequest;
+  prompt: PromptProvenance;
+  receipt: unknown;
+}>;
+
+export type IssueDraftState = Readonly<{
+  schemaVersion: 2;
   draftId: string;
   repository: string;
   createdAt: string;
@@ -59,7 +82,7 @@ export type IssueDraftState = Readonly<{
   current: DraftDocument;
   ownerQuestions: readonly string[];
   blockers: readonly string[];
-  draftTurn: Readonly<{ request: ModelRequest; prompt: PromptProvenance; receipt: unknown }>;
+  draftTurns: readonly IssueDraftTurn[];
   review: Readonly<{ targetVersion: string; ok: boolean; code: string | null; rounds: readonly unknown[] }> | null;
   publication: Readonly<{ approvedDigest: string; issueNumber: number; issueUrl: string; issueVersion: string }> | null;
 }>;
@@ -75,6 +98,7 @@ export interface IssueDevelopmentRuntime {
   controlRevision: string;
   environment?: NodeJS.ProcessEnv;
   now?: () => Date;
+  executeDraftTurn?: typeof executeModelTurn;
 }
 
 type ModelPolicyModule = {
@@ -178,6 +202,26 @@ export async function readOwnerIssueIntent(inputPath: string): Promise<OwnerIssu
   return parseOwnerIssueIntent(JSON.parse(await readFile(inputPath, "utf8")));
 }
 
+export function parseOwnerIssueAnswers(raw: unknown): OwnerIssueAnswers {
+  if (!isRecord(raw)) throw new Error("Issue draft owner answers must be an object");
+  exactKeys(raw, ["schemaVersion", "answers"], "Issue draft owner answers");
+  if (raw.schemaVersion !== 1) throw new Error("Issue draft owner answers schemaVersion must be 1");
+  if (!Array.isArray(raw.answers) || raw.answers.length === 0 || raw.answers.length > MAX_INPUT_ITEMS) {
+    throw new Error("Issue draft owner answers must be a non-empty bounded array");
+  }
+  const answers = raw.answers.map((entry, index) => {
+    if (!isRecord(entry)) throw new Error(`Issue draft owner answer ${index} must be an object`);
+    exactKeys(entry, ["question", "answer"], `Issue draft owner answer ${index}`);
+    const question = safeText(entry.question, `Issue draft owner answer ${index} question`);
+    const answer = safeText(entry.answer, `Issue draft owner answer ${index} answer`);
+    if (question.includes(OWNER_TEXT_START) || question.includes(OWNER_TEXT_END) || answer.includes(OWNER_TEXT_START) || answer.includes(OWNER_TEXT_END)) {
+      throw new Error(`Issue draft owner answer ${index} cannot contain owner-text boundary markers`);
+    }
+    return Object.freeze({ question, answer });
+  });
+  return Object.freeze({ schemaVersion: 1, answers: Object.freeze(answers) });
+}
+
 export function parseIssueTarget(value: string): Readonly<{ repository: string; number: number }> {
   const match = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$/.exec(value);
   if (!match) throw new Error(`invalid issue target: ${value}`);
@@ -208,10 +252,20 @@ function draftDocument(title: string, body: string): DraftDocument {
   return Object.freeze({ title: normalizedTitle, body: normalizedBody, digest: issueContentDigest(normalizedTitle, normalizedBody) });
 }
 
+function validateOwnerAnswer(value: unknown, context: string): void {
+  if (!isRecord(value)) throw new Error(`${context} must be an object`);
+  exactKeys(value, ["question", "answer"], context);
+  const question = safeText(value.question, `${context} question`);
+  const answer = safeText(value.answer, `${context} answer`);
+  if (question.includes(OWNER_TEXT_START) || question.includes(OWNER_TEXT_END) || answer.includes(OWNER_TEXT_START) || answer.includes(OWNER_TEXT_END)) {
+    throw new Error(`${context} cannot contain owner-text boundary markers`);
+  }
+}
+
 function assertStateShape(raw: unknown): asserts raw is IssueDraftState {
   if (!isRecord(raw)) throw new Error("Issue draft state must be an object");
-  exactKeys(raw, ["schemaVersion", "draftId", "repository", "createdAt", "updatedAt", "status", "initial", "current", "ownerQuestions", "blockers", "draftTurn", "review", "publication"], "Issue draft state");
-  if (raw.schemaVersion !== 1 || !/^[a-f0-9]{32}$/.test(String(raw.draftId)) || !SAFE_REPOSITORY.test(String(raw.repository))) throw new Error("Issue draft state identity is invalid");
+  exactKeys(raw, ["schemaVersion", "draftId", "repository", "createdAt", "updatedAt", "status", "initial", "current", "ownerQuestions", "blockers", "draftTurns", "review", "publication"], "Issue draft state");
+  if (raw.schemaVersion !== 2 || !/^[a-f0-9]{32}$/.test(String(raw.draftId)) || !SAFE_REPOSITORY.test(String(raw.repository))) throw new Error("Issue draft state identity is invalid");
   if (!new Set(["drafted", "reviewed", "blocked", "published"]).has(String(raw.status))) throw new Error("Issue draft state status is invalid");
   for (const name of ["createdAt", "updatedAt"]) {
     if (typeof raw[name] !== "string" || !Number.isFinite(new Date(raw[name]).getTime())) throw new Error(`Issue draft state ${name} is invalid`);
@@ -230,9 +284,32 @@ function assertStateShape(raw: unknown): asserts raw is IssueDraftState {
       throw new Error(`Issue draft state ${name} is invalid`);
     }
   }
-  if (!isRecord(raw.draftTurn)) throw new Error("Issue draft state turn evidence is invalid");
-  exactKeys(raw.draftTurn, ["request", "prompt", "receipt"], "Issue draft state turn evidence");
-  if (!isRecord(raw.draftTurn.request) || !isRecord(raw.draftTurn.prompt) || !isRecord(raw.draftTurn.receipt)) throw new Error("Issue draft state turn evidence is incomplete");
+  if (!Array.isArray(raw.draftTurns) || raw.draftTurns.length === 0 || raw.draftTurns.length > MAX_INPUT_ITEMS) {
+    throw new Error("Issue draft state turn history is invalid");
+  }
+  let previousDigest: string | null = null;
+  for (const [index, value] of raw.draftTurns.entries()) {
+    if (!isRecord(value)) throw new Error(`Issue draft state turn ${index + 1} is invalid`);
+    exactKeys(value, ["sequence", "kind", "inputVersion", "beforeDigest", "afterDigest", "ownerAnswers", "request", "prompt", "receipt"], `Issue draft state turn ${index + 1}`);
+    if (value.sequence !== index + 1 || !new Set(["initial", "owner-continuation"]).has(String(value.kind))) throw new Error(`Issue draft state turn ${index + 1} identity is invalid`);
+    if (typeof value.afterDigest !== "string") throw new Error(`Issue draft state turn ${index + 1} output digest is invalid`);
+    validateIssueVersion(value.afterDigest);
+    if (!Array.isArray(value.ownerAnswers) || value.ownerAnswers.length > MAX_INPUT_ITEMS) throw new Error(`Issue draft state turn ${index + 1} owner answers are invalid`);
+    value.ownerAnswers.forEach((entry, answerIndex) => validateOwnerAnswer(entry, `Issue draft state turn ${index + 1} owner answer ${answerIndex + 1}`));
+    if (!isRecord(value.request) || !isRecord(value.prompt) || !isRecord(value.receipt)) throw new Error(`Issue draft state turn ${index + 1} evidence is incomplete`);
+    if (index === 0) {
+      if (value.kind !== "initial" || value.inputVersion !== null || value.beforeDigest !== null || value.ownerAnswers.length !== 0) throw new Error("Issue draft initial turn identity is invalid");
+      if (isRecord(raw.initial) && value.afterDigest !== raw.initial.digest) throw new Error("Issue draft initial turn output digest is invalid");
+    } else {
+      if (value.kind !== "owner-continuation" || typeof value.inputVersion !== "string" || typeof value.beforeDigest !== "string" || value.ownerAnswers.length === 0) {
+        throw new Error(`Issue draft state turn ${index + 1} continuation identity is invalid`);
+      }
+      validateIssueVersion(value.inputVersion);
+      validateIssueVersion(value.beforeDigest);
+      if (value.beforeDigest !== previousDigest) throw new Error(`Issue draft state turn ${index + 1} does not continue the preceding draft`);
+    }
+    previousDigest = value.afterDigest;
+  }
   if (raw.review !== null) {
     if (!isRecord(raw.review)) throw new Error("Issue draft state review is invalid");
     exactKeys(raw.review, ["targetVersion", "ok", "code", "rounds"], "Issue draft state review");
@@ -260,13 +337,39 @@ function assertStateShape(raw: unknown): asserts raw is IssueDraftState {
   if (raw.status === "reviewed" && (!isRecord(raw.review) || raw.review.ok !== true)) throw new Error("Issue draft reviewed status lacks clean review evidence");
   if (isRecord(raw.review) && raw.review.ok === true && raw.status !== "reviewed" && raw.status !== "published") throw new Error("Issue draft clean review status is inconsistent");
   if (isRecord(raw.review) && raw.review.ok === false && raw.status !== "blocked") throw new Error("Issue draft blocked review status is inconsistent");
+  if ((raw.ownerQuestions as unknown[]).length > 0 && (raw.status !== "blocked" || raw.review !== null)) throw new Error("Issue draft owner-question status is inconsistent");
+}
+
+function normalizeIssueDraftState(raw: unknown): IssueDraftState {
+  if (isRecord(raw) && raw.schemaVersion === 1) {
+    exactKeys(raw, ["schemaVersion", "draftId", "repository", "createdAt", "updatedAt", "status", "initial", "current", "ownerQuestions", "blockers", "draftTurn", "review", "publication"], "Legacy issue draft state");
+    if (!isRecord(raw.draftTurn)) throw new Error("Legacy issue draft state turn evidence is invalid");
+    exactKeys(raw.draftTurn, ["request", "prompt", "receipt"], "Legacy issue draft state turn evidence");
+    const { draftTurn, ...legacy } = raw;
+    raw = {
+      ...legacy,
+      schemaVersion: 2,
+      draftTurns: [{
+        sequence: 1,
+        kind: "initial",
+        inputVersion: null,
+        beforeDigest: null,
+        afterDigest: isRecord(raw.initial) ? raw.initial.digest : null,
+        ownerAnswers: [],
+        request: draftTurn.request,
+        prompt: draftTurn.prompt,
+        receipt: draftTurn.receipt
+      }]
+    };
+  }
+  assertStateShape(raw);
+  return structuredClone(raw);
 }
 
 export async function readIssueDraftState(draftPath: string): Promise<IssueDraftState> {
   if (!path.isAbsolute(draftPath)) throw new Error("Issue draft state path must be absolute");
   const raw: unknown = JSON.parse(await readFile(draftPath, "utf8"));
-  assertStateShape(raw);
-  return structuredClone(raw);
+  return normalizeIssueDraftState(raw);
 }
 
 export async function writeIssueDraftState(draftPath: string, state: IssueDraftState): Promise<void> {
@@ -411,7 +514,7 @@ export async function createIssueDraft(
   await mkdir(runtimeRoot, { recursive: true });
   const tempRoot = await mkdtemp(path.join(runtimeRoot, "issue-draft-turn-"));
   try {
-    const turn = await executeModelTurn({
+    const turn = await (runtime.executeDraftTurn ?? executeModelTurn)({
       intent: {
         runId: `issue-draft-${randomUUID().replaceAll("-", "")}`,
         triggeredBy: "owner-interactive",
@@ -453,7 +556,7 @@ export async function createIssueDraft(
     const rendered = renderIssueDraft(result, draftId);
     const document = draftDocument(rendered.title, rendered.body);
     const state: IssueDraftState = Object.freeze({
-      schemaVersion: 1,
+      schemaVersion: 2,
       draftId,
       repository,
       createdAt: observedAt,
@@ -463,7 +566,17 @@ export async function createIssueDraft(
       current: document,
       ownerQuestions: result.ownerQuestions,
       blockers: Object.freeze([...result.blockers, ...result.ownerQuestions.map((question) => `owner decision: ${question}`)]),
-      draftTurn: Object.freeze({ request, prompt: turn.prompt, receipt: turn.receipt }),
+      draftTurns: Object.freeze([Object.freeze({
+        sequence: 1,
+        kind: "initial" as const,
+        inputVersion: null,
+        beforeDigest: null,
+        afterDigest: document.digest,
+        ownerAnswers: Object.freeze([]),
+        request,
+        prompt: turn.prompt,
+        receipt: turn.receipt
+      })]),
       review: null,
       publication: null
     });
@@ -482,6 +595,205 @@ export async function createIssueDraft(
     return state;
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+export function issueDraftConversationVersion(state: IssueDraftState): string {
+  return sha256(JSON.stringify({
+    schemaVersion: 1,
+    draftId: state.draftId,
+    repository: state.repository.toLowerCase(),
+    currentDigest: state.current.digest,
+    ownerQuestions: state.ownerQuestions,
+    blockers: state.blockers,
+    turnCount: state.draftTurns.length
+  }));
+}
+
+function assertCurrentOwnerAnswers(state: IssueDraftState, answers: OwnerIssueAnswers): void {
+  if (state.status !== "blocked" || state.review !== null || state.ownerQuestions.length === 0) {
+    throw new Error("Owner continuation requires one blocked local draft with unresolved owner questions and no review evidence");
+  }
+  if (answers.answers.length !== state.ownerQuestions.length) throw new Error("Owner answers must match every current owner question exactly once");
+  for (const [index, answer] of answers.answers.entries()) {
+    if (answer.question !== state.ownerQuestions[index]) throw new Error(`Owner answer ${index + 1} does not match the current owner question`);
+  }
+}
+
+function ownerTextContent(body: string): string {
+  const start = body.indexOf(OWNER_TEXT_START);
+  const end = body.indexOf(OWNER_TEXT_END);
+  if (start < 0 || end < start) throw new Error("Issue draft lost its owner-text boundary");
+  return body
+    .slice(start + OWNER_TEXT_START.length, end)
+    .trim()
+    .replace(/^## Owner-authored context\s*\n+/, "")
+    .trim();
+}
+
+function continuedOwnerText(state: IssueDraftState, answers: OwnerIssueAnswers): string {
+  const prior = ownerTextContent(state.current.body);
+  const turn = [
+    `### Owner continuation ${state.draftTurns.length + 1}`,
+    "",
+    ...answers.answers.flatMap(({ question, answer }) => [
+      `- Question: ${JSON.stringify(question)}`,
+      `  Answer: ${JSON.stringify(answer)}`
+    ])
+  ].join("\n");
+  return prior ? `${prior}\n\n${turn}` : turn;
+}
+
+export async function continueIssueDraft(
+  draftPath: string,
+  expectedVersion: string,
+  rawAnswers: OwnerIssueAnswers,
+  runtime: IssueDevelopmentRuntime
+): Promise<IssueDraftState> {
+  validateIssueVersion(expectedVersion);
+  const answers = parseOwnerIssueAnswers(rawAnswers);
+  if (!path.isAbsolute(runtime.agentsHome) || !/^[0-9a-f]{40}$/i.test(runtime.controlRevision)) throw new Error("Canonical Agent OS and exact control revision are required");
+  const lockPath = `${path.resolve(draftPath)}.publish.lock`;
+  let lock;
+  try {
+    lock = await open(lockPath, "wx", 0o600);
+    await lock.writeFile(JSON.stringify({ schemaVersion: 1, pid: process.pid, operation: "owner-continuation" }), "utf8");
+  } catch (error) {
+    if (isRecord(error) && error.code === "EEXIST") throw new Error("Issue draft publication, resume, or owner continuation is already in progress");
+    throw error;
+  }
+  try {
+    let state = await readIssueDraftState(draftPath);
+    const admittedVersion = issueDraftConversationVersion(state);
+    if (admittedVersion !== expectedVersion) throw new Error(`Stale issue draft conversation version: expected ${admittedVersion}`);
+    assertCurrentOwnerAnswers(state, answers);
+    const beforeDigest = state.current.digest;
+    await runtime.ledger("issue-draft-owner-answer-admission", state.repository, {
+      schemaVersion: 1,
+      draftId: state.draftId,
+      conversationVersion: admittedVersion,
+      beforeDigest,
+      answerDigest: sha256(JSON.stringify(answers.answers)),
+      answerCount: answers.answers.length
+    });
+    state = await readIssueDraftState(draftPath);
+    if (issueDraftConversationVersion(state) !== admittedVersion || state.current.digest !== beforeDigest) {
+      throw new Error("Issue draft changed after owner-answer admission");
+    }
+    assertCurrentOwnerAnswers(state, answers);
+
+    const observedAt = (runtime.now?.() ?? new Date()).toISOString();
+    const context = await fetchRepositoryContext(runtime.github, state.repository);
+    const modules = await loadRuntimeModules();
+    const modelPolicy = await modules.model.loadModelPolicy(CONTROL_ROOT);
+    const policyRequest = modules.model.modelRequestForPurpose(modelPolicy, "issueDrafting");
+    if (policyRequest.modelTier !== "high") throw new Error("Issue drafting policy must resolve to the fixed high model tier");
+    const priorEffort = validateEffort(String(state.draftTurns[0].request.effort));
+    const request = Object.freeze({ ...policyRequest, effort: priorEffort });
+    const runtimeRoot = path.join(runtime.agentsHome, "runtime", "darkfactory");
+    await mkdir(runtimeRoot, { recursive: true });
+    const tempRoot = await mkdtemp(path.join(runtimeRoot, "issue-draft-continuation-"));
+    try {
+      const turn = await (runtime.executeDraftTurn ?? executeModelTurn)({
+        intent: {
+          runId: `issue-draft-continuation-${randomUUID().replaceAll("-", "")}`,
+          triggeredBy: "owner-interactive",
+          profile: "profile/issue-drafter",
+          repository: { owner: context.owner, repo: context.repo, defaultBranch: context.defaultBranch },
+          repositoryPaths: context.repositoryPaths,
+          workItem: null,
+          draftIntent: {
+            intent: `Continue local issue draft ${state.draftId}. Produce the complete replacement draft after applying the exact owner answers to the current questions. Preserve still-valid content and never infer another owner decision.`,
+            comments: [
+              `Conversation version: ${admittedVersion}`,
+              `Current title: ${state.current.title}`,
+              `Current body: ${state.current.body}`,
+              `Current blockers: ${JSON.stringify(state.blockers)}`,
+              `Exact owner answers: ${JSON.stringify(answers.answers)}`,
+              `Prior drafting turn count: ${state.draftTurns.length}`
+            ]
+          },
+          policy: {
+            branching: "One worker issue, branch, and reviewed pull request; preserve dependency order and protected release lanes.",
+            labels: ["P0", "P1", "P2", "df:ready", "df:blocked", "df:ask-owner"],
+            enforcement: "Keep publication behind a fresh issue Autoreview and exact owner approval; owner answers apply only to the admitted conversation version."
+          },
+          validation: { commands: validationCommandsForRepository({ owner: context.owner, repo: context.repo }, context.repositoryPaths) },
+          verified: {
+            observedAt,
+            facts: [
+              `Repository ${state.repository} exists and its default branch is ${context.defaultBranch}.`,
+              `Owner answers target exact local conversation version ${admittedVersion}.`
+            ]
+          },
+          effort: priorEffort,
+          controlRevision: runtime.controlRevision
+        },
+        request,
+        promptsRoot: path.join(CONTROL_ROOT, "prompts"),
+        tempRoot,
+        turnName: "issue-draft-continuation",
+        cwd: tempRoot,
+        executionPolicy: "read-only",
+        environment: { ...runtime.environment, AGENTS_HOME: runtime.agentsHome }
+      }, {
+        agentRunArguments: modules.model.agentRunArguments,
+        validateAgentExecutionReceipt: modules.model.validateAgentExecutionReceipt
+      });
+      if (turn.receipt.outcome !== "success" || turn.output === null) throw new Error("Canonical Agent OS issue-drafting continuation blocked closed");
+      const result = validateIssueDraftResult(turn.output);
+      const rendered = renderIssueDraft(Object.freeze({
+        ...result,
+        draft: Object.freeze({ ...result.draft, ownerText: continuedOwnerText(state, answers) })
+      }), state.draftId);
+      const document = draftDocument(rendered.title, rendered.body);
+      const current = await readIssueDraftState(draftPath);
+      if (issueDraftConversationVersion(current) !== admittedVersion || current.current.digest !== beforeDigest) {
+        throw new Error("Issue draft changed during owner-answer continuation");
+      }
+      assertCurrentOwnerAnswers(current, answers);
+      const next: IssueDraftState = Object.freeze({
+        ...current,
+        updatedAt: (runtime.now?.() ?? new Date()).toISOString(),
+        status: result.status === "drafted" ? "drafted" : "blocked",
+        current: document,
+        ownerQuestions: result.ownerQuestions,
+        blockers: Object.freeze([...result.blockers, ...result.ownerQuestions.map((question) => `owner decision: ${question}`)]),
+        draftTurns: Object.freeze([...current.draftTurns, Object.freeze({
+          sequence: current.draftTurns.length + 1,
+          kind: "owner-continuation" as const,
+          inputVersion: admittedVersion,
+          beforeDigest,
+          afterDigest: document.digest,
+          ownerAnswers: answers.answers,
+          request,
+          prompt: turn.prompt,
+          receipt: turn.receipt
+        })]),
+        review: null,
+        publication: null
+      });
+      await writeIssueDraftState(draftPath, next);
+      await runtime.ledger("issue-draft-owner-answer-completion", next.repository, {
+        schemaVersion: 1,
+        draftId: next.draftId,
+        conversationVersion: admittedVersion,
+        beforeDigest,
+        afterDigest: document.digest,
+        status: next.status,
+        ownerQuestions: next.ownerQuestions,
+        blockers: result.blockers,
+        request,
+        prompt: turn.prompt,
+        receipt: turn.receipt
+      });
+      return next;
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  } finally {
+    await lock.close();
+    await rm(lockPath, { force: true });
   }
 }
 
@@ -673,9 +985,11 @@ async function validateReviewedDraftEvidence(state: IssueDraftState): Promise<vo
     throw new Error("Issue draft review evidence targets stale content");
   }
   const modules = await loadRuntimeModules();
-  const draftReceipt = modules.model.validateAgentExecutionReceipt(state.draftTurn.receipt, state.draftTurn.request, { allowBlocked: true });
-  if (draftReceipt.outcome !== "success" || state.draftTurn.request.modelTier !== "high" || !isRecord(state.draftTurn.prompt) || !isRecord(state.draftTurn.prompt.selection) || state.draftTurn.prompt.selection.modelTier !== "high" || state.draftTurn.prompt.selection.effort !== state.draftTurn.request.effort) {
-    throw new Error("Issue draft turn provenance is invalid");
+  for (const turn of state.draftTurns) {
+    const draftReceipt = modules.model.validateAgentExecutionReceipt(turn.receipt, turn.request, { allowBlocked: true });
+    if (draftReceipt.outcome !== "success" || turn.request.modelTier !== "high" || !isRecord(turn.prompt) || !isRecord(turn.prompt.selection) || turn.prompt.selection.modelTier !== "high" || turn.prompt.selection.effort !== turn.request.effort) {
+      throw new Error(`Issue draft turn ${turn.sequence} provenance is invalid`);
+    }
   }
   for (const [index, rawRound] of state.review.rounds.entries()) {
     if (!isRecord(rawRound) || !isRecord(rawRound.request) || !isRecord(rawRound.receipt) || !isRecord(rawRound.prompt) || !isRecord(rawRound.prompt.selection)) {
@@ -844,6 +1158,8 @@ export function issueDraftSummary(state: IssueDraftState, draftPath: string): un
     status: state.status,
     initialDigest: state.initial.digest,
     reviewedDigest: state.current.digest,
+    conversationVersion: state.ownerQuestions.length > 0 ? issueDraftConversationVersion(state) : null,
+    draftingTurns: state.draftTurns.length,
     review: state.review,
     ownerQuestions: state.ownerQuestions,
     blockers: state.blockers,

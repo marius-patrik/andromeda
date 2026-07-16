@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import {
+  continueIssueDraft,
   formatDraftDiff,
+  issueDraftConversationVersion,
   isRetryableIssueDraftReview,
+  parseOwnerIssueAnswers,
   parseOwnerIssueIntent,
   publishReviewedIssueDraft,
   readIssueDraftState,
@@ -70,7 +73,7 @@ function reviewedState(): IssueDraftState {
   const reviewedAt = new Date(Date.now() - 60_000).toISOString();
   const createdAt = new Date(Date.now() - 120_000).toISOString();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     draftId: "0123456789abcdef0123456789abcdef",
     repository: "marius-patrik/DarkFactory",
     createdAt,
@@ -80,7 +83,7 @@ function reviewedState(): IssueDraftState {
     current: document,
     ownerQuestions: [],
     blockers: [],
-    draftTurn: { request: request("high"), prompt: prompt("high") as never, receipt: receipt("high") },
+    draftTurns: [{ sequence: 1, kind: "initial", inputVersion: null, beforeDigest: null, afterDigest: digest, ownerAnswers: [], request: request("high"), prompt: prompt("high") as never, receipt: receipt("high") }],
     review: {
       targetVersion: issueVersion({ title: rendered.title, body: rendered.body, state: "open" }),
       ok: true,
@@ -91,6 +94,64 @@ function reviewedState(): IssueDraftState {
       ]
     },
     publication: null
+  };
+}
+
+function blockedOwnerQuestionState(): IssueDraftState {
+  const question = "Should rollout stop after dev verification?";
+  const result = validateIssueDraftResult({
+    ...validDraftResult(),
+    status: "needs-owner",
+    draft: { ...validDraftResult().draft, ownerText: "Keep the protected release lane and ask before choosing rollout behavior." },
+    ownerQuestions: [question],
+    blockers: []
+  });
+  const draftId = "abcdef0123456789abcdef0123456789";
+  const rendered = renderIssueDraft(result, draftId);
+  const document = { ...rendered, digest: issueContentDigest(rendered.title, rendered.body) };
+  const request = { schemaVersion: 1, modelTier: "high", effort: "high", purpose: "issueDrafting" };
+  const prompt = { selection: { modelTier: "high", effort: "high" } } as never;
+  const receipt = {
+    schemaVersion: 1,
+    requested: { modelTier: "high", effort: "high" },
+    resolved: { provider: "fixture-high", model: "fixture/high", agentPreset: "Fixture-high", providerVersion: "1.0.0" },
+    attempts: [{ number: 1, outcome: "success", reason: null }],
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    outcome: "success",
+    blockReason: null
+  };
+  return {
+    schemaVersion: 2,
+    draftId,
+    repository: "marius-patrik/DarkFactory",
+    createdAt: "2026-07-16T10:00:00.000Z",
+    updatedAt: "2026-07-16T10:00:00.000Z",
+    status: "blocked",
+    initial: document,
+    current: document,
+    ownerQuestions: [question],
+    blockers: [`owner decision: ${question}`],
+    draftTurns: [{ sequence: 1, kind: "initial", inputVersion: null, beforeDigest: null, afterDigest: document.digest, ownerAnswers: [], request, prompt, receipt }],
+    review: null,
+    publication: null
+  };
+}
+
+function continuationRuntime(root: string, executeDraftTurn: NonNullable<IssueDevelopmentRuntime["executeDraftTurn"]>, ledger: IssueDevelopmentRuntime["ledger"] = async () => {}): IssueDevelopmentRuntime {
+  return {
+    agentsHome: root,
+    controlRevision: "a".repeat(40),
+    now: () => new Date("2026-07-16T10:05:00.000Z"),
+    ledger,
+    executeDraftTurn,
+    github: {
+      async request(method, requestPath) {
+        if (method === "GET" && requestPath === "/repos/marius-patrik/DarkFactory") return { default_branch: "main" };
+        if (method === "GET" && requestPath === "/repos/marius-patrik/DarkFactory/branches/main") return { commit: { sha: "b".repeat(40) } };
+        if (method === "GET" && requestPath.startsWith("/repos/marius-patrik/DarkFactory/git/trees/")) return { truncated: false, tree: [{ path: "package.json" }, { path: "src/cli.ts" }] };
+        throw new Error(`unexpected ${method} ${requestPath}`);
+      }
+    }
   };
 }
 
@@ -123,6 +184,108 @@ test("structured owner input requires the execution-ready contract rather than a
   assert.equal(parseOwnerIssueIntent(input).goal, "Build it");
   assert.throws(() => parseOwnerIssueIntent({ ...input, validation: [] }), /validation cannot be empty/);
   assert.throws(() => parseOwnerIssueIntent({ ...input, unexpected: [] }), /must contain exactly/);
+});
+
+test("version-bound owner answers append a high-tier drafting turn and require a fresh review", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "df-issue-continue-"));
+  try {
+    const draftPath = path.join(root, "draft.json");
+    const initial = blockedOwnerQuestionState();
+    await writeIssueDraftState(draftPath, initial);
+    const version = issueDraftConversationVersion(initial);
+    const answers = parseOwnerIssueAnswers({
+      schemaVersion: 1,
+      answers: [{ question: initial.ownerQuestions[0], answer: "Yes. Verify dev first, then release to main only on green." }]
+    });
+    const ledgers: string[] = [];
+    const observedRequests: Record<string, unknown>[] = [];
+    const execute = (async (options: any) => {
+      observedRequests.push(options.request);
+      return {
+        output: validDraftResult(),
+        prompt: { selection: { modelTier: "high", effort: "high" }, inputChecksum: "sha256:test" },
+        receipt: {
+          schemaVersion: 1,
+          requested: { modelTier: "high", effort: "high" },
+          resolved: { provider: "fixture-high", model: "fixture/high", agentPreset: "Fixture-high", providerVersion: "1.0.0" },
+          attempts: [{ number: 1, outcome: "success", reason: null }],
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          outcome: "success",
+          blockReason: null
+        }
+      };
+    }) as unknown as NonNullable<IssueDevelopmentRuntime["executeDraftTurn"]>;
+    const continued = await continueIssueDraft(draftPath, version, answers, continuationRuntime(root, execute, async (kind) => { ledgers.push(kind); }));
+    assert.equal(continued.status, "drafted");
+    assert.equal(continued.review, null);
+    assert.equal(continued.draftTurns.length, 2);
+    assert.equal(continued.draftTurns[1].kind, "owner-continuation");
+    assert.equal(continued.draftTurns[1].inputVersion, version);
+    assert.deepEqual(continued.draftTurns[1].ownerAnswers, answers.answers);
+    assert.equal(observedRequests[0]?.modelTier, "high");
+    assert.match(continued.current.body, /Keep the protected release lane/);
+    assert.match(continued.current.body, /Verify dev first, then release to main only on green/);
+    assert.deepEqual(ledgers, ["issue-draft-owner-answer-admission", "issue-draft-owner-answer-completion"]);
+    await assert.rejects(() => publishReviewedIssueDraft(draftPath, continued.current.digest, continuationRuntime(root, execute)), /clean high Autoreview confirmation/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy one-turn draft state migrates to the canonical drafting history on read", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "df-issue-v1-migration-"));
+  try {
+    const draftPath = path.join(root, "draft.json");
+    const current = blockedOwnerQuestionState();
+    const { draftTurns, ...rest } = current;
+    const legacy = {
+      ...rest,
+      schemaVersion: 1,
+      draftTurn: {
+        request: draftTurns[0].request,
+        prompt: draftTurns[0].prompt,
+        receipt: draftTurns[0].receipt
+      }
+    };
+    await writeFile(draftPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+    const migrated = await readIssueDraftState(draftPath);
+    assert.equal(migrated.schemaVersion, 2);
+    assert.equal(migrated.draftTurns.length, 1);
+    assert.equal(migrated.draftTurns[0].kind, "initial");
+    assert.equal(migrated.draftTurns[0].afterDigest, current.initial.digest);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("owner continuation rejects stale, mismatched, and concurrently changed answers before a model turn", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "df-issue-continue-denied-"));
+  try {
+    const draftPath = path.join(root, "draft.json");
+    const initial = blockedOwnerQuestionState();
+    const correct = parseOwnerIssueAnswers({ schemaVersion: 1, answers: [{ question: initial.ownerQuestions[0], answer: "Yes." }] });
+    let modelTurns = 0;
+    const execute = (async () => {
+      modelTurns += 1;
+      throw new Error("model must not run");
+    }) as NonNullable<IssueDevelopmentRuntime["executeDraftTurn"]>;
+
+    await writeIssueDraftState(draftPath, initial);
+    await assert.rejects(() => continueIssueDraft(draftPath, "f".repeat(64), correct, continuationRuntime(root, execute)), /Stale issue draft conversation version/);
+    const version = issueDraftConversationVersion(initial);
+    const mismatched = parseOwnerIssueAnswers({ schemaVersion: 1, answers: [{ question: "A superseded question", answer: "Yes." }] });
+    await assert.rejects(() => continueIssueDraft(draftPath, version, mismatched, continuationRuntime(root, execute)), /does not match the current owner question/);
+
+    await writeIssueDraftState(draftPath, initial);
+    const concurrentRuntime = continuationRuntime(root, execute, async (kind) => {
+      if (kind !== "issue-draft-owner-answer-admission") return;
+      await writeIssueDraftState(draftPath, { ...initial, blockers: [...initial.blockers, "concurrent owner edit"] });
+    });
+    await assert.rejects(() => continueIssueDraft(draftPath, version, correct, concurrentRuntime), /changed after owner-answer admission/);
+    assert.equal(modelTurns, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("ready evaluation succeeds only for the exact reviewed version with closed dependencies", () => {

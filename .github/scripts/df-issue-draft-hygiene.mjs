@@ -9,7 +9,9 @@ export const ISSUE_DRAFT_DIRECTORY = path.join("runtime", "darkfactory", "drafts
 export const ISSUE_DRAFT_HYGIENE_DIRECTORY = path.join("runtime", "darkfactory", "draft-hygiene", "receipts");
 
 const POLICY_KEYS = ["schemaVersion", "policyVersion", "reminderAfterHours", "expiryAfterHours", "maxDraftFiles", "maxDraftBytes"];
-const STATE_KEYS = ["schemaVersion", "draftId", "repository", "createdAt", "updatedAt", "status", "initial", "current", "ownerQuestions", "blockers", "draftTurn", "review", "publication"];
+const LEGACY_STATE_KEYS = ["schemaVersion", "draftId", "repository", "createdAt", "updatedAt", "status", "initial", "current", "ownerQuestions", "blockers", "draftTurn", "review", "publication"];
+const STATE_KEYS = ["schemaVersion", "draftId", "repository", "createdAt", "updatedAt", "status", "initial", "current", "ownerQuestions", "blockers", "draftTurns", "review", "publication"];
+const DRAFT_TURN_KEYS = ["sequence", "kind", "inputVersion", "beforeDigest", "afterDigest", "ownerAnswers", "request", "prompt", "receipt"];
 const DOCUMENT_KEYS = ["title", "body", "digest"];
 const REVIEW_KEYS = ["targetVersion", "ok", "code", "rounds"];
 const PUBLICATION_KEYS = ["approvedDigest", "issueNumber", "issueUrl", "issueVersion"];
@@ -100,8 +102,8 @@ export async function readIssueDraftPolicy(controlRoot) {
 }
 
 export function validateIssueDraftInventoryState(raw, now = new Date()) {
-  exactKeys(raw, STATE_KEYS, "Issue draft state");
-  if (raw.schemaVersion !== 1 || typeof raw.draftId !== "string" || !DRAFT_ID.test(raw.draftId) || typeof raw.repository !== "string" || !SAFE_REPOSITORY.test(raw.repository)) {
+  exactKeys(raw, raw?.schemaVersion === 1 ? LEGACY_STATE_KEYS : STATE_KEYS, "Issue draft state");
+  if (![1, 2].includes(raw.schemaVersion) || typeof raw.draftId !== "string" || !DRAFT_ID.test(raw.draftId) || typeof raw.repository !== "string" || !SAFE_REPOSITORY.test(raw.repository)) {
     throw new Error("Issue draft state identity is invalid");
   }
   if (!new Set(["drafted", "reviewed", "blocked", "published"]).has(raw.status)) throw new Error("Issue draft state status is invalid");
@@ -117,8 +119,29 @@ export function validateIssueDraftInventoryState(raw, now = new Date()) {
       throw new Error(`Issue draft ${name} is malformed`);
     }
   }
-  exactKeys(raw.draftTurn, ["request", "prompt", "receipt"], "Issue draft turn evidence");
-  if (!isRecord(raw.draftTurn.request) || !isRecord(raw.draftTurn.prompt) || !isRecord(raw.draftTurn.receipt)) throw new Error("Issue draft turn evidence is incomplete");
+  if (raw.schemaVersion === 1) {
+    exactKeys(raw.draftTurn, ["request", "prompt", "receipt"], "Issue draft turn evidence");
+    if (!isRecord(raw.draftTurn.request) || !isRecord(raw.draftTurn.prompt) || !isRecord(raw.draftTurn.receipt)) throw new Error("Issue draft turn evidence is incomplete");
+  } else {
+    if (!Array.isArray(raw.draftTurns) || raw.draftTurns.length === 0 || raw.draftTurns.length > 200) throw new Error("Issue draft turn history is malformed");
+    let previousDigest = null;
+    for (const [index, turn] of raw.draftTurns.entries()) {
+      exactKeys(turn, DRAFT_TURN_KEYS, `Issue draft turn ${index + 1}`);
+      if (turn.sequence !== index + 1 || !["initial", "owner-continuation"].includes(turn.kind) || !SHA256.test(String(turn.afterDigest)) || !Array.isArray(turn.ownerAnswers) || turn.ownerAnswers.length > 200 || !isRecord(turn.request) || !isRecord(turn.prompt) || !isRecord(turn.receipt)) {
+        throw new Error(`Issue draft turn ${index + 1} is malformed`);
+      }
+      for (const answer of turn.ownerAnswers) {
+        exactKeys(answer, ["question", "answer"], `Issue draft turn ${index + 1} owner answer`);
+        if (typeof answer.question !== "string" || !answer.question.trim() || typeof answer.answer !== "string" || !answer.answer.trim()) throw new Error(`Issue draft turn ${index + 1} owner answer is malformed`);
+      }
+      if (index === 0) {
+        if (turn.kind !== "initial" || turn.inputVersion !== null || turn.beforeDigest !== null || turn.ownerAnswers.length !== 0 || turn.afterDigest !== raw.initial.digest) throw new Error("Issue draft initial turn is malformed");
+      } else if (turn.kind !== "owner-continuation" || !SHA256.test(String(turn.inputVersion)) || !SHA256.test(String(turn.beforeDigest)) || turn.beforeDigest !== previousDigest || turn.ownerAnswers.length === 0) {
+        throw new Error(`Issue draft turn ${index + 1} continuation is malformed`);
+      }
+      previousDigest = turn.afterDigest;
+    }
+  }
   if (raw.review !== null) {
     exactKeys(raw.review, REVIEW_KEYS, "Issue draft review");
     if (!SHA256.test(String(raw.review.targetVersion)) || typeof raw.review.ok !== "boolean" || (raw.review.code !== null && typeof raw.review.code !== "string") || !Array.isArray(raw.review.rounds) || raw.review.rounds.length > 200) {

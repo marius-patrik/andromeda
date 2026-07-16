@@ -35,7 +35,7 @@ function reviewedState(draftId: string, reviewedAt: string): IssueDraftState {
   });
   const prompt = (modelTier: "medium" | "high") => ({ selection: { modelTier, effort: "high" } });
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     draftId,
     repository: "marius-patrik/DarkFactory",
     createdAt: "2026-07-01T12:00:00.000Z",
@@ -45,7 +45,7 @@ function reviewedState(draftId: string, reviewedAt: string): IssueDraftState {
     current: document,
     ownerQuestions: [],
     blockers: [],
-    draftTurn: { request: request("high"), prompt: prompt("high") as never, receipt: receipt("high") },
+    draftTurns: [{ sequence: 1, kind: "initial", inputVersion: null, beforeDigest: null, afterDigest: document.digest, ownerAnswers: [], request: request("high"), prompt: prompt("high") as never, receipt: receipt("high") }],
     review: {
       targetVersion: issueVersion({ title, body, state: "open" }),
       ok: true,

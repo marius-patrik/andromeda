@@ -14,14 +14,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createBot } from "./bot.js";
 import { loadAppCredentials, loadConfig } from "./config.js";
 import {
+  continueIssueDraft,
   createIssueDraft,
   defaultDraftPath,
   draftExists,
   formatDraftDiff,
   issueDraftFreshness,
+  issueDraftConversationVersion,
   issueDraftSummary,
   isRetryableIssueDraftReview,
   parseIssueTarget,
+  parseOwnerIssueAnswers,
   parseOwnerIssueIntent,
   publishReviewedIssueDraft,
   readIssueDraftState,
@@ -30,6 +33,7 @@ import {
   validateEffort,
   validateRepository,
   type IssueDevelopmentRuntime,
+  type OwnerIssueAnswers,
   type OwnerIssueIntent
 } from "./issue-development.js";
 import { isTrustedDarkFactoryComment, issueContentDigest, issueVersion, validateIssueVersion } from "./issue-spec.js";
@@ -1344,6 +1348,24 @@ async function gatherOwnerIssueIntent(): Promise<OwnerIssueIntent> {
   }
 }
 
+async function gatherOwnerIssueAnswers(questions: readonly string[]): Promise<OwnerIssueAnswers> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("Interactive owner continuation requires a terminal; use --answers with a schemaVersion 1 JSON file");
+  }
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answers = [];
+    for (const [index, question] of questions.entries()) {
+      const answer = (await readline.question(`Owner question ${index + 1}: ${question}\nAnswer: `)).trim();
+      if (!answer) throw new Error(`Owner answer ${index + 1} is required`);
+      answers.push({ question, answer });
+    }
+    return parseOwnerIssueAnswers({ schemaVersion: 1, answers });
+  } finally {
+    readline.close();
+  }
+}
+
 function packageRoot(): string {
   return fileURLToPath(new URL("..", import.meta.url));
 }
@@ -1400,6 +1422,12 @@ async function runIssueDraftCommand(command: ParsedHumanCommand): Promise<void> 
   draftPath = draftPath ? path.resolve(draftPath) : defaultDraftPath(agentsHome, repository);
   const existingDraft = draftExists(draftPath);
   const ownerResume = command.options["--resume"] === true;
+  const continueVersion = optionString(command, "--continue");
+  const answersPath = optionString(command, "--answers");
+  if (answersPath && !continueVersion) throw new Error("issue draft --answers requires --continue with the exact current conversation version");
+  if (continueVersion && ownerResume) throw new Error("issue draft --continue and --resume are separate owner actions");
+  if (continueVersion && optionString(command, "--approve")) throw new Error("issue draft --continue requires reviewing the replacement draft before a new digest can be approved");
+  if (json && continueVersion && !answersPath) throw new Error("issue draft --json continuation requires --answers so interactive prompts cannot corrupt JSON output");
   if (json && !optionString(command, "--input") && !existingDraft) {
     throw new Error("issue draft --json requires --input or an existing --draft so interactive prompts cannot corrupt JSON output");
   }
@@ -1409,13 +1437,19 @@ async function runIssueDraftCommand(command: ParsedHumanCommand): Promise<void> 
     state = await readIssueDraftState(draftPath);
     if (command.arguments[0] && state.repository.toLowerCase() !== repository.toLowerCase()) throw new Error("Issue draft repository does not match the explicit target");
     repository = state.repository;
-    if (ownerResume) {
+    if (continueVersion) {
+      const ownerAnswers = answersPath
+        ? parseOwnerIssueAnswers(JSON.parse(await readFile(path.resolve(answersPath), "utf8")))
+        : await gatherOwnerIssueAnswers(state.ownerQuestions);
+      state = await continueIssueDraft(draftPath, continueVersion, ownerAnswers, await createIssueDevelopmentRuntime(repository, false));
+    } else if (ownerResume) {
       state = await resumeExpiredIssueDraft(draftPath, await createIssueDevelopmentRuntime(repository, false));
     } else if (state.status === "reviewed" && (await issueDraftFreshness(state)).resumeRequired) {
       throw new Error("Issue draft review expired; rerun this exact local draft with --resume to require a fresh high confirmation before publication");
     }
   } else {
     if (ownerResume) throw new Error("issue draft --resume requires one existing expired local draft");
+    if (continueVersion || answersPath) throw new Error("issue draft --continue requires one existing blocked local draft");
     const effort = validateEffort(optionString(command, "--effort") || "high");
     const inputPath = optionString(command, "--input");
     const intent = inputPath
@@ -1432,6 +1466,12 @@ async function runIssueDraftCommand(command: ParsedHumanCommand): Promise<void> 
     console.log(diff);
     console.log(`\nReviewed draft digest: ${state.current.digest}`);
     console.log(`Local draft state: ${draftPath}`);
+    if (state.ownerQuestions.length > 0) {
+      const version = issueDraftConversationVersion(state);
+      console.log(`\nOwner questions for conversation ${version}:`);
+      for (const question of state.ownerQuestions) console.log(`- ${question}`);
+      console.log(`Continue this exact conversation with: df issue draft --draft "${draftPath}" --continue ${version}`);
+    }
   }
   if (!approval && state.status === "reviewed" && !json && process.stdin.isTTY && process.stdout.isTTY) {
     const readline = createInterface({ input: process.stdin, output: process.stdout });

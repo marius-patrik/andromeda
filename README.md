@@ -159,6 +159,17 @@ and owner decisions. The versioned prompt composer fixes model tier to `high`;
 canonical Agent OS runtime (or an explicit `--draft` path), reviewed and
 autofixed by the same bounded issue Autoreview engine used by Actions, and kept
 local until the human types or supplies the exact reviewed SHA-256 digest.
+If the drafter needs an owner decision, it records the current questions and a
+SHA-256 conversation version instead of flattening the exchange into a failed
+questionnaire. Continue that exact state interactively with
+`df issue draft --draft <local-draft> --continue <conversation-version>`, or
+provide `--answers <file>` containing schema-versioned exact question/answer
+pairs for JSON automation. A continuation is serialized against publication,
+rejects stale, mismatched, or concurrently changed questions, appends the full
+turn and owner-answer history, reruns the fixed high drafting tier, and clears
+all prior review evidence. Publication therefore still requires a fresh
+medium-to-clean review and independent high confirmation of the replacement
+draft.
 Publication has a durable admission receipt, is idempotent by draft ID, and
 creates one issue only when the clean high confirmation and current digest
 still agree. Policy `1.0.0` reminds the owner after 72 hours and expires review
