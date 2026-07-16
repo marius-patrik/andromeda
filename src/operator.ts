@@ -148,10 +148,16 @@ function setupOperation(repository: string, finding: DoctorFinding): Pick<SetupA
   if (["managed file drift", "repository layout", "product layout", "product naming", "runtime authority", "doc staleness", "authority naming"].includes(category)) {
     return { stage: "repository-bootstrap", operation: "open-managed-setup-pr", supported: true, reason: "Protected repository content changes only through the managed setup PR lane." };
   }
+  if (category === "repository hygiene") {
+    return { stage: "verification", operation: "converge-clean", supported: true, reason: "Typed generated-artifact and managed-label repairs are delegated to the evidence-bound clean lane; all other work remains preserved." };
+  }
+  if (category === "submodule pointer") {
+    return { stage: "verification", operation: "converge-submodules", supported: true, reason: "Released child pointers are delegated to the trusted submodule engine, which changes only an exact admitted gitlink through a reviewed PR." };
+  }
   if (id.includes("registry") || category === "registration") {
     return { stage: "registration", operation: "converge-registration", supported: true, reason: "Registration changes only through one exact reviewed Andromeda-data source-policy PR, followed by trusted managed sync." };
   }
-  if (["health", "submodule metadata", "submodule pointer"].includes(category)) {
+  if (["health", "submodule metadata"].includes(category)) {
     return { stage: "verification", operation: "verify-only", supported: false, reason: "The owning release or submodule lane must land before setup can verify convergence; setup has no authority to simulate that work." };
   }
   return { stage: "verification", operation: "unsupported", supported: false, reason: "No narrow, trusted mutation is defined for this finding." };

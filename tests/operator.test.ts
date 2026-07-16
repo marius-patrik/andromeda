@@ -109,6 +109,31 @@ test("setup delegates branch reconciliation and release residue to the trusted r
   ]);
 });
 
+test("setup delegates only typed hygiene and released pointer repairs to their trusted engines", () => {
+  const plan = planSetupConvergence([report([
+    { id: "generated-artifact-debug-log", category: "repository hygiene", message: "generated", severity: "warning", repair_class: "pr" },
+    { id: "submodule-plugins-child-pointer-drift-dev", category: "submodule pointer", message: "released pointer drift", severity: "warning", repair_class: "pr" }
+  ])]);
+
+  assert.deepEqual(plan.actions.map((action) => [action.stage, action.operation, action.supported]), [
+    ["verification", "converge-clean", true],
+    ["verification", "converge-submodules", true]
+  ]);
+  assert.deepEqual(plan.residue, []);
+});
+
+test("setup preserves metadata and sensitive state as owner work instead of promising a generic PR", () => {
+  const plan = planSetupConvergence([report([
+    { id: "state-boundary-auth-json", category: "state boundary", message: "secret state", severity: "critical", repair_class: "owner" },
+    { id: "nested-git-metadata-child", category: "nested repository state", message: "nested metadata", severity: "error", repair_class: "owner" },
+    { id: "submodule-metadata-main-invalid", category: "submodule metadata", message: "malformed", severity: "critical", repair_class: "owner" },
+    { id: "worker-session-workdir-isolation", category: "worker isolation", message: "unsafe session", severity: "critical", repair_class: "owner" }
+  ])]);
+
+  assert.deepEqual(plan.actions, []);
+  assert.deepEqual(plan.residue.map((item) => item.repairClass), ["owner", "owner", "owner", "owner"]);
+});
+
 test("setup blocks code-repository convergence for the exact canonical main-only data repositories", () => {
   for (const repository of ["marius-patrik/Andromeda-data", "MARIUS-PATRIK/DARKFACTORY-DATA"]) {
     const plan = planSetupConvergence([report([{

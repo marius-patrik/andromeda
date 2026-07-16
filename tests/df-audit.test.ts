@@ -264,6 +264,9 @@ test("doctor findings classify deterministic repair authority", () => {
   const auto = doctor.doctorFinding("protection-dev-missing", "branch protection", "Protection is missing.");
   const reviewed = doctor.doctorFinding("managed-file-drift-ci", "managed file drift", "Managed CI differs.");
   const owner = doctor.doctorFinding("pr-12-stale", "pull request health", "PR #12 is stale.");
+  const sensitive = doctor.doctorFinding("state-boundary-auth-json", "state boundary", "Provider state is committed.");
+  const metadata = doctor.doctorFinding("submodule-metadata-main-invalid", "submodule metadata", "The declaration is malformed.");
+  const pointer = doctor.doctorFinding("submodule-plugin-pointer-drift", "submodule pointer", "A released pointer is stale.");
   const blocked = doctor.doctorFinding(
     "protection-main-unobservable",
     "branch protection",
@@ -273,6 +276,9 @@ test("doctor findings classify deterministic repair authority", () => {
   assert.equal(auto.repair_class, "auto");
   assert.equal(reviewed.repair_class, "pr");
   assert.equal(owner.repair_class, "owner");
+  assert.equal(sensitive.repair_class, "owner");
+  assert.equal(metadata.repair_class, "blocked");
+  assert.equal(pointer.repair_class, "pr");
   assert.equal(blocked.repair_class, "blocked");
   assert.equal(
     doctor.doctorFinding("explicit", "test", "explicit", { repairClass: "pr" }).repair_class,

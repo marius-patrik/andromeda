@@ -2734,9 +2734,7 @@ export function classifyDoctorRepairClass(id, category, message) {
     "repository layout",
     "product layout",
     "product naming",
-    "state boundary",
     "repository hygiene",
-    "nested repository state",
     "runtime authority",
     "release lane",
     "branch convergence",
@@ -2744,11 +2742,17 @@ export function classifyDoctorRepairClass(id, category, message) {
     "PRD drift",
     "doc staleness",
     "authority naming",
-    "submodule metadata",
-    "submodule pointer",
-    "worker isolation"
+    "submodule pointer"
   ].includes(category)) return "pr";
-  if (["branch hygiene", "pull request health", "local checkout"].includes(category)) return "owner";
+  if ([
+    "branch hygiene",
+    "pull request health",
+    "local checkout",
+    "state boundary",
+    "nested repository state",
+    "submodule metadata",
+    "worker isolation"
+  ].includes(category)) return "owner";
   return "owner";
 }
 
