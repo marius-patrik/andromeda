@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -19,6 +20,7 @@ import {
   listActiveManagedRepos,
   listIssues,
   listPackagePaths,
+  normalizeWorkerPullRequestActor,
   readManagedRepoRegistry,
   parsePrdItems,
   parseRepo,
@@ -34,7 +36,16 @@ import {
 } from "./df-lib.mjs";
 import { loadModelPolicy, modelRequestForPurpose } from "./df-model-policy.mjs";
 
-const PLANNER_BOT_LOGINS = new Set(["github-actions[bot]", "mp-agents[bot]"]);
+const PLANNER_BOT_ACTORS = new Map([
+  ["darkfactory-agent[bot]", "current-app"],
+  ["github-actions[bot]", "repository-actions"],
+  ["mp-agents[bot]", "legacy-app"]
+]);
+const PLANNER_BOT_LOGINS = new Set(PLANNER_BOT_ACTORS.keys());
+const PRD_SCAFFOLD_MARKER = "<!-- dark-factory:prd-scaffold";
+const SHA = /^[0-9a-f]{40}$/i;
+const REQUIRED_SCAFFOLD_CHECKS = ["Validate", "DarkFactory Autoreview"];
+const ACTIONS_APP_ID = 15368;
 
 const DATA_REPO = DARK_FACTORY_DATA_REPO;
 const TRIGGER = process.env.DF_TRIGGER ?? "unknown";
@@ -94,6 +105,9 @@ async function reconcileTargetRepository(repo, controlRepo) {
   }
 
   await ensureLabels(gh, TARGET_REPO, [...PLANNING_LABELS, ...WORK_LABELS]);
+  // Setup dispatches an exact dev source. Scheduled/default and push planning
+  // may still observe their normal refs, but only admitted dev can authorize a
+  // scaffold PR below.
   const sourceRef = PLAN_ALL ? repo.default_branch : TARGET_REF || repo.default_branch;
   const ledger = {
     trigger: TRIGGER,
@@ -160,14 +174,8 @@ async function reconcileTargetRepository(repo, controlRepo) {
     effort: item.modelRequest.effort
   }));
   const issues = await listIssues(gh, TARGET_REPO, "all");
-  const byMarker = new Map();
-  const driftIssues = [];
-
-  for (const issue of issues) {
-    const marker = findPrdMarker(issue.body || "");
-    if (marker) byMarker.set(marker, issue);
-    if (findDriftMarker(issue.body || "")) driftIssues.push(issue);
-  }
+  const byMarker = indexOwnedPrdIssues(issues);
+  const driftIssues = [...indexOwnedIssuesByMarker(issues, findDriftMarker, "PRD drift").values()];
 
   const expectedMarkers = new Set(items.map((item) => item.marker));
   let previousIssueNumber = null;
@@ -183,6 +191,7 @@ async function reconcileTargetRepository(repo, controlRepo) {
           body: prdIssueBody(item, previousIssueNumber ? [previousIssueNumber] : []),
           labels
         });
+        await revalidateOwnedIssue(gh, TARGET_REPO, created.number, item.marker, findPrdMarker);
         const closed = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${created.number}`, {
           state: "closed"
         });
@@ -198,6 +207,7 @@ async function reconcileTargetRepository(repo, controlRepo) {
         previousIssueNumber = existing.number;
         continue;
       }
+      await revalidateOwnedIssue(gh, TARGET_REPO, existing.number, item.marker, findPrdMarker);
       const closed = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}`, {
         state: "closed"
       });
@@ -237,24 +247,27 @@ async function reconcileTargetRepository(repo, controlRepo) {
     // the Blocked-by section when sequencing changes; rewrite the whole body
     // when the PRD item content itself changes.
     const expectedBlockedBy = blockedBy;
-    const existingBlockedBy = extractBlockedBy(existing.body || "");
+    const current = await revalidateOwnedIssue(gh, TARGET_REPO, existing.number, item.marker, findPrdMarker);
+    const existingBlockedBy = extractBlockedBy(current.body || "");
     const contentBody = prdIssueBody(item, []);
-    const contentChanged = removeBlockedBySection(existing.body || "").trim() !== contentBody.trim();
+    const contentChanged = removeBlockedBySection(current.body || "").trim() !== contentBody.trim();
     const sequencingChanged = existingBlockedBy.join(",") !== expectedBlockedBy.join(",");
 
     const update = {};
-    if (existing.title !== item.title) update.title = item.title;
+    if (current.title !== item.title) update.title = item.title;
     if (contentChanged) {
       update.body = prdIssueBody(item, expectedBlockedBy);
     } else if (sequencingChanged) {
-      update.body = applyBlockedBy(existing.body || "", expectedBlockedBy);
+      update.body = applyBlockedBy(current.body || "", expectedBlockedBy);
     }
     if (Object.keys(update).length) {
       const updated = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}`, update);
       ledger.actions.push({ action: "update-issue", marker: item.marker, issue: issueRef(updated), fields: Object.keys(update) });
     }
     await setIssueLabels(gh, TARGET_REPO, existing.number, labels, {
-      invalidateReadiness: Object.keys(update).length > 0
+      invalidateReadiness: Object.keys(update).length > 0,
+      expectedMarker: item.marker,
+      markerFinder: findPrdMarker
     });
     ledger.actions.push({ action: "sequence-labels", marker: item.marker, issue: issueRef(existing), labels });
     previousIssueNumber = existing.number;
@@ -266,9 +279,12 @@ async function reconcileTargetRepository(repo, controlRepo) {
   });
 
   for (const issue of staleMarkedIssues) {
+    const marker = findPrdMarker(issue.body || "");
+    await revalidateOwnedIssue(gh, TARGET_REPO, issue.number, marker, findPrdMarker);
     await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues/${issue.number}/comments`, {
       body: "DarkFactory L4 planning closed this issue because its `df-prd:` marker is no longer present in any tracked `PRD.md` file."
     });
+    await revalidateOwnedIssue(gh, TARGET_REPO, issue.number, marker, findPrdMarker);
     await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${issue.number}`, { state: "closed" });
     ledger.actions.push({ action: "close-stale-prd-issue", issue: issueRef(issue) });
   }
@@ -279,9 +295,12 @@ async function reconcileTargetRepository(repo, controlRepo) {
     ledger.actions.push({ action: "drift-report", issue: driftIssue, findings: driftFindings });
   } else {
     for (const issue of driftIssues.filter((issue) => issue.state === "open")) {
+      const marker = findDriftMarker(issue.body || "");
+      await revalidateOwnedIssue(gh, TARGET_REPO, issue.number, marker, findDriftMarker);
       await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues/${issue.number}/comments`, {
         body: "DarkFactory L4 planning no longer detects this drift condition."
       });
+      await revalidateOwnedIssue(gh, TARGET_REPO, issue.number, marker, findDriftMarker);
       await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${issue.number}`, { state: "closed" });
       ledger.actions.push({ action: "close-resolved-drift", issue: issueRef(issue) });
     }
@@ -374,8 +393,7 @@ async function ensurePrdPresence(repository, repo, sourceRef) {
     };
   }
 
-  const existingPr = await findOpenPrdScaffoldPullRequest(repository);
-  if (existingPr) {
+  if (sourceRef !== "dev") {
     return {
       rootPresent,
       tree,
@@ -383,12 +401,31 @@ async function ensurePrdPresence(repository, repo, sourceRef) {
       packagePaths,
       packagePrds: [],
       missingPaths,
-      scaffoldPullRequest: { ref: existingPr, isNew: false }
+      scaffoldPullRequest: null
     };
   }
 
   const files = await buildScaffoldFiles(repository, sourceRef, missingPaths);
-  const pr = await createPrdScaffoldPullRequest(repository, repo.default_branch, files);
+  const source = await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/dev`);
+  const sourceSha = source?.object?.sha;
+  if (!SHA.test(sourceSha || "")) throw new Error("GitHub returned invalid admitted dev evidence for PRD scaffolding.");
+  const expected = { baseRef: "dev", sourceSha: sourceSha.toLowerCase(), files };
+  const existingPr = await findOpenPrdScaffoldPullRequest(gh, repository, expected);
+  if (existingPr) {
+    const merge = await armPrdScaffoldAutoMerge(gh, repository, existingPr, expected);
+    return {
+      rootPresent,
+      tree,
+      prdPaths,
+      packagePaths,
+      packagePrds: [],
+      missingPaths,
+      scaffoldPullRequest: { ref: issueRef(existingPr), isNew: false, status: merge.status }
+    };
+  }
+
+  const pr = await createPrdScaffoldPullRequest(gh, repository, "dev", sourceSha.toLowerCase(), files);
+  const merge = await armPrdScaffoldAutoMerge(gh, repository, pr, expected);
   return {
     rootPresent,
     tree,
@@ -396,20 +433,24 @@ async function ensurePrdPresence(repository, repo, sourceRef) {
     packagePaths,
     packagePrds: [],
     missingPaths,
-    scaffoldPullRequest: { ref: pr, isNew: true }
+    scaffoldPullRequest: { ref: issueRef(pr), isNew: true, status: merge.status }
   };
 }
 
-async function findOpenPrdScaffoldPullRequest(repository) {
-  const marker = "<!-- dark-factory:prd-scaffold -->";
-  for (let page = 1; page <= 5; page += 1) {
-    const pulls = await gh.request("GET", `/repos/${repoName(repository)}/pulls?state=open&per_page=100&page=${page}`);
-    if (!Array.isArray(pulls) || pulls.length === 0) break;
-    const match = pulls.find((pull) => typeof pull.body === "string" && pull.body.includes(marker));
-    if (match) return issueRef(match);
+async function findOpenPrdScaffoldPullRequest(github, repository, expected) {
+  const candidates = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const pulls = await github.request("GET", `/repos/${repoName(repository)}/pulls?state=open&per_page=100&page=${page}`);
+    if (!Array.isArray(pulls)) throw new Error("GitHub returned malformed PRD scaffold pull-request evidence.");
+    candidates.push(...pulls.filter((pull) => typeof pull?.body === "string" && pull.body.includes(PRD_SCAFFOLD_MARKER)));
     if (pulls.length < 100) break;
+    if (page === 20) throw new Error("PRD scaffold pull-request inventory exceeded the bounded complete scan.");
   }
-  return null;
+  if (candidates.length > 1) throw new Error("Multiple pull requests claim the DarkFactory PRD scaffold marker; refusing ambiguous ownership.");
+  if (candidates.length === 0) return null;
+  const pull = await github.request("GET", `/repos/${repoName(repository)}/pulls/${candidates[0].number}`);
+  await assertTrustedPrdScaffoldPullRequest(github, repository, pull, expected);
+  return pull;
 }
 
 async function buildScaffoldFiles(repository, ref, missingPaths) {
@@ -449,22 +490,22 @@ async function buildScaffoldFiles(repository, ref, missingPaths) {
   return files;
 }
 
-async function createPrdScaffoldPullRequest(repository, baseBranch, files) {
+async function createPrdScaffoldPullRequest(github, repository, baseBranch, sourceSha, files) {
+  if (baseBranch !== "dev") throw new Error("PRD scaffolding is restricted to the admitted dev source and base.");
+  if (!SHA.test(sourceSha || "")) throw new Error("PRD scaffold source SHA is invalid.");
   const timestamp = Date.now();
   const branch = `dark-factory/prd-scaffold-${timestamp}`;
-  const baseRef = await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(baseBranch)}`);
+  const baseRef = await github.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(baseBranch)}`);
   const baseSha = baseRef?.object?.sha;
-  if (typeof baseSha !== "string") {
-    throw new Error(`GitHub returned an invalid base ref for ${baseBranch}`);
-  }
+  if (!SHA.test(baseSha || "") || baseSha.toLowerCase() !== sourceSha.toLowerCase()) throw new Error("Admitted dev changed before PRD scaffold tree creation.");
 
-  const baseCommit = await gh.request("GET", `/repos/${repoName(repository)}/git/commits/${encodeURIComponent(baseSha)}`);
+  const baseCommit = await github.request("GET", `/repos/${repoName(repository)}/git/commits/${encodeURIComponent(baseSha)}`);
   const baseTreeSha = baseCommit?.tree?.sha;
   if (typeof baseTreeSha !== "string") {
     throw new Error(`GitHub returned an invalid base commit tree for ${baseBranch}`);
   }
 
-  const newTree = await gh.request("POST", `/repos/${repoName(repository)}/git/trees`, {
+  const newTree = await github.request("POST", `/repos/${repoName(repository)}/git/trees`, {
     base_tree: baseTreeSha,
     tree: files.map((file) => ({
       path: file.path,
@@ -474,31 +515,223 @@ async function createPrdScaffoldPullRequest(repository, baseBranch, files) {
     }))
   });
 
-  const newCommit = await gh.request("POST", `/repos/${repoName(repository)}/git/commits`, {
+  const newCommit = await github.request("POST", `/repos/${repoName(repository)}/git/commits`, {
     message: "Add DarkFactory PRD scaffold",
     tree: newTree.sha,
     parents: [baseSha]
   });
 
-  await gh.request("POST", `/repos/${repoName(repository)}/git/refs`, {
+  if (!SHA.test(newCommit?.sha || "")) throw new Error("GitHub returned an invalid PRD scaffold commit identity.");
+  const currentBase = await github.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(baseBranch)}`);
+  if (String(currentBase?.object?.sha || "").toLowerCase() !== sourceSha.toLowerCase()) throw new Error("Admitted dev changed before PRD scaffold branch creation.");
+  await github.request("POST", `/repos/${repoName(repository)}/git/refs`, {
     ref: `refs/heads/${branch}`,
     sha: newCommit.sha
   });
 
-  const pull = await gh.request("POST", `/repos/${repoName(repository)}/pulls`, {
+  const pull = await github.request("POST", `/repos/${repoName(repository)}/pulls`, {
     title: "Add DarkFactory PRD scaffold",
     head: branch,
     base: baseBranch,
-    body: prdScaffoldPullRequestBody(repoName(repository), files.map((file) => file.path))
+    body: prdScaffoldPullRequestBody(repoName(repository), files.map((file) => file.path), {
+      baseRef: baseBranch,
+      sourceSha: sourceSha.toLowerCase(),
+      headSha: newCommit.sha.toLowerCase(),
+      contentDigest: scaffoldContentDigest(files)
+    })
   });
+  if (!Number.isInteger(pull?.number) || pull.number <= 0) throw new Error("GitHub returned an invalid PRD scaffold pull request.");
+  const current = await github.request("GET", `/repos/${repoName(repository)}/pulls/${pull.number}`);
+  await assertTrustedPrdScaffoldPullRequest(github, repository, current, { baseRef: baseBranch, sourceSha, files });
+  return current;
+}
 
-  return issueRef(pull);
+function scaffoldContentDigest(files) {
+  return createHash("sha256").update(JSON.stringify(
+    [...files].map((file) => ({ path: file.path, content: file.content })).sort((a, b) => a.path.localeCompare(b.path))
+  )).digest("hex");
+}
+
+function parsePrdScaffoldMarker(body) {
+  const match = String(body || "").match(
+    /<!-- dark-factory:prd-scaffold schema=1 repo=([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+) base=(dev) source=([0-9a-f]{40}) head=([0-9a-f]{40}) content=([0-9a-f]{64}) -->/i
+  );
+  return match ? { repository: match[1], baseRef: match[2], sourceSha: match[3].toLowerCase(), headSha: match[4].toLowerCase(), contentDigest: match[5].toLowerCase() } : null;
+}
+
+async function assertTrustedPrdScaffoldPullRequest(github, repository, pull, expected) {
+  const marker = parsePrdScaffoldMarker(pull?.body);
+  const expectedRepository = repoName(repository).toLowerCase();
+  const expectedContent = scaffoldContentDigest(expected.files);
+  if (!marker
+    || marker.repository.toLowerCase() !== expectedRepository
+    || marker.baseRef !== expected.baseRef
+    || marker.sourceSha !== expected.sourceSha.toLowerCase()
+    || marker.contentDigest !== expectedContent) {
+    throw new Error("PRD scaffold pull request lacks exact current provenance.");
+  }
+  if (normalizeWorkerPullRequestActor(pull?.user) === null) throw new Error("PRD scaffold pull request is not owned by the exact current DarkFactory App actor.");
+  if (pull?.state !== "open"
+    || pull?.base?.ref !== expected.baseRef
+    || String(pull?.base?.sha || "").toLowerCase() !== expected.sourceSha.toLowerCase()
+    || !String(pull?.head?.ref || "").startsWith("dark-factory/prd-scaffold-")
+    || String(pull?.head?.sha || "").toLowerCase() !== marker.headSha
+    || String(pull?.head?.repo?.full_name || "").toLowerCase() !== expectedRepository) {
+    throw new Error("PRD scaffold pull request does not match its same-repository dev/base/head claim.");
+  }
+  const [baseRef, headRef, commit] = await Promise.all([
+    github.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(expected.baseRef)}`),
+    github.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(pull.head.ref)}`),
+    github.request("GET", `/repos/${repoName(repository)}/git/commits/${marker.headSha}`)
+  ]);
+  if (String(baseRef?.object?.sha || "").toLowerCase() !== marker.sourceSha
+    || String(headRef?.object?.sha || "").toLowerCase() !== marker.headSha
+    || !Array.isArray(commit?.parents)
+    || commit.parents.length !== 1
+    || String(commit.parents[0]?.sha || "").toLowerCase() !== marker.sourceSha) {
+    throw new Error("PRD scaffold refs or commit ancestry changed after admission.");
+  }
+  const changedPaths = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const files = await github.request("GET", `/repos/${repoName(repository)}/pulls/${pull.number}/files?per_page=100&page=${page}`);
+    if (!Array.isArray(files)) throw new Error("GitHub returned malformed PRD scaffold file evidence.");
+    changedPaths.push(...files.map((file) => file?.filename));
+    if (files.length < 100) break;
+    if (page === 20) throw new Error("PRD scaffold file inventory exceeded the bounded complete scan.");
+  }
+  const expectedPaths = expected.files.map((file) => file.path).sort();
+  if (changedPaths.some((file) => typeof file !== "string") || JSON.stringify(changedPaths.sort()) !== JSON.stringify(expectedPaths)) {
+    throw new Error("PRD scaffold pull request changes paths outside the exact scaffold plan.");
+  }
+  for (const file of expected.files) {
+    const content = await getOptionalFileContent(github, repository, file.path, marker.headSha);
+    if (content !== file.content) throw new Error(`PRD scaffold content drifted at ${file.path}.`);
+  }
+  return marker;
+}
+
+async function armPrdScaffoldAutoMerge(github, repository, pull, expected) {
+  let current = await github.request("GET", `/repos/${repoName(repository)}/pulls/${pull.number}`);
+  await assertTrustedPrdScaffoldPullRequest(github, repository, current, expected);
+  const protection = await github.request("GET", `/repos/${repoName(repository)}/branches/${encodeURIComponent(expected.baseRef)}/protection`);
+  assertPrdScaffoldProtection(protection, expected.baseRef);
+  if (current.auto_merge) return { status: "automerge-armed", pull: current };
+  if (typeof github.graphql !== "function" || typeof current.node_id !== "string") throw new Error("PRD scaffold auto-merge authority is unavailable.");
+  let enabled = null;
+  try {
+    enabled = await github.graphql(
+      `mutation EnablePrdScaffoldAutoMerge($pullRequestId: ID!) {
+        enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: SQUASH }) {
+          pullRequest { number autoMergeRequest { enabledAt } }
+        }
+      }`,
+      { pullRequestId: current.node_id }
+    );
+  } catch (error) {
+    current = await github.request("GET", `/repos/${repoName(repository)}/pulls/${pull.number}`);
+    await assertTrustedPrdScaffoldPullRequest(github, repository, current, expected);
+    if (!current.auto_merge) throw error;
+    return { status: "automerge-armed", pull: current };
+  }
+  current = await github.request("GET", `/repos/${repoName(repository)}/pulls/${pull.number}`);
+  await assertTrustedPrdScaffoldPullRequest(github, repository, current, expected);
+  const enabledAt = enabled?.enablePullRequestAutoMerge?.pullRequest?.autoMergeRequest?.enabledAt;
+  if (!current.auto_merge && typeof enabledAt !== "string") throw new Error("GitHub did not confirm PRD scaffold auto-merge admission.");
+  return { status: "automerge-armed", pull: current };
+}
+
+function assertPrdScaffoldProtection(protection, branch) {
+  const checks = protection?.required_status_checks?.checks;
+  const safe = protection?.required_status_checks?.strict === true
+    && protection?.enforce_admins?.enabled === true
+    && protection?.allow_force_pushes?.enabled === false
+    && protection?.allow_deletions?.enabled === false
+    && Array.isArray(checks)
+    && REQUIRED_SCAFFOLD_CHECKS.every((name) => {
+      const matches = checks.filter((check) => check?.context === name);
+      return matches.length === 1 && matches[0]?.app_id === ACTIONS_APP_ID;
+    });
+  if (!safe) throw new Error(`PRD scaffold base ${branch} lacks exact App-bound protected auto-merge gates.`);
+}
+
+function normalizePlannerBotActor(actor) {
+  if (!actor || typeof actor !== "object" || actor.type !== "Bot" || actor.__typename !== undefined || typeof actor.login !== "string") return null;
+  return PLANNER_BOT_ACTORS.get(actor.login) || null;
+}
+
+function exactMarkerCount(body, marker) {
+  const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [...String(body || "").matchAll(new RegExp(`<!--\\s*${escaped}\\s*-->`, "g"))].length;
+}
+
+function assertOwnedPlannerIssue(issue, marker, kind = "planner") {
+  if (!issue || issue.pull_request || normalizePlannerBotActor(issue.user) === null || exactMarkerCount(issue.body, marker) !== 1) {
+    throw new Error(`${kind} marker ${marker} is not owned by one exact trusted planner Bot issue.`);
+  }
+  return issue;
+}
+
+function indexOwnedIssuesByMarker(issues, markerFinder, kind) {
+  const candidates = new Map();
+  for (const issue of issues || []) {
+    if (issue?.pull_request) continue;
+    const marker = markerFinder(issue?.body || "");
+    if (!marker) continue;
+    candidates.set(marker, [...(candidates.get(marker) || []), issue]);
+  }
+  const owned = new Map();
+  for (const [marker, matches] of candidates) {
+    if (matches.length !== 1) throw new Error(`Multiple issues claim ${kind} marker ${marker}; refusing ambiguous ownership.`);
+    owned.set(marker, assertOwnedPlannerIssue(matches[0], marker, kind));
+  }
+  return owned;
+}
+
+function indexOwnedPrdIssues(issues) {
+  const candidates = new Map();
+  for (const issue of issues || []) {
+    if (issue?.pull_request) continue;
+    const rawMarker = findPrdMarker(issue?.body || "");
+    if (!rawMarker) continue;
+    const exactMarkers = [...String(issue.body || "").matchAll(/<!--\s*(df-prd:[a-z0-9-]+)\s*-->/g)].map((match) => match[1]);
+    if (exactMarkers.length !== 1 || exactMarkers[0] !== rawMarker) {
+      throw new Error(`PRD issue #${issue.number || "unknown"} does not carry one exact marker comment.`);
+    }
+    candidates.set(rawMarker, [...(candidates.get(rawMarker) || []), issue]);
+  }
+  const owned = new Map();
+  for (const [marker, matches] of candidates) {
+    if (matches.length !== 1) throw new Error(`Multiple issues claim PRD marker ${marker}; refusing ambiguous ownership.`);
+    owned.set(marker, assertOwnedPlannerIssue(matches[0], marker, "PRD"));
+  }
+  return owned;
+}
+
+function findUniqueOwnedIssue(issues, marker, kind) {
+  const candidates = (issues || []).filter((issue) => !issue?.pull_request && exactMarkerCount(issue?.body, marker) > 0);
+  if (candidates.length > 1) throw new Error(`Multiple issues claim ${kind} marker ${marker}; refusing ambiguous ownership.`);
+  if (candidates.length === 0) return null;
+  return assertOwnedPlannerIssue(candidates[0], marker, kind);
+}
+
+async function revalidateOwnedIssue(github, repository, issueNumber, marker, markerFinder) {
+  const issues = await listIssues(github, repository, "all");
+  const matches = issues.filter((issue) => markerFinder(issue?.body || "") === marker);
+  if (matches.length !== 1 || matches[0]?.number !== issueNumber) {
+    throw new Error(`Planner issue marker ${marker} no longer has one exact admitted owner.`);
+  }
+  assertOwnedPlannerIssue(matches[0], marker, "planner");
+  const current = await github.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
+  if (current?.number !== issueNumber || markerFinder(current?.body || "") !== marker) {
+    throw new Error(`Planner issue #${issueNumber} changed marker after admission.`);
+  }
+  return assertOwnedPlannerIssue(current, marker, "planner");
 }
 
 async function upsertPrdBlockerIssue(repository, sourceRef, reason) {
   const marker = `df-prd-blocker:${slug(repoName(repository))}`;
   const issues = await listIssues(gh, repository, "all");
-  const existing = issues.find((issue) => (issue.body || "").includes(marker));
+  const existing = findUniqueOwnedIssue(issues, marker, "PRD blocker");
   const body = [
     `<!-- ${marker} -->`,
     "## PRD Blocker",
@@ -521,12 +754,13 @@ async function upsertPrdBlockerIssue(repository, sourceRef, reason) {
   const labels = ["P1", "df:ask-owner", "df:class:standard"];
 
   if (existing) {
+    await revalidateOwnedIssue(gh, repository, existing.number, marker, (body) => body.includes(marker) ? marker : "");
     const updated = await gh.request("PATCH", `/repos/${repoName(repository)}/issues/${existing.number}`, {
       title,
       body,
       state: "open"
     });
-    await setIssueLabels(gh, repository, existing.number, labels, { preserveWorkerState: false });
+    await setIssueLabels(gh, repository, existing.number, labels, { preserveWorkerState: false, expectedMarker: marker, markerFinder: (body) => body.includes(marker) ? marker : "" });
     return issueRef(updated);
   }
 
@@ -539,7 +773,10 @@ async function upsertPrdBlockerIssue(repository, sourceRef, reason) {
 }
 
 async function setIssueLabels(gh, repository, issueNumber, labels, options = {}) {
-  const current = await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
+  const markerFinder = options.markerFinder || ((body) => body.includes(options.expectedMarker) ? options.expectedMarker : "");
+  const current = options.expectedMarker
+    ? await revalidateOwnedIssue(gh, repository, issueNumber, options.expectedMarker, markerFinder)
+    : await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
   const currentNames = new Set(
     (current.labels || []).map((label) => typeof label === "string" ? label : label.name).filter(Boolean)
   );
@@ -704,17 +941,18 @@ async function listOpenPullRequests(repository) {
 async function upsertDriftIssue(repository, findings) {
   const marker = `df-prd-drift:${slug(repoName(repository))}`;
   const issues = await listIssues(gh, repository, "all");
-  const existing = issues.find((issue) => (issue.body || "").includes(marker));
+  const existing = findUniqueOwnedIssue(issues, marker, "PRD drift");
   const body = driftIssueBody(repoName(repository), findings);
   const title = `PRD drift report - ${repoName(repository)}`;
 
   if (existing) {
+    await revalidateOwnedIssue(gh, repository, existing.number, marker, findDriftMarker);
     const updated = await gh.request("PATCH", `/repos/${repoName(repository)}/issues/${existing.number}`, {
       title,
       body,
       state: "open"
     });
-    await setIssueLabels(gh, repository, existing.number, ["P1", "df:prd-drift", "df:class:standard"]);
+    await setIssueLabels(gh, repository, existing.number, ["P1", "df:prd-drift", "df:class:standard"], { expectedMarker: marker, markerFinder: findDriftMarker });
     return issueRef(updated);
   }
 
@@ -761,10 +999,7 @@ function applyBlockedBy(body, blockedBy) {
 }
 
 function isPlannerBotClosure(issue) {
-  const closedBy = issue?.closed_by;
-  if (!closedBy || typeof closedBy.login !== "string") return false;
-  if (closedBy.type !== "Bot") return false;
-  return PLANNER_BOT_LOGINS.has(closedBy.login);
+  return normalizePlannerBotActor(issue?.closed_by) !== null;
 }
 
 function humanClosedPrdComment(item) {
@@ -819,18 +1054,19 @@ async function escalateHumanClosedPrdIssue(gh, controlRepo, repository, item, is
   await ensureLabels(gh, controlRepo, [...PLANNING_LABELS, ...WORK_LABELS]);
   const marker = askOwnerIssueMarker(repository, item);
   const issues = await listIssues(gh, controlRepo, "all");
-  const existing = issues.find((candidate) => (candidate.body || "").includes(marker));
+  const existing = findUniqueOwnedIssue(issues, marker, "ask-owner");
   const title = askOwnerIssueTitle(repository, item);
   const body = askOwnerIssueBody(repository, item, issue);
   const labels = ["P1", "df:ask-owner", "df:class:standard"];
 
   if (existing) {
+    await revalidateOwnedIssue(gh, controlRepo, existing.number, marker, (body) => body.includes(marker) ? marker : "");
     const updated = await gh.request("PATCH", `/repos/${repoName(controlRepo)}/issues/${existing.number}`, {
       title,
       body,
       state: "open"
     });
-    await setIssueLabels(gh, controlRepo, existing.number, labels, { preserveWorkerState: false });
+    await setIssueLabels(gh, controlRepo, existing.number, labels, { preserveWorkerState: false, expectedMarker: marker, markerFinder: (body) => body.includes(marker) ? marker : "" });
     return {
       action: "escalate-human-closed-prd-issue",
       marker: item.marker,
@@ -857,7 +1093,8 @@ async function escalateHumanClosedPrdIssue(gh, controlRepo, repository, item, is
 }
 
 async function handleClosedIncompletePrdIssue(gh, repository, controlRepo, item, existing, labels, blockedBy) {
-  if (isPlannerBotClosure(existing)) {
+  const current = await revalidateOwnedIssue(gh, repository, existing.number, item.marker, findPrdMarker);
+  if (isPlannerBotClosure(current)) {
     const reopened = await gh.request("PATCH", `/repos/${repoName(repository)}/issues/${existing.number}`, {
       title: item.title,
       body: prdIssueBody(item, blockedBy),
@@ -865,14 +1102,16 @@ async function handleClosedIncompletePrdIssue(gh, repository, controlRepo, item,
     });
     await setIssueLabels(gh, repository, existing.number, labels, {
       preserveWorkerState: false,
-      invalidateReadiness: true
+      invalidateReadiness: true,
+      expectedMarker: item.marker,
+      markerFinder: findPrdMarker
     });
     const action = { action: "reopen-prd-issue", marker: item.marker, issue: issueRef(reopened), labels };
     return { action, previousIssueNumber: reopened.number };
   }
 
-  const escalation = await escalateHumanClosedPrdIssue(gh, controlRepo, repository, item, existing);
-  return { action: escalation, previousIssueNumber: existing.number };
+  const escalation = await escalateHumanClosedPrdIssue(gh, controlRepo, repository, item, current);
+  return { action: escalation, previousIssueNumber: current.number };
 }
 
 function issueRef(issue) {
@@ -881,6 +1120,15 @@ function issueRef(issue) {
 
 export {
   PLANNER_BOT_LOGINS,
+  normalizePlannerBotActor,
+  assertOwnedPlannerIssue,
+  indexOwnedPrdIssues,
+  findOpenPrdScaffoldPullRequest,
+  createPrdScaffoldPullRequest,
+  assertTrustedPrdScaffoldPullRequest,
+  armPrdScaffoldAutoMerge,
+  scaffoldContentDigest,
+  parsePrdScaffoldMarker,
   isPlannerBotClosure,
   humanClosedPrdComment,
   askOwnerIssueMarker,

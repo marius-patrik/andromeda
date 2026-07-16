@@ -987,10 +987,13 @@ export function extractReadmeFirstParagraph(readme) {
   return first.length > 300 ? `${first.slice(0, 297)}...` : first;
 }
 
-export function prdScaffoldPullRequestBody(targetRepoName, paths) {
+export function prdScaffoldPullRequestBody(targetRepoName, paths, provenance = null) {
   const files = paths.map((p) => `- \`${p}\``).join("\n");
+  const marker = provenance
+    ? `<!-- dark-factory:prd-scaffold schema=1 repo=${targetRepoName} base=${provenance.baseRef} source=${provenance.sourceSha} head=${provenance.headSha} content=${provenance.contentDigest} -->`
+    : "<!-- dark-factory:prd-scaffold -->";
   return [
-    "<!-- dark-factory:prd-scaffold -->",
+    marker,
     "## Summary",
     "",
     `DarkFactory fleet bootstrap found missing PRD files in \`${targetRepoName}\` and is opening the smallest scaffold PR so L4 planning can reconcile the backlog from PRD sections.`,
@@ -1001,7 +1004,7 @@ export function prdScaffoldPullRequestBody(targetRepoName, paths) {
     "",
     "## Notes",
     "",
-    "- This scaffold is derived from the repository README and the Agent OS root product context. The owner should edit the PRD before merge to reflect the actual product.",
+    "- This scaffold is derived from repository evidence and must pass the normal protected Validate and DarkFactory Autoreview gates before auto-merge; product refinements use a later reviewed PR.",
     "- After merge, DarkFactory L4 planning will parse the PRD and file/update sequenced issues with stable `df-prd:` markers.",
     "- Parked repositories are never touched."
   ].join("\n");

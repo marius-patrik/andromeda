@@ -131,7 +131,9 @@ mutations, trust boundaries, examples, and non-zero failure semantics.
 The command surface follows the complete software-development lane:
 
 - `df doctor|setup|clean` with explicit plan/apply/verify cleanup stages;
-- `df repo init|doctor|sync|status` and `df baseline status|sync|verify`;
+- `df repo init|doctor|sync|status` and `df baseline status|sync|verify`; `repo init`
+  is the exact-target alias of the full `setup` convergence engine, while
+  `repo sync` remains the narrower reviewed managed-baseline operation;
 - `df issue draft|review|fix|ready|ask` and `df lane pause|resume`;
 - `df plan|streams|dashboard`, `df work|resume|verify`, and
   `df pr review|fix|status|merge`;

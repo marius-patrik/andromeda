@@ -12,6 +12,7 @@ import {
   readExactReceiptFile,
   releaseResultIsBlocked,
   releaseResultIsTerminal,
+  setupArgumentsForHumanCommand,
   validateReceiptDocument,
   type ReceiptFileEvidence
 } from "../src/cli.js";
@@ -109,6 +110,16 @@ test("setup command registry exposes and the adapter forwards exact local eviden
   const source = await readFile(path.resolve(import.meta.dirname, "..", "src", "cli.ts"), "utf8");
   assert.match(source, /command\.options\["--local"\][\s\S]{0,180}\["--local", command\.options\["--local"\]/);
   assert.match(source, /command\.options\["--agents-home"\][\s\S]{0,220}\["--agents-home", command\.options\["--agents-home"\]/);
+});
+
+test("repo init is an exact-target alias of setup rather than baseline sync", () => {
+  const repoInit = parseHumanCliArgs(["repo", "init", "marius-patrik/example", "--json"]);
+  const setup = parseHumanCliArgs(["setup", "marius-patrik/example", "--json"]);
+  assert.ok(repoInit);
+  assert.ok(setup);
+  assert.equal(repoInit.spec.engine, "setup");
+  assert.deepEqual(setupArgumentsForHumanCommand(repoInit), setupArgumentsForHumanCommand(setup));
+  assert.deepEqual(setupArgumentsForHumanCommand(repoInit), ["marius-patrik/example", "--json"]);
 });
 
 test("clean CLI defaults to plan and requires an explicit durable apply ID", () => {

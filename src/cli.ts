@@ -1191,7 +1191,6 @@ async function runHumanCommand(command: ParsedHumanCommand): Promise<boolean> {
       await runDoctor(args, "repo-doctor");
       return true;
     }
-    case "repo-init":
     case "repo-sync":
     case "baseline-sync":
       await syncOneManagedRepository(command);
@@ -1245,15 +1244,9 @@ async function runHumanCommand(command: ParsedHumanCommand): Promise<boolean> {
     case "logs":
       await runLogsCommand(command);
       return true;
+    case "repo-init":
     case "setup":
-      await runSetup([
-        ...command.arguments,
-        ...(command.options["--all"] === true ? ["--all"] : []),
-        ...(typeof command.options["--local"] === "string" ? ["--local", command.options["--local"] as string] : []),
-        ...(typeof command.options["--agents-home"] === "string" ? ["--agents-home", command.options["--agents-home"] as string] : []),
-        ...(command.options["--watch"] === true ? ["--watch"] : []),
-        ...(command.options["--json"] === true ? ["--json"] : [])
-      ], command.spec.id);
+      await runSetup(setupArgumentsForHumanCommand(command), command.spec.id);
       return true;
     case "clean-plan":
     case "clean-apply":
@@ -1296,6 +1289,17 @@ async function runHumanCommand(command: ParsedHumanCommand): Promise<boolean> {
     default:
       return false;
   }
+}
+
+export function setupArgumentsForHumanCommand(command: ParsedHumanCommand): string[] {
+  return [
+    ...command.arguments,
+    ...(command.options["--all"] === true ? ["--all"] : []),
+    ...(typeof command.options["--local"] === "string" ? ["--local", command.options["--local"] as string] : []),
+    ...(typeof command.options["--agents-home"] === "string" ? ["--agents-home", command.options["--agents-home"] as string] : []),
+    ...(command.options["--watch"] === true ? ["--watch"] : []),
+    ...(command.options["--json"] === true ? ["--json"] : [])
+  ];
 }
 
 function optionString(command: ParsedHumanCommand, name: string): string {
