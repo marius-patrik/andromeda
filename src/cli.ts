@@ -724,11 +724,21 @@ async function runRelease(args: string[], commandId?: string): Promise<void> {
   const repository = { owner, repo: options.target.split("/")[1] };
   const maxPasses = options.watch ? boundedInteger(process.env.DF_RELEASE_WATCH_PASSES, 40, 1, 240) : 1;
   let result: Record<string, unknown> = {};
+  let completedPasses = 0;
   for (let pass = 1; pass <= maxPasses; pass += 1) {
+    completedPasses = pass;
     result = await release.runReleaseCommand({ mode: options.mode, repository });
     const status = typeof result.status === "string" ? result.status : "unknown";
-    if (!options.watch || ["verified", "blocked", "skipped", "failed"].includes(status)) break;
+    if (!options.watch || releaseResultIsTerminal({ status })) break;
     if (pass < maxPasses) await delay(15_000);
+  }
+  const watchTimedOut = options.watch && !releaseResultIsTerminal(result);
+  if (watchTimedOut) {
+    result = {
+      ...result,
+      status: "blocked",
+      watch: { timedOut: true, passes: completedPasses, lastStatus: String(result.status || "unknown") }
+    };
   }
   const blocked = releaseResultIsBlocked(result);
   if (options.json) console.log(JSON.stringify(humanJsonResult(
@@ -743,6 +753,10 @@ async function runRelease(args: string[], commandId?: string): Promise<void> {
 
 export function releaseResultIsBlocked(result: Record<string, unknown>): boolean {
   return ["blocked", "failed", "owner-required"].includes(String(result.status || ""));
+}
+
+export function releaseResultIsTerminal(result: Record<string, unknown>): boolean {
+  return ["verified", "blocked", "failed", "owner-required", "skipped"].includes(String(result.status || ""));
 }
 
 export type SubmoduleCliOptions = {

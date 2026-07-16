@@ -11,6 +11,7 @@ import {
   parseSetupCliArgs,
   readExactReceiptFile,
   releaseResultIsBlocked,
+  releaseResultIsTerminal,
   validateReceiptDocument,
   type ReceiptFileEvidence
 } from "../src/cli.js";
@@ -144,6 +145,12 @@ test("blocked release outcomes cannot use the successful command contract", () =
   }
   for (const status of ["observed", "waiting-for-green", "automerge-armed", "verified", "skipped"]) {
     assert.equal(releaseResultIsBlocked({ status }), false, status);
+  }
+  for (const status of ["verified", "blocked", "failed", "owner-required", "skipped"]) {
+    assert.equal(releaseResultIsTerminal({ status }), true, status);
+  }
+  for (const status of ["observed", "waiting-for-green", "automerge-armed", "dispatched", "in-progress"]) {
+    assert.equal(releaseResultIsTerminal({ status }), false, status);
   }
 });
 
