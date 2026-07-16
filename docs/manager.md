@@ -279,7 +279,10 @@ Model tier and model effort are independent axes. Every invocation must also
 declare either `read-only` or `workspace-write`; the provider adapter must attest
 that exact effective policy before a successful result is accepted. Exactly one
 prompt source is allowed: one positional value, one absolute `--prompt-file`, or
-`--prompt-stdin`. File and stdin input stay out of downstream process argv.
+`--prompt-stdin`. A prompt file is admitted only when the final entry and every
+parent component are physical and equal their own realpath; linked parents,
+Windows junction/reparse aliases, and mid-read path drift fail before provider
+work. File and stdin input stay out of downstream process argv.
 
 Codex resolves the matching built-in `:read-only` or `:workspace` permission
 profile through an ephemeral, zero-token app-server thread before provider work.

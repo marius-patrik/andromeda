@@ -507,6 +507,14 @@ describe("bounded prompt admission", () => {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
     }
+    const physicalParent = path.join(root, "physical-prompt-parent");
+    const linkedParent = path.join(root, "linked-prompt-parent");
+    await mkdir(physicalParent);
+    await writeFile(path.join(physicalParent, "nested.txt"), "linked parent content");
+    await symlink(physicalParent, linkedParent, process.platform === "win32" ? "junction" : "dir");
+    await expect(readPromptFile(path.join(linkedParent, "nested.txt"))).rejects.toThrow(
+      "physical regular file",
+    );
     const empty = path.join(root, "empty.txt");
     await writeFile(empty, "  \n");
     await expect(readPromptFile(empty)).rejects.toThrow("execution prompt is required");

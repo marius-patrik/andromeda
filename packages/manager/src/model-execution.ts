@@ -155,6 +155,14 @@ function containsPath(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function samePhysicalPath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left);
+  const normalizedRight = path.resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
 function requiredAbsolutePath(value: string, label: string): string {
   if (typeof value !== "string" || !path.isAbsolute(value) || value.includes("\0")) {
     throw new Error(`${label} must be an absolute path`);
@@ -596,15 +604,43 @@ export function readPromptStdin(stream: ReadableStream<Uint8Array> | Readable): 
   return readBoundedStream(stream);
 }
 
+async function assertPhysicalPromptPath(target: string): Promise<void> {
+  const parsed = path.parse(target);
+  const relative = path.relative(parsed.root, target);
+  const components = relative ? relative.split(path.sep) : [];
+  let cursor = parsed.root;
+  for (let index = 0; index < components.length; index += 1) {
+    cursor = path.join(cursor, components[index]!);
+    const info = await lstat(cursor).catch(() => null);
+    const isTarget = index === components.length - 1;
+    if (
+      !info ||
+      info.isSymbolicLink() ||
+      (isTarget ? !info.isFile() : !info.isDirectory())
+    ) {
+      throw new Error("prompt file must be a physical regular file");
+    }
+    const physical = await realpath(cursor).catch(() => null);
+    if (!physical || !samePhysicalPath(cursor, physical)) {
+      // realpath equality rejects Windows junction/reparse aliases as well as
+      // POSIX linked ancestors; lstat alone covers only the final entry on
+      // some platforms.
+      throw new Error("prompt file must be a physical regular file");
+    }
+  }
+}
+
 /**
- * Admit an absolute prompt file through one pinned handle. The path, contents,
- * and any provider-owned text are deliberately absent from failure messages.
+ * Admit an absolute, entirely physical prompt path through one pinned handle.
+ * The path, contents, and any provider-owned text are deliberately absent from
+ * failure messages.
  */
 export async function readPromptFile(
   promptPath: string,
   admissionLifecycle: { beforeFinalVerification?: () => Promise<void> } = {},
 ): Promise<string> {
   const target = requiredAbsolutePath(promptPath, "prompt file");
+  await assertPhysicalPromptPath(target);
   const pathInfo = await lstat(target, { bigint: true }).catch(() => null);
   if (!pathInfo?.isFile() || pathInfo.isSymbolicLink()) {
     throw new Error("prompt file must be a physical regular file");
@@ -624,6 +660,7 @@ export async function readPromptFile(
     }
     if (offset !== buffer.length) throw new Error("prompt file changed during admission");
     await admissionLifecycle.beforeFinalVerification?.();
+    await assertPhysicalPromptPath(target);
     const after = fileIdentity(await handle.stat({ bigint: true }));
     const named = await lstat(target, { bigint: true }).catch(() => null);
     if (!named || named.isSymbolicLink()) throw new Error("prompt file changed during admission");
