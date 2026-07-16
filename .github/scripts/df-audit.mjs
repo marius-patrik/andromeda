@@ -840,7 +840,10 @@ export async function auditRootLayout(github, repository, ref, tree) {
       }
       const resolved = resolveSubmoduleRepo(repository, actual.url);
       if (actual.name !== expected.name || !resolved || normalizedName(resolved) !== expected.repo.toLowerCase()) {
-        findings.push(doctorFinding(`andromeda-submodule-${slug(expected.path)}-identity`, "product layout", `Gitlink \`${expected.path}\` has name/url \`${actual.name}\` / \`${actual.url}\`; expected \`${expected.name}\` / \`${expected.repo}\`.`, { severity: "critical" }));
+        const observedRepository = resolved
+          ? `GitHub repository \`${repoName(resolved)}\``
+          : describeSubmoduleUrl(actual.url);
+        findings.push(doctorFinding(`andromeda-submodule-${slug(expected.path)}-identity`, "product layout", `Gitlink \`${expected.path}\` has a mismatched name or repository identity (${observedRepository}); expected \`${expected.name}\` / \`${expected.repo}\`.`, { severity: "critical" }));
       }
       if (paths.get(expected.path)?.type !== "commit") {
         findings.push(doctorFinding(`andromeda-submodule-${slug(expected.path)}-mode`, "product layout", `Path \`${expected.path}\` is not a gitlink (tree type commit).`, { severity: "critical" }));
@@ -1236,7 +1239,7 @@ export async function auditSubmoduleState(github, repository, branch) {
     seenPaths.add(submodule.path);
     const childRepo = resolveSubmoduleRepo(repository, submodule.url);
     if (!childRepo) {
-      findings.push(doctorFinding(`submodule-${slug(submodule.path)}-url-invalid`, "submodule metadata", `Submodule \`${submodule.path}\` uses unsupported URL \`${submodule.url}\`.`, { severity: "critical" }));
+      findings.push(doctorFinding(`submodule-${slug(submodule.path)}-url-invalid`, "submodule metadata", `Submodule \`${submodule.path}\` uses an unsupported ${describeSubmoduleUrl(submodule.url)}.`, { severity: "critical" }));
       continue;
     }
     const recorded = await getSubmoduleCommit(github, repository, submodule.path, branch);
@@ -1303,6 +1306,20 @@ export function resolveSubmoduleRepo(parentRepo, url) {
     }
   }
   return null;
+}
+
+function describeSubmoduleUrl(url) {
+  if (typeof url !== "string" || !url.trim()) return "missing URL";
+  const value = url.trim();
+  if (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(value)) return "machine-local path";
+  if (/^file:/i.test(value)) return "machine-local file URL";
+  if (value.startsWith("./") || value.startsWith("../")) return "relative repository URL";
+  if (/^(?:https?:\/\/github\.com\/|git@github\.com:|github\.com:)/i.test(value)) return "malformed GitHub repository URL";
+  const scheme = value.match(/^([A-Za-z][A-Za-z0-9+.-]*):/i)?.[1]?.toLowerCase();
+  if (scheme === "http" || scheme === "https") return "non-GitHub web URL";
+  if (scheme === "ssh" || scheme === "git") return "non-GitHub remote URL";
+  if (scheme) return "URL with an unsupported scheme";
+  return "unrecognized repository URL";
 }
 
 export function auditLocalCheckout(localPath, repository) {

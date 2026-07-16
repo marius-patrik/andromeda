@@ -805,6 +805,8 @@ test("submodule audit distinguishes invalid URLs, missing gitlinks, and released
   assert.ok(ids.has("submodule-plugins-missing-gitlink-missing-main"));
   assert.ok(ids.has("submodule-plugins-drift-branch-drift"));
   assert.ok(ids.has("submodule-plugins-drift-pointer-drift-main"));
+  assert.match(findings.find((finding) => finding.id === "submodule-plugins-bad-url-invalid")?.message || "", /machine-local file URL/);
+  assert.doesNotMatch(JSON.stringify(findings), /file:\/\/\/machine\/local|\/machine\/local/);
 });
 
 test("submodule gitlink admission accepts both REST representations and rejects a plain file", async () => {
@@ -832,9 +834,9 @@ test("submodule gitlink admission accepts both REST representations and rejects 
   }
 });
 
-test("root-layout and naming fixtures catch Andromeda and DarkFactory contract drift", async () => {
+test("root-layout and naming fixtures catch Andromeda and DarkFactory contract drift without exposing local submodule URLs", async () => {
   const andromeda = { owner: "marius-patrik", repo: "Andromeda" };
-  const modules = '[submodule "Wrong"]\n path = plugins/DarkFactory\n url = https://github.com/marius-patrik/Wrong.git\n[submodule "Extra"]\n path = extras/Extra\n url = https://github.com/marius-patrik/Extra.git\n';
+  const modules = '[submodule "Wrong"]\n path = plugins/DarkFactory\n url = C:\\Users\\private-user\\private-repo\n[submodule "Extra"]\n path = extras/Extra\n url = https://github.com/marius-patrik/Extra.git\n';
   const { gh: andromedaGh } = mockGh((_method, requestPath) => {
     if (requestPath.includes("/.gitmodules")) return content(modules);
     if (requestPath.includes("/README.md")) return content("# Wrong\n");
@@ -849,6 +851,8 @@ test("root-layout and naming fixtures catch Andromeda and DarkFactory contract d
   assert.ok(andromedaIds.has("andromeda-submodule-plugins-darkfactory-mode"));
   assert.ok(andromedaIds.has("andromeda-submodule-unexpected-extras-extra"));
   assert.ok(andromedaIds.has("andromeda-product-name"));
+  assert.match(andromedaFindings.find((finding) => finding.id === "andromeda-submodule-plugins-darkfactory-identity")?.message || "", /machine-local path/);
+  assert.doesNotMatch(JSON.stringify(andromedaFindings), /private-user|private-repo|C:\\\\Users/i);
 
   const { gh: darkFactoryGh } = mockGh((_method, requestPath) => {
     if (requestPath.includes("/README.md")) return content("# Wrong\n");
