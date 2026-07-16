@@ -49,6 +49,11 @@ function labeledEvent(label: string, createdAt: string) {
   };
 }
 
+function restoreEnvironment(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
 test("orchestration policy loading fails closed and accepts only the canonical schema", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { readOrchestrationPolicy } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-policy-test");
@@ -153,6 +158,57 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
     calls.find((call) => call.method === "POST" && call.path.endsWith("/actions/workflows/df-work.yml/dispatches"))?.body,
     { ref: "main", inputs: { repo: "marius-patrik/example", issue_number: "42" } }
   );
+});
+
+test("programmatic orchestration ignores ambient workflow dispatch scope", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-hermetic-dispatch-test");
+  const previous = {
+    repo: process.env.DF_TARGET_REPO,
+    issue: process.env.DF_TARGET_ISSUE_NUMBER,
+    source: process.env.DF_SOURCE_EVENT,
+    payload: process.env.GITHUB_EVENT_PAYLOAD
+  };
+  process.env.DF_TARGET_REPO = "marius-patrik/example";
+  process.env.DF_TARGET_ISSUE_NUMBER = "42";
+  process.env.DF_SOURCE_EVENT = "workflow_dispatch";
+  delete process.env.GITHUB_EVENT_PAYLOAD;
+  const inspected: string[] = [];
+
+  try {
+    const result = await orchestrate({
+      gh: {
+        async request(method: string, path: string) {
+          if (method === "GET" && /\/repos\/marius-patrik\/(example|other)\/issues\?state=open&per_page=100&page=1/.test(path)) {
+            inspected.push(path);
+            return [];
+          }
+          throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+        }
+      },
+      controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+      trigger: "schedule",
+      readinessByRepository: healthyReadiness(),
+      registry: { repositories: { "marius-patrik/example": { state: "active" }, "marius-patrik/other": { state: "active" } } },
+      repositories: [
+        { full_name: "marius-patrik/example", archived: false, disabled: false },
+        { full_name: "marius-patrik/other", archived: false, disabled: false }
+      ],
+      writeLedger: false,
+      updateDashboard: false,
+      warn: () => {},
+      log: () => {}
+    });
+
+    assert.equal(inspected.some((path) => path.includes("/marius-patrik/example/")), true);
+    assert.equal(inspected.some((path) => path.includes("/marius-patrik/other/")), true);
+    assert.deepEqual(result.dispatched, []);
+  } finally {
+    restoreEnvironment("DF_TARGET_REPO", previous.repo);
+    restoreEnvironment("DF_TARGET_ISSUE_NUMBER", previous.issue);
+    restoreEnvironment("DF_SOURCE_EVENT", previous.source);
+    restoreEnvironment("GITHUB_EVENT_PAYLOAD", previous.payload);
+  }
 });
 
 test("orchestrator does not dispatch issues that already have an open worker PR", async () => {

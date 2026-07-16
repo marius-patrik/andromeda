@@ -91,13 +91,7 @@ export async function orchestrate(options) {
   assertAllowedRepo(controlRepo);
   const isEventTrigger = trigger === "issue_comment" || trigger === "issues";
   const eventRequest = parseEventRequest(process.env.GITHUB_EVENT_PAYLOAD || "", trigger, warn)
-    ?? normalizeDispatchRequest(dispatchRequestInput, warn)
-    ?? parseWorkflowDispatchRequest(
-      process.env.DF_TARGET_REPO,
-      process.env.DF_TARGET_ISSUE_NUMBER,
-      process.env.DF_SOURCE_EVENT,
-      warn
-    );
+    ?? normalizeDispatchRequest(dispatchRequestInput, warn);
   const policy = normalizeOrchestrationPolicy(policyInput ?? await readOrchestrationPolicy(root));
   const triggerPolicy = validateTriggerPolicy(triggerPolicyInput ?? await readTriggerPolicy(root));
   let targets = [];
