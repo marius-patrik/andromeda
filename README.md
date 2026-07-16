@@ -245,6 +245,15 @@ authority findings remain blocked. An observable unregistered repository is
 added only through one reviewed Andromeda-data source-policy PR; parked or
 archived entries are immutable brakes, and an absent App installation becomes
 an explicit owner finding with the exact `df install-url` action.
+Because private main-only Andromeda-data has the documented plan-upgrade 403
+instead of enforceable branch protection and repository auto-merge, setup
+completes its exact App-owned registration PR through an application-enforced
+gate: the current provenance-bound head must have no red or pending latest
+checks, and both `Validate` and `DarkFactory Autoreview` must be green from the
+GitHub Actions App (`15368`). The retained `Codex Review` name is accepted only
+when the replacement Autoreview context is absent. Setup then performs an
+SHA-bound squash merge and re-proves the App merge actor, ancestry, and exact
+active registry entry before dispatching managed sync; it has no bypass path.
 
 For a fresh repository, setup first creates only an empty `main` foundation.
 The managed baseline then lands through a same-repository setup PR protected by

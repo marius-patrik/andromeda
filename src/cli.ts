@@ -508,7 +508,7 @@ async function executeSetupPlan(
       const registryOctokit = await getScopedInstallationOctokit(
         app,
         CONTROL_OWNER,
-        { contents: "write", pull_requests: "write" },
+        { checks: "read", contents: "write", pull_requests: "write" },
         ["Andromeda-data"]
       );
       const registration = await convergeManagedRegistration(createOperatorRequester(registryOctokit), report.target_repository);

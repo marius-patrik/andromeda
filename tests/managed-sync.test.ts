@@ -161,12 +161,16 @@ function managedRecoveryRequester(branchTreeSha: string): {
   return { requester, calls };
 }
 
-function managedBaseAdvanceRequester(options: { updateConflict?: boolean } = {}): {
+function managedBaseAdvanceRequester(options: {
+  updateConflict?: boolean;
+  startAfterRefUpdate?: boolean;
+  driftBodyAfterRefUpdate?: boolean;
+} = {}): {
   requester: GitHubRequester;
   calls: Array<{ route: string; parameters: Record<string, unknown> }>;
 } {
   const calls: Array<{ route: string; parameters: Record<string, unknown> }> = [];
-  let setupHead = ADVANCE_OLD_HEAD_SHA;
+  let setupHead = options.startAfterRefUpdate ? ADVANCE_RECOVERY_HEAD_SHA : ADVANCE_OLD_HEAD_SHA;
   let pullBody = managedSetupPullRequestBody(ADVANCE_CHANGED_PATHS, {
     schemaVersion: 1,
     baseBranch: "main",
@@ -281,6 +285,7 @@ function managedBaseAdvanceRequester(options: { updateConflict?: boolean } = {})
         assert.equal(parameters.force, false);
         if (options.updateConflict) throw Object.assign(new Error("conflict"), { status: 409 });
         setupHead = ADVANCE_RECOVERY_HEAD_SHA;
+        if (options.driftBodyAfterRefUpdate) pullBody = `${pullBody}\nconcurrent unadmitted edit`;
         return { data: {} };
       }
       if (route === "PATCH /repos/{owner}/{repo}/pulls/{pull_number}") {
@@ -549,6 +554,41 @@ test("managed setup safely recovers an exact App-owned pull request after main a
   assert.match(String(pullUpdate.parameters.body), new RegExp(`head=${ADVANCE_RECOVERY_HEAD_SHA}`));
   assert.ok(calls.filter((call) => call.route === "GET /repos/{owner}/{repo}/pulls/{pull_number}").length >= 2);
   assert.ok(calls.filter((call) => call.route === "GET /repos/{owner}/{repo}/git/ref/{ref}").length >= 6);
+});
+
+test("managed setup resumes an exact crash after the recovery ref update", async () => {
+  const { requester, calls } = managedBaseAdvanceRequester({ startAfterRefUpdate: true });
+
+  const result = await ensureManagedRepositorySetup(
+    requester,
+    { owner: "marius-patrik", repo: "example" },
+    RECOVERY_FILES
+  );
+
+  assert.equal(result.status, "updated");
+  assert.equal(calls.some((call) => call.route === "POST /repos/{owner}/{repo}/git/commits"), false);
+  assert.equal(calls.some((call) => call.route === "PATCH /repos/{owner}/{repo}/git/refs/{ref}"), false);
+  const pullUpdate = calls.find((call) => call.route === "PATCH /repos/{owner}/{repo}/pulls/{pull_number}");
+  assert.ok(pullUpdate);
+  assert.match(String(pullUpdate.parameters.body), new RegExp(`base=${ADVANCE_CURRENT_BASE_SHA}`));
+  assert.match(String(pullUpdate.parameters.body), new RegExp(`head=${ADVANCE_RECOVERY_HEAD_SHA}`));
+});
+
+test("managed setup blocks a concurrent pull body edit after the recovery ref update", async () => {
+  const { requester, calls } = managedBaseAdvanceRequester({ driftBodyAfterRefUpdate: true });
+
+  await assert.rejects(
+    ensureManagedRepositorySetup(
+      requester,
+      { owner: "marius-patrik", repo: "example" },
+      RECOVERY_FILES
+    ),
+    (error: unknown) => error instanceof ManagedSetupTrustViolation
+      && /body changed after admission; preserved the concurrent edit/.test(error.message)
+  );
+
+  assert.equal(calls.some((call) => call.route === "PATCH /repos/{owner}/{repo}/git/refs/{ref}"), true);
+  assert.equal(calls.some((call) => call.route === "PATCH /repos/{owner}/{repo}/pulls/{pull_number}"), false);
 });
 
 test("managed setup fails closed when its non-force base-advance update conflicts", async () => {
