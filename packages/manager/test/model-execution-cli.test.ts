@@ -8,6 +8,8 @@ import { canonicalChildEnvironment } from "../src/runtime-paths";
 import { ensureSharedState, sharedStateAt, writeSessionConfig, type SharedState } from "../src/state";
 
 const cliPath = path.resolve(import.meta.dir, "..", "src", "cli.ts");
+const repositoryRoot = path.resolve(import.meta.dir, "..", "..", "..");
+const installerPath = path.join(repositoryRoot, "install", "install.sh");
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -99,6 +101,32 @@ async function readBlockedReceipt(receiptPath: string): Promise<{
   blockReason: string;
 }> {
   return JSON.parse(await readFile(receiptPath, "utf8"));
+}
+
+async function installWindowsLauncher(state: SharedState): Promise<string> {
+  const gitBash = path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe");
+  const child = Bun.spawn(
+    [gitBash, "-lc", 'source "$(cygpath -u "$ANDROMEDA_INSTALL_SCRIPT")"; install_launcher'],
+    {
+      cwd: repositoryRoot,
+      env: {
+        ...canonicalChildEnvironment(process.env),
+        ANDROMEDA_INSTALL_SCRIPT: installerPath,
+        AGENTS_HOME: state.stateDir,
+        AGENTS_USER_HOME: state.userHome,
+        AGENTS_ROOT: state.root,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (code !== 0) throw new Error(`launcher installation failed (${code}): ${stdout}${stderr}`);
+  return path.join(state.stateDir, "bin", "agents.ps1");
 }
 
 function flags(root: string): Record<string, string | boolean> {
@@ -399,32 +427,22 @@ describe("model execution CLI prompt boundary", () => {
 
   test("installed Windows PowerShell launcher preserves the full contract through @args", async () => {
     if (process.platform !== "win32") return;
-    const { root, state, receiptDir } = await executionFixture();
-    const launcherDir = path.join(state.stateDir, "bin");
-    const launcherPath = path.join(launcherDir, "agents.ps1");
+    const container = await rootFixture();
+    const root = path.join(container, "caller worktree with spaces");
+    const userHome = path.join(container, "user home");
+    const state = sharedStateAt(repositoryRoot, path.join(userHome, ".agents"), userHome);
+    const receiptDir = path.join(root, "receipt folder");
+    await mkdir(receiptDir, { recursive: true });
+    await ensureSharedState(state);
+    await writeSessionConfig(state, {
+      schemaVersion: 1,
+      providerModels: { codex: ["gpt-5.6-sol"] },
+    });
+    const launcherPath = await installWindowsLauncher(state);
     const promptPath = path.join(root, "prompt source with spaces.txt");
     const receiptPath = path.join(receiptDir, "launcher receipt with spaces.json");
     const prompt = "WINDOWS_LAUNCHER_PROMPT_SENTINEL";
-    const psLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
-    await mkdir(launcherDir, { recursive: true });
     await writeFile(promptPath, prompt);
-    await writeFile(
-      launcherPath,
-      [
-        "$ErrorActionPreference = 'Stop'",
-        `$env:HOME = ${psLiteral(state.userHome)}`,
-        `$env:AGENTS_HOME = ${psLiteral(state.stateDir)}`,
-        `$env:AGENTS_USER_HOME = ${psLiteral(state.userHome)}`,
-        `$env:AGENTS_ROOT = ${psLiteral(state.root)}`,
-        `$env:AGENTS_WORKSPACE = ${psLiteral(state.workspaceDir)}`,
-        `$env:AGENTS_SYSTEM_DATA_ROOT = ${psLiteral(state.stateDir)}`,
-        `$env:AGENTS_BUN = ${psLiteral(process.execPath)}`,
-        `$env:AGENTS_ENTRYPOINT = ${psLiteral(cliPath)}`,
-        "& $env:AGENTS_BUN $env:AGENTS_ENTRYPOINT @args",
-        "exit $LASTEXITCODE",
-        "",
-      ].join("\r\n"),
-    );
     const powershell = path.join(
       process.env.SystemRoot || "C:\\Windows",
       "System32",
