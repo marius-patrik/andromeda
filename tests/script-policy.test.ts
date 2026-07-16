@@ -2406,11 +2406,18 @@ test("df-orchestrate source requires the app token for cross-repo writes", async
 
 test("df-orchestrate uses machine readiness evaluation and dispatches via workflow_dispatch", async () => {
   const source = await readFile(new URL("../.github/scripts/df-orchestrate.mjs", import.meta.url), "utf8");
+  const mainStart = source.indexOf("async function main()");
+  const orchestrateStart = source.indexOf("export async function orchestrate");
+  const mainSource = source.slice(mainStart, orchestrateStart);
+  const requestSource = source.slice(orchestrateStart, source.indexOf("const policy =", orchestrateStart));
 
   assert.match(source, /const CONTROL_ROOT = path\.resolve/);
   assert.match(source, /listActiveManagedRepos\(gh, controlRepo, options\)/);
   assert.match(source, /parseEventRequest\(process\.env\.GITHUB_EVENT_PAYLOAD/);
-  assert.match(source, /parseWorkflowDispatchRequest\(\s*process\.env\.DF_TARGET_REPO/);
+  assert.match(mainSource, /const rawRepo = process\.env\.DF_TARGET_REPO/);
+  assert.match(mainSource, /parseWorkflowDispatchRequest\(\s*rawRepo,\s*rawIssue,\s*rawSource/);
+  assert.match(mainSource, /orchestrate\(\{ gh, controlRepo, trigger, root: CONTROL_ROOT, dispatchRequest \}\)/);
+  assert.doesNotMatch(requestSource, /process\.env\.DF_TARGET_|parseWorkflowDispatchRequest/);
   assert.match(source, /evaluateIssueReadinessLabels/);
   assert.match(source, /DarkFactory received `\/df run` and performed the machine readiness evaluation\./);
   assert.match(source, /dispatch still recomputes the predicate/);
