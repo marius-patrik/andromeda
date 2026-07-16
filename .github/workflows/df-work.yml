@@ -51,9 +51,10 @@ jobs:
     steps:
       - name: Validate trusted control ref
         run: |
-          # Privileged workers receive Codex auth, so they only run in the allowed
-          # owner. The job-level guard restricts execution to the control
-          # repository; workflow_dispatch may still target another repo by input.
+          # Privileged workers can access canonical Agent OS routing and
+          # authentication, so they only run in the allowed owner. The job-level
+          # guard restricts execution to the control repository;
+          # workflow_dispatch may still target another repo by input.
           if ($env:GITHUB_REPOSITORY_OWNER -ne "marius-patrik") {
             Write-Output "::error::DarkFactory worker can only run in the marius-patrik owner."
             exit 1

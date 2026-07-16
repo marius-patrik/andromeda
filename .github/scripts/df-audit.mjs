@@ -1774,7 +1774,9 @@ export async function auditRetiredAuthorityNames(github, repository, ref) {
   ];
   const findings = [];
   for (const rule of retired) {
-    const paths = documents.filter((document) => rule.pattern.test(document.content)).map((document) => document.filePath);
+    const paths = documents
+      .filter((document) => rule.pattern.test(activeAuthorityText(document.content)))
+      .map((document) => document.filePath);
     if (!paths.length) continue;
     findings.push(doctorFinding(rule.id, "authority naming", `${rule.message} Found in ${formatList(paths)}.`, {
       severity: "error",
@@ -1782,6 +1784,27 @@ export async function auditRetiredAuthorityNames(github, repository, ref) {
     }));
   }
   return findings;
+}
+
+export function activeAuthorityText(content) {
+  if (typeof content !== "string" || !content) return "";
+  const active = [];
+  let historicalLevel = null;
+  for (const line of content.replace(/\r\n/g, "\n").split("\n")) {
+    const heading = line.match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (heading) {
+      const level = heading[1].length;
+      if (historicalLevel !== null && level <= historicalLevel) historicalLevel = null;
+      if (
+        historicalLevel === null
+        && /^(?:historical|history|archived?|migration evidence)(?:\b|\s*[:\-])/i.test(heading[2])
+      ) {
+        historicalLevel = level;
+      }
+    }
+    if (historicalLevel === null) active.push(line);
+  }
+  return active.join("\n");
 }
 
 export async function auditSubmoduleState(github, repository, branch) {

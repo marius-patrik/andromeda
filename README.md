@@ -88,8 +88,10 @@ Store local secrets through Agent OS. Secret values are not printed by the manag
 agents secrets set GITHUB_APP_ID
 agents secrets set GITHUB_PRIVATE_KEY
 agents secrets set GITHUB_WEBHOOK_SECRET
-agents secrets set CODEX_AUTH_JSON --from-file "$env:USERPROFILE\.codex\auth.json"
 ```
+
+Provider authentication is owned and verified by canonical Agent OS state; it
+is never copied into DarkFactory secrets or repository configuration.
 
 Run DarkFactory through Agent OS so it receives the canonical state paths:
 
@@ -411,9 +413,11 @@ The workflow requires these repository secrets in `marius-patrik/DarkFactory`:
 - `DARK_FACTORY_APP_ID`
 - `DARK_FACTORY_PRIVATE_KEY`
 
-Managed repositories do not receive provider credentials. Autoreview resolves
-Kimi and Codex Sol through the canonical Agent OS state on `df-local`; only the
-DarkFactory App installation credentials are repository-managed.
+Managed repositories do not receive provider credentials. Autoreview submits
+only logical tier and effort requests through canonical Agent OS state on
+`df-local`; Agent OS exclusively resolves provider, model, authentication, and
+any policy-authorized pre-turn fallback. Only the DarkFactory App installation
+credentials are repository-managed.
 
 The local equivalent is:
 

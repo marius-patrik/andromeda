@@ -1,6 +1,7 @@
 // @ts-nocheck
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -151,6 +152,55 @@ test("retired authority audit covers every project authority document", async ()
       [...inspected].some((requestPath) => requestPath.includes(`/contents/.agents/.project/${filePath}?ref=main`)),
       `expected retired authority audit to inspect ${filePath}`
     );
+  }
+});
+
+test("retired authority audit excludes marked history and resumes at the next active section", async () => {
+  const historical = [
+    "# Decisions",
+    "## Historical migration evidence",
+    "The retired repository was marius-patrik/agents-data.",
+    "### Archived details",
+    "The retired owner was marius-patrik/agents-manager.",
+    "## Current authority",
+    "Canonical state is marius-patrik/Andromeda-data at $AGENTS_HOME."
+  ].join("\n");
+  const { gh: historicalGh } = mockGh((_method, requestPath) => {
+    if (decodeURIComponent(requestPath).includes("/contents/.agents/.project/DECISIONS.md?ref=main")) return content(historical);
+    throw notFound();
+  });
+  assert.deepEqual(await doctor.auditRetiredAuthorityNames(historicalGh, repo, "main"), []);
+
+  const activeDrift = `${historical}\n## Current regression\nOwner: marius-patrik/agents-manager\n`;
+  const { gh: activeGh } = mockGh((_method, requestPath) => {
+    if (decodeURIComponent(requestPath).includes("/contents/.agents/.project/DECISIONS.md?ref=main")) return content(activeDrift);
+    throw notFound();
+  });
+  const findings = await doctor.auditRetiredAuthorityNames(activeGh, repo, "main");
+  assert.deepEqual(findings.map((finding: { id: string }) => finding.id), ["retired-agents-manager-owner-name"]);
+});
+
+test("active DarkFactory authority stays provider and provider-auth agnostic", () => {
+  const authorityPaths = [
+    "README.md",
+    "PRD.md",
+    "AGENTS.md",
+    ...readdirSync(".agents/.project")
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => `.agents/.project/${name}`),
+    ...readdirSync(".github/workflows")
+      .filter((name) => /\.ya?ml$/i.test(name))
+      .map((name) => `.github/workflows/${name}`)
+  ];
+  const forbidden = [
+    /\b(?:CODEX|KIMI|CLAUDE|AGY)_AUTH_JSON\b/i,
+    /\b(?:receive|receives|receiving)\s+(?:Codex|Kimi|Claude|Agy)\s+auth\b/i,
+    /\bAutoreview\b[\s\S]{0,160}\b(?:Kimi|Codex Sol|Claude|Agy)\b/i,
+    /\bmedium\s*\/\s*Kimi\b|\bhigh\s*\/\s*Sol\b/i
+  ];
+  for (const filePath of authorityPaths) {
+    const active = doctor.activeAuthorityText(readFileSync(path.resolve(filePath), "utf8"));
+    for (const pattern of forbidden) assert.doesNotMatch(active, pattern, filePath);
   }
 });
 
