@@ -19,6 +19,10 @@ const NEW = "2".repeat(40);
 const PARENT_SHA = "3".repeat(40);
 const POINTER_HEAD = "4".repeat(40);
 const TREE = "5".repeat(40);
+const ADVANCED_PARENT = "6".repeat(40);
+const RECOVERY_HEAD = "7".repeat(40);
+const ADVANCED_TREE = "8".repeat(40);
+const RECOVERY_TREE = "9".repeat(40);
 const policy = submodules.loadSubmodulePolicy();
 
 function protectedBranch() {
@@ -162,6 +166,272 @@ function observationRuntime(options: any = {}) {
     now: Date.parse("2026-07-15T09:00:00.000Z")
   });
   return { gh, calls };
+}
+
+function fabricaObservationRuntime(defaultBranch = "dev") {
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const receipt = releaseReceipt({
+    target_repo: "marius-patrik/Fabrica",
+    repository: "marius-patrik/Fabrica",
+    main_sha: OLD,
+    dev_sha: NEW,
+    release: {
+      ...releaseReceipt().release,
+      pull_request: "https://github.com/marius-patrik/Fabrica/pull/100"
+    }
+  });
+  const gh = {
+    async request(method: string, requestPath: string, body?: any) {
+      calls.push({ method, path: requestPath, body });
+      if (requestPath === "/repos/marius-patrik/Fabrica") {
+        return { default_branch: defaultBranch, archived: false, disabled: false };
+      }
+      if (requestPath === "/repos/marius-patrik/Fabrica/commits/dev") return { sha: NEW };
+      if (requestPath === "/repos/marius-patrik/Fabrica/branches/dev/protection") return protectedBranch();
+      if (requestPath.includes("/repos/marius-patrik/Fabrica/contents/.darkfactory/release-policy.json?ref=dev")) {
+        return content(JSON.stringify(releasePolicy()));
+      }
+      if (requestPath === `/repos/marius-patrik/Fabrica/commits/${NEW}/check-runs?per_page=100`) {
+        return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", id: 10, html_url: "https://github.com/checks/10", app: { id: 15368 } }] };
+      }
+      if (requestPath === `/repos/marius-patrik/Fabrica/commits/${NEW}/status`) return { statuses: [] };
+      if (requestPath === "/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/Fabrica") {
+        return [{ type: "file", name: "2026-07-15T08-00-00-000Z-df-release.json" }];
+      }
+      if (requestPath.includes("/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/Fabrica/2026")) {
+        return content(JSON.stringify(receipt));
+      }
+      if (requestPath === "/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/Andromeda") throw apiError(404);
+      if (requestPath === "/repos/marius-patrik/Andromeda") {
+        return { default_branch: "main", archived: false, disabled: false, allow_auto_merge: true, delete_branch_on_merge: true };
+      }
+      if (requestPath === "/repos/marius-patrik/Andromeda/git/ref/heads/main"
+          || requestPath === "/repos/marius-patrik/Andromeda/git/ref/heads/dev") return { object: { sha: PARENT_SHA } };
+      if (requestPath === `/repos/marius-patrik/Andromeda/compare/${PARENT_SHA}...${PARENT_SHA}`) {
+        return { status: "identical", ahead_by: 0, behind_by: 0 };
+      }
+      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.gitmodules")) return content(andromedaModules());
+      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/apps/Fabrica?ref=main")
+          || requestPath.includes("/repos/marius-patrik/Andromeda/contents/apps/Fabrica?ref=dev")) {
+        return { type: "submodule", sha: OLD };
+      }
+      if (requestPath === `/repos/marius-patrik/Fabrica/compare/${OLD}...${NEW}`) {
+        return { status: "ahead", ahead_by: 1, behind_by: 0 };
+      }
+      if (requestPath === "/repos/marius-patrik/Andromeda/branches/dev/protection") return protectedBranch();
+      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.darkfactory/release-policy.json")) {
+        return content(JSON.stringify(releasePolicy()));
+      }
+      if (requestPath === "/repos/marius-patrik/Andromeda/pulls?state=open&base=dev&per_page=100&page=1") return [];
+      throw new Error(`unexpected ${method} ${requestPath}`);
+    }
+  };
+  submodules.configureSubmoduleRuntime({
+    gh,
+    ledgerGh: gh,
+    controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    parents: [PARENT],
+    registry: { schemaVersion: 1, repositories: { "marius-patrik/andromeda": { state: "active" } } },
+    policy,
+    now: Date.parse("2026-07-15T09:00:00.000Z")
+  });
+  return { calls };
+}
+
+function pointerObservationAt(devSha: string) {
+  const candidate = {
+    repository: "marius-patrik/Andromeda",
+    mainSha: PARENT_SHA,
+    devSha,
+    gitlink: {
+      name: "DarkFactory",
+      path: "plugins/DarkFactory",
+      url: "https://github.com/marius-patrik/DarkFactory.git",
+      branch: "main"
+    },
+    mainPointer: OLD,
+    devPointer: OLD,
+    releasedSha: NEW,
+    relation: { status: "ahead", ahead_by: 1, behind_by: 0 },
+    pointerState: "behind",
+    evidence: {
+      parent_pointer: `https://github.com/marius-patrik/Andromeda/tree/${devSha}/plugins/DarkFactory`,
+      child_release: "https://github.com/marius-patrik/DarkFactory/pull/100",
+      child_commit: `https://github.com/marius-patrik/DarkFactory/commit/${NEW}`,
+      ancestry: `https://github.com/marius-patrik/DarkFactory/compare/${OLD}...${NEW}`
+    },
+    blockers: []
+  };
+  return {
+    child: "marius-patrik/DarkFactory",
+    childRelease: {
+      repository: "marius-patrik/DarkFactory",
+      branch: "main",
+      sha: NEW,
+      receiptUrl: "https://github.com/marius-patrik/DarkFactory/pull/100",
+      blockers: []
+    },
+    candidate,
+    blockers: [],
+    pointerState: "behind"
+  };
+}
+
+function pointerBody(observation: any, plan: any, headSha: string) {
+  const candidate = observation.candidate;
+  return [
+    `<!-- darkfactory:submodule-update plan=${plan.planId} parent=${candidate.devSha} child=${observation.child} old=${candidate.devPointer} new=${candidate.releasedSha} path=${candidate.gitlink.path} head=${headSha} -->`,
+    "## DarkFactory released-pointer update",
+    "",
+    `- Parent: \`${candidate.repository}@dev\` from \`${candidate.devSha}\``,
+    `- Gitlink: \`${candidate.gitlink.path}\` (\`${candidate.gitlink.name}\`)`,
+    `- Child: \`${observation.child}@${candidate.releasedSha}\``,
+    `- Previous pointer: \`${candidate.devPointer}\``,
+    `- Verified release: ${observation.childRelease.receiptUrl}`,
+    `- Ancestry: ${candidate.evidence.ancestry}`,
+    "",
+    "A separate read-only job recursively checks out this exact head without executing child code. Validate and a clean high-confirmed DarkFactory Autoreview must also be green before normal protected-PR automerge. The parent then releases through `df release`; its verified release receipt triggers the same downstream lane."
+  ].join("\n");
+}
+
+function baseAdvanceRecoveryRuntime(options: any = {}) {
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const oldObservation = pointerObservationAt(PARENT_SHA);
+  const oldPlan = submodules.buildSubmodulePlan(oldObservation, policy);
+  const currentObservation = pointerObservationAt(ADVANCED_PARENT);
+  const currentPlan = submodules.buildSubmodulePlan(currentObservation, policy);
+  const branch = currentPlan.branch;
+  const oldPointerTree = "a".repeat(40);
+  let branchHead = options.interrupted ? RECOVERY_HEAD : POINTER_HEAD;
+  let pullHead = branchHead;
+  let pullBody = pointerBody(oldObservation, oldPlan, POINTER_HEAD);
+  let bodyDrifted = false;
+  const receipt = releaseReceipt();
+  const pull = () => ({
+    number: 210,
+    node_id: "PR_210",
+    html_url: "https://github.com/marius-patrik/Andromeda/pull/210",
+    title: `Update DarkFactory to ${NEW.slice(0, 12)}`,
+    state: "open",
+    draft: false,
+    body: pullBody,
+    user: { type: "Bot", login: "darkfactory-agent[bot]" },
+    base: { ref: "dev" },
+    head: { ref: branch, sha: pullHead, repo: { full_name: "marius-patrik/Andromeda" } }
+  });
+  const gh = {
+    async request(method: string, requestPath: string, body?: any) {
+      calls.push({ method, path: requestPath, body });
+      if (requestPath === "/repos/marius-patrik/DarkFactory") return { default_branch: "main", archived: false, disabled: false };
+      if (requestPath === "/repos/marius-patrik/DarkFactory/commits/main") return { sha: NEW };
+      if (requestPath === "/repos/marius-patrik/DarkFactory/branches/main/protection") return protectedBranch();
+      if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.darkfactory/release-policy.json")) return content(JSON.stringify(releasePolicy()));
+      if (requestPath === `/repos/marius-patrik/DarkFactory/commits/${NEW}/check-runs?per_page=100`) {
+        return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", id: 10, html_url: "https://github.com/checks/10", app: { id: 15368 } }] };
+      }
+      if (requestPath === `/repos/marius-patrik/DarkFactory/commits/${NEW}/status`) return { statuses: [] };
+      if (requestPath === "/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/DarkFactory") {
+        return [{ type: "file", name: "2026-07-15T08-00-00-000Z-df-release.json" }];
+      }
+      if (requestPath.includes("/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/DarkFactory/2026")) return content(JSON.stringify(receipt));
+      if (requestPath === "/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/Andromeda") throw apiError(404);
+      if (requestPath === "/repos/marius-patrik/Andromeda") {
+        return { default_branch: "main", archived: false, disabled: false, allow_auto_merge: true, delete_branch_on_merge: true };
+      }
+      if (method === "GET" && requestPath === "/repos/marius-patrik/Andromeda/git/ref/heads/main") return { object: { sha: PARENT_SHA } };
+      if (method === "GET" && requestPath === "/repos/marius-patrik/Andromeda/git/ref/heads/dev") return { object: { sha: ADVANCED_PARENT } };
+      if (method === "GET" && requestPath.includes("/repos/marius-patrik/Andromeda/git/ref/heads/submodule-update%2F")) {
+        return { object: { sha: branchHead } };
+      }
+      if (requestPath === `/repos/marius-patrik/Andromeda/compare/${PARENT_SHA}...${ADVANCED_PARENT}`) {
+        return { status: "ahead", ahead_by: 1, behind_by: 0, files: [{ filename: "README.md" }] };
+      }
+      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.gitmodules")) return content(andromedaModules());
+      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/plugins/DarkFactory?ref=main")
+          || requestPath.includes("/repos/marius-patrik/Andromeda/contents/plugins/DarkFactory?ref=dev")) {
+        return { type: "submodule", sha: OLD };
+      }
+      if (requestPath.includes(`/repos/marius-patrik/Andromeda/contents/plugins/DarkFactory?ref=${POINTER_HEAD}`)
+          || requestPath.includes(`/repos/marius-patrik/Andromeda/contents/plugins/DarkFactory?ref=${RECOVERY_HEAD}`)) {
+        return { type: "submodule", sha: NEW };
+      }
+      if (requestPath === `/repos/marius-patrik/DarkFactory/compare/${OLD}...${NEW}`) {
+        return { status: "ahead", ahead_by: 1, behind_by: 0 };
+      }
+      if (requestPath === "/repos/marius-patrik/Andromeda/branches/dev/protection") return protectedBranch();
+      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.darkfactory/release-policy.json")) return content(JSON.stringify(releasePolicy()));
+      if (requestPath === "/repos/marius-patrik/Andromeda/pulls?state=open&base=dev&per_page=100&page=1") return [pull()];
+      if (requestPath === "/repos/marius-patrik/Andromeda/pulls/210/files?per_page=100&page=1") return [{ filename: "plugins/DarkFactory" }];
+      if (method === "GET" && requestPath === "/repos/marius-patrik/Andromeda/pulls/210") {
+        if (options.bodyDrift && branchHead === RECOVERY_HEAD && !bodyDrifted) {
+          pullBody += "\n\nOwner note that must be preserved.";
+          bodyDrifted = true;
+        }
+        return pull();
+      }
+      if (requestPath === `/repos/marius-patrik/Andromeda/commits/${POINTER_HEAD}`) {
+        return { sha: POINTER_HEAD, author: { type: "Bot", login: "darkfactory-agent[bot]" } };
+      }
+      if (requestPath === `/repos/marius-patrik/Andromeda/git/commits/${POINTER_HEAD}`) {
+        return {
+          sha: POINTER_HEAD,
+          message: options.tamperedOldCommit ? "unknown work" : `Update plugins/DarkFactory to ${NEW}\n\nDarkFactory-Submodule-Plan: ${oldPlan.planId}`,
+          tree: { sha: oldPointerTree },
+          parents: [{ sha: PARENT_SHA }]
+        };
+      }
+      if (requestPath === `/repos/marius-patrik/Andromeda/compare/${PARENT_SHA}...${POINTER_HEAD}`) {
+        return { status: "ahead", ahead_by: 1, behind_by: 0, files: [{ filename: "plugins/DarkFactory" }] };
+      }
+      if (requestPath === `/repos/marius-patrik/Andromeda/commits/${RECOVERY_HEAD}`) {
+        return { sha: RECOVERY_HEAD, author: { type: "Bot", login: "darkfactory-agent[bot]" } };
+      }
+      if (requestPath === `/repos/marius-patrik/Andromeda/git/commits/${RECOVERY_HEAD}`) {
+        return {
+          sha: RECOVERY_HEAD,
+          message: `Update plugins/DarkFactory to ${NEW}\n\nDarkFactory-Submodule-Plan: ${currentPlan.planId}`,
+          tree: { sha: RECOVERY_TREE },
+          parents: [{ sha: POINTER_HEAD }, { sha: ADVANCED_PARENT }]
+        };
+      }
+      if (requestPath === `/repos/marius-patrik/Andromeda/compare/${ADVANCED_PARENT}...${RECOVERY_HEAD}`) {
+        return { status: "ahead", ahead_by: 1, behind_by: 0, files: [{ filename: "plugins/DarkFactory" }] };
+      }
+      if (requestPath === `/repos/marius-patrik/Andromeda/git/commits/${ADVANCED_PARENT}`) return { tree: { sha: ADVANCED_TREE } };
+      if (method === "POST" && requestPath === "/repos/marius-patrik/Andromeda/git/trees") {
+        assert.equal(body.base_tree, ADVANCED_TREE);
+        assert.deepEqual(body.tree, [{ path: "plugins/DarkFactory", mode: "160000", type: "commit", sha: NEW }]);
+        return { sha: RECOVERY_TREE };
+      }
+      if (method === "POST" && requestPath === "/repos/marius-patrik/Andromeda/git/commits") {
+        assert.deepEqual(body.parents, [POINTER_HEAD, ADVANCED_PARENT]);
+        assert.equal(body.message, `Update plugins/DarkFactory to ${NEW}\n\nDarkFactory-Submodule-Plan: ${currentPlan.planId}`);
+        return { sha: RECOVERY_HEAD };
+      }
+      if (method === "PATCH" && requestPath.includes("/repos/marius-patrik/Andromeda/git/refs/heads/submodule-update%2F")) {
+        assert.equal(body.force, false);
+        if (options.refConflict) throw apiError(422);
+        branchHead = body.sha;
+        pullHead = body.sha;
+        return { object: { sha: body.sha } };
+      }
+      if (method === "PATCH" && requestPath === "/repos/marius-patrik/Andromeda/pulls/210") {
+        pullBody = body.body;
+        return pull();
+      }
+      throw new Error(`unexpected ${method} ${requestPath}`);
+    }
+  };
+  submodules.configureSubmoduleRuntime({
+    gh,
+    ledgerGh: gh,
+    controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    parents: [PARENT],
+    registry: { schemaVersion: 1, repositories: { "marius-patrik/andromeda": { state: "active" } } },
+    policy,
+    now: Date.parse("2026-07-15T09:00:00.000Z")
+  });
+  return { calls, currentPlan, pull };
 }
 
 test("submodule policy fixes the exact Andromeda path and name contract", () => {
@@ -437,6 +707,35 @@ test("release receipt admits distinct commits only when their exact trees conver
   assert.deepEqual(converged.blockers, []);
 });
 
+test("canonical Fabrica observes its released default dev commit without weakening main-tracked children", async () => {
+  const selected = submodules.validateReleaseReceipt(releaseReceipt({
+    target_repo: "marius-patrik/Fabrica",
+    repository: "marius-patrik/Fabrica",
+    main_sha: OLD,
+    dev_sha: NEW,
+    release: {
+      ...releaseReceipt().release,
+      pull_request: "https://github.com/marius-patrik/Fabrica/pull/100"
+    }
+  }), { owner: "marius-patrik", repo: "Fabrica" }, policy, Date.parse("2026-07-15T09:00:00Z"));
+  assert.equal(selected.branch, "dev");
+  assert.equal(selected.sha, NEW);
+
+  const { calls } = fabricaObservationRuntime();
+  const observation = await submodules.observeChildRelease({ owner: "marius-patrik", repo: "Fabrica" }, policy);
+  assert.equal(observation.branch, "dev");
+  assert.equal(observation.sha, NEW);
+  assert.deepEqual(observation.blockers, []);
+  assert.equal(calls.some((call) => call.path === "/repos/marius-patrik/Fabrica/commits/main"), false);
+  assert.equal(submodules.releasedBranchForChild(CHILD, policy), "main");
+});
+
+test("canonical Fabrica blocks when repository default disagrees with its exact dev policy", async () => {
+  fabricaObservationRuntime("main");
+  const observation = await submodules.observeChildRelease({ owner: "marius-patrik", repo: "Fabrica" }, policy);
+  assert.ok(observation.blockers.includes("child-default-branch-not-dev:main"));
+});
+
 test("release receipt rejects unequal or malformed tree evidence for distinct commits", () => {
   for (const [label, trees] of [
     ["unequal", { main_tree_sha: TREE, dev_tree_sha: "6".repeat(40) }],
@@ -577,6 +876,65 @@ test("duplicate trusted or untrusted pointer PRs block instead of overwriting", 
   observationRuntime({ pulls: [untrusted], pullDetails: { 3: untrusted }, pullFiles: { 3: [{ filename: "plugins/DarkFactory" }] } });
   const spoofed = await submodules.observeSubmoduleUpdate({ child: "marius-patrik/DarkFactory", policy });
   assert.ok(spoofed.blockers.includes("competing-or-untrusted-pointer-pr:3"));
+});
+
+test("exact App-owned pointer PR reconciles a parent dev base advance through one non-force recovery", async () => {
+  const fixture = baseAdvanceRecoveryRuntime();
+  const observation = await submodules.observeSubmoduleUpdate({ child: "marius-patrik/DarkFactory", policy });
+  const plan = submodules.buildSubmodulePlan(observation, policy);
+  assert.deepEqual(observation.blockers, []);
+  assert.equal(plan.planId, fixture.currentPlan.planId);
+  assert.equal(plan.action, "update");
+  assert.equal(observation.candidate.trustedPull, null);
+  assert.equal(observation.candidate.recoverablePull.state, "stale-base");
+
+  const result = await submodules.ensureSubmoduleUpdatePull(observation, plan);
+  assert.equal(result.status, "waiting-for-validation");
+  assert.equal(result.pull_number, 210);
+  assert.equal(result.head_sha, RECOVERY_HEAD);
+  const refUpdates = fixture.calls.filter((call) => call.method === "PATCH" && call.path.includes("/git/refs/"));
+  assert.equal(refUpdates.length, 1);
+  assert.equal(refUpdates[0].body.force, false);
+  assert.equal(fixture.calls.some((call) => call.method === "POST" && call.path.endsWith("/pulls")), false);
+  assert.equal(fixture.calls.filter((call) => call.method === "PATCH" && call.path.endsWith("/pulls/210")).length, 1);
+  assert.match(fixture.pull().body, new RegExp(`parent=${ADVANCED_PARENT}.*head=${RECOVERY_HEAD}`));
+});
+
+test("interrupted pointer recovery resumes only the exact stale provenance update", async () => {
+  const fixture = baseAdvanceRecoveryRuntime({ interrupted: true });
+  const observation = await submodules.observeSubmoduleUpdate({ child: "marius-patrik/DarkFactory", policy });
+  const plan = submodules.buildSubmodulePlan(observation, policy);
+  assert.deepEqual(observation.blockers, []);
+  assert.equal(observation.candidate.recoverablePull.state, "interrupted-provenance");
+
+  const result = await submodules.ensureSubmoduleUpdatePull(observation, plan);
+  assert.equal(result.head_sha, RECOVERY_HEAD);
+  assert.equal(fixture.calls.some((call) => call.method === "POST" && ["/git/trees", "/git/commits"].some((suffix) => call.path.endsWith(suffix))), false);
+  assert.equal(fixture.calls.some((call) => call.method === "PATCH" && call.path.includes("/git/refs/")), false);
+  assert.equal(fixture.calls.filter((call) => call.method === "PATCH" && call.path.endsWith("/pulls/210")).length, 1);
+});
+
+test("unknown stale pointer work and non-force ref conflicts remain preserved and blocked", async () => {
+  const unknown = baseAdvanceRecoveryRuntime({ tamperedOldCommit: true });
+  const deniedObservation = await submodules.observeSubmoduleUpdate({ child: "marius-patrik/DarkFactory", policy });
+  assert.ok(deniedObservation.blockers.includes("competing-or-untrusted-pointer-pr:210"));
+  assert.equal(submodules.buildSubmodulePlan(deniedObservation, policy).action, "block");
+  assert.equal(unknown.calls.some((call) => ["POST", "PATCH"].includes(call.method)), false);
+
+  const conflict = baseAdvanceRecoveryRuntime({ refConflict: true });
+  const admitted = await submodules.observeSubmoduleUpdate({ child: "marius-patrik/DarkFactory", policy });
+  const plan = submodules.buildSubmodulePlan(admitted, policy);
+  await assert.rejects(() => submodules.ensureSubmoduleUpdatePull(admitted, plan), /base-advance update conflicted/);
+  const attempted = conflict.calls.find((call) => call.method === "PATCH" && call.path.includes("/git/refs/"));
+  assert.equal(attempted.body.force, false);
+  assert.equal(conflict.calls.some((call) => call.method === "PATCH" && call.path.endsWith("/pulls/210")), false);
+
+  const drift = baseAdvanceRecoveryRuntime({ bodyDrift: true });
+  const driftObservation = await submodules.observeSubmoduleUpdate({ child: "marius-patrik/DarkFactory", policy });
+  const driftPlan = submodules.buildSubmodulePlan(driftObservation, policy);
+  await assert.rejects(() => submodules.ensureSubmoduleUpdatePull(driftObservation, driftPlan), /body changed before provenance update/);
+  assert.match(drift.pull().body, /Owner note that must be preserved/);
+  assert.equal(drift.calls.some((call) => call.method === "PATCH" && call.path.endsWith("/pulls/210")), false);
 });
 
 test("parked children remain categorically non-mutating even with receipt-shaped evidence", async () => {

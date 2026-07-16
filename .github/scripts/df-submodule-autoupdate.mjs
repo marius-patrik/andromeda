@@ -26,6 +26,8 @@ export const TRUSTED_GATE_APP_ID = 15368;
 const MAX_PAGINATION_PAGES = 100;
 const POLICY_FILE = fileURLToPath(new URL(`../../${SUBMODULE_POLICY_PATH}`, import.meta.url));
 
+class PointerTrustViolation extends Error {}
+
 let gh;
 let ledgerGh;
 let controlRepo;
@@ -154,6 +156,16 @@ export function validateSubmodulePolicy(value) {
 
 export function canonicalAndromedaGitlinks(policy = loadSubmodulePolicy()) {
   return policy.canonicalRoots[0].gitlinks.map((item) => ({ ...item }));
+}
+
+export function releasedBranchForChild(child, policy = loadSubmodulePolicy()) {
+  const repository = repoName(child).toLowerCase();
+  const matches = policy.canonicalRoots
+    .flatMap((root) => root.gitlinks)
+    .filter((gitlink) => gitlink.repository.toLowerCase() === repository);
+  const branches = [...new Set(matches.map((gitlink) => gitlink.branch))];
+  if (branches.length > 1) throw new Error(`canonical child ${repoName(child)} has conflicting tracked branches`);
+  return branches[0] || "main";
 }
 
 export async function runSubmoduleCommand({ mode, child = "", localPath = "", validation = null } = {}) {
@@ -304,35 +316,45 @@ async function discoverCandidateChildren(parents, policy) {
   return released.map((item) => item.candidate);
 }
 
-async function observeChildRelease(child, policy) {
+export async function observeChildRelease(child, policy) {
   const blockers = [];
+  const releaseBranch = releasedBranchForChild(child, policy);
   let metadata;
   try {
     metadata = await gh.request("GET", `/repos/${repoName(child)}`);
   } catch (error) {
-    if ([403, 404].includes(error.status)) return { repository: repoName(child), blockers: ["child-inaccessible"], receipt: null };
+    if ([403, 404].includes(error.status)) {
+      return { repository: repoName(child), branch: releaseBranch, blockers: ["child-inaccessible"], receipt: null };
+    }
     throw error;
   }
   if (metadata.archived === true || metadata.disabled === true) blockers.push("child-read-only");
-  if (metadata.default_branch !== "main") blockers.push(`child-default-branch-not-main:${metadata.default_branch || "missing"}`);
+  if (metadata.default_branch !== releaseBranch) {
+    blockers.push(`child-default-branch-not-${releaseBranch}:${metadata.default_branch || "missing"}`);
+  }
   const dataAdmission = policy.mainOnlyData.find((item) => item.repository.toLowerCase() === repoName(child).toLowerCase());
-  if (dataAdmission) return await observeMainOnlyDataHead(child, metadata, dataAdmission, blockers);
+  if (dataAdmission) return { ...await observeMainOnlyDataHead(child, metadata, dataAdmission, blockers), branch: releaseBranch };
   const receipt = await readOptionalLedger("df-release", repoName(child));
   const receiptResult = validateReleaseReceipt(receipt, child, policy, runtimeOptions.now || Date.now());
   blockers.push(...receiptResult.blockers);
-  if (!receiptResult.sha) return { repository: repoName(child), metadata, receipt, blockers };
+  if (!receiptResult.sha) return { repository: repoName(child), metadata, receipt, branch: releaseBranch, blockers };
 
   let head;
   try {
-    head = await gh.request("GET", `/repos/${repoName(child)}/commits/main`);
+    head = await gh.request("GET", `/repos/${repoName(child)}/commits/${encodeURIComponent(releaseBranch)}`);
   } catch (error) {
-    if ([403, 404, 409].includes(error.status)) return { repository: repoName(child), metadata, receipt, blockers: [...blockers, "child-main-inaccessible"] };
+    if ([403, 404, 409].includes(error.status)) {
+      return {
+        repository: repoName(child), metadata, receipt, branch: releaseBranch,
+        blockers: [...blockers, `child-${releaseBranch}-inaccessible`]
+      };
+    }
     throw error;
   }
-  if (head?.sha !== receiptResult.sha) blockers.push("child-main-moved-after-release-receipt");
-  const protection = await optionalProtection(child, "main");
-  blockers.push(...validateBoundProtection(protection, policy.requiredChecks, "child-main"));
-  const releasePolicyText = await getOptionalFileContent(gh, child, ".darkfactory/release-policy.json", "main");
+  if (head?.sha !== receiptResult.sha) blockers.push(`child-${releaseBranch}-moved-after-release-receipt`);
+  const protection = await optionalProtection(child, releaseBranch);
+  blockers.push(...validateBoundProtection(protection, policy.requiredChecks, `child-${releaseBranch}`));
+  const releasePolicyText = await getOptionalFileContent(gh, child, ".darkfactory/release-policy.json", releaseBranch);
   let releasePolicy = null;
   try { releasePolicy = validateReleasePolicy(JSON.parse(releasePolicyText || "")); } catch { blockers.push("child-release-policy-invalid"); }
   let mainChecks = null;
@@ -351,10 +373,10 @@ async function observeChildRelease(child, policy) {
       await gh.request("GET", `/repos/${repoName(child)}/commits/${head.sha}/status`),
       releasePolicy.mainChecks
     );
-    if (!mainChecks.green) blockers.push("child-main-checks-not-green");
+    if (!mainChecks.green) blockers.push(`child-${releaseBranch}-checks-not-green`);
   }
   return {
-    repository: repoName(child), metadata, receipt, sha: receiptResult.sha,
+    repository: repoName(child), metadata, receipt, branch: releaseBranch, sha: receiptResult.sha,
     receiptUrl: receiptResult.pullRequest, protection: summarizeProtection(protection),
     mainChecks, blockers: [...new Set(blockers)].sort()
   };
@@ -462,7 +484,14 @@ export function validateReleaseReceipt(receipt, child, policy, now = Date.now())
     blockers.push("child-release-pull-evidence-invalid");
   }
   if (release?.green !== true || receipt.publication?.green !== true) blockers.push("child-release-evidence-incomplete");
-  return { sha: isSha(receipt.main_sha) ? receipt.main_sha : null, pullRequest, blockers: [...new Set(blockers)].sort() };
+  const releaseBranch = releasedBranchForChild(child, policy);
+  const releasedSha = releaseBranch === "dev" ? receipt.dev_sha : receipt.main_sha;
+  return {
+    sha: isSha(releasedSha) ? releasedSha : null,
+    branch: releaseBranch,
+    pullRequest,
+    blockers: [...new Set(blockers)].sort()
+  };
 }
 
 async function observeParentCandidate(parent, child, childRelease, policy) {
@@ -507,7 +536,7 @@ async function observeParentCandidate(parent, child, childRelease, policy) {
   if (!devEntry || devEntry.name !== gitlink.name || devEntry.url !== gitlink.url || devEntry.branch !== gitlink.branch) {
     blockers.push("parent-gitmodules-diverged");
   }
-  if (gitlink.branch && gitlink.branch !== "main") blockers.push("child-tracking-branch-not-main");
+  if (gitlink.branch && gitlink.branch !== childRelease.branch) blockers.push("child-tracking-branch-mismatch");
   const [mainPointer, devPointer] = await Promise.all([
     getSubmoduleCommit(parent, gitlink.path, "main"),
     getSubmoduleCommit(parent, gitlink.path, policy.targetBranch)
@@ -549,7 +578,20 @@ async function observeParentCandidate(parent, child, childRelease, policy) {
   const competing = await classifyOpenPointerPulls(parent, pulls, gitlink.path, child, childRelease.sha, policy, {
     parentSha: devSha,
     oldSha: devPointer,
-    planId: currentPlanId
+    planId: currentPlanId,
+    mainSha,
+    mainPointer,
+    pointerState,
+    receipt: childRelease.receiptUrl || null,
+    candidate: {
+      repository: repoName(parent), mainSha, devSha, gitlink, mainPointer, devPointer,
+      releasedSha: childRelease.sha || null, pointerState,
+      evidence: {
+        ancestry: devPointer && childRelease.sha
+          ? `https://github.com/${repoName(child)}/compare/${devPointer}...${childRelease.sha}`
+          : null
+      }
+    }
   });
   blockers.push(...competing.blockers);
   return {
@@ -570,6 +612,7 @@ async function observeParentCandidate(parent, child, childRelease, policy) {
     lastPlanCreatedAt,
     protection: summarizeProtection(devProtection),
     trustedPull: competing.trustedPull,
+    recoverablePull: competing.recoverablePull,
     blockers: [...new Set(blockers)].sort(),
     evidence: {
       parent_pointer: `https://github.com/${repoName(parent)}/tree/${devSha}/${gitlink.path}`,
@@ -610,6 +653,7 @@ export function validateParentLayout(parent, entries, policy = loadSubmodulePoli
 async function classifyOpenPointerPulls(parent, pulls, gitlinkPath, child, releasedSha, policy, evidence) {
   const blockers = [];
   const trusted = [];
+  const recoverable = [];
   for (const summary of pulls) {
     const pull = await gh.request("GET", `/repos/${repoName(parent)}/pulls/${summary.number}`);
     const files = await listAll(`/repos/${repoName(parent)}/pulls/${summary.number}/files?per_page=100`);
@@ -626,11 +670,102 @@ async function classifyOpenPointerPulls(parent, pulls, gitlinkPath, child, relea
       oldSha: evidence.oldSha,
       planId: evidence.planId,
       branch: `${policy.branchPrefix}${slug(repoName(child))}-${String(releasedSha).slice(0, 12)}`
-    })) trusted.push(pull);
+    })) {
+      trusted.push(pull);
+      continue;
+    }
+    const recovery = await admitRecoverablePointerPull(parent, pull, {
+      ...evidence,
+      path: gitlinkPath,
+      child: repoName(child),
+      releasedSha,
+      policy,
+      branch: `${policy.branchPrefix}${slug(repoName(child))}-${String(releasedSha).slice(0, 12)}`
+    });
+    if (recovery) recoverable.push(recovery);
     else blockers.push(`competing-or-untrusted-pointer-pr:${pull.number}`);
   }
-  if (trusted.length > 1) blockers.push("duplicate-trusted-pointer-prs");
-  return { trustedPull: trusted.length === 1 ? trusted[0] : null, blockers };
+  if (trusted.length + recoverable.length > 1) blockers.push("duplicate-trusted-pointer-prs");
+  return {
+    trustedPull: trusted.length === 1 && recoverable.length === 0 ? trusted[0] : null,
+    recoverablePull: recoverable.length === 1 && trusted.length === 0 ? recoverable[0] : null,
+    blockers
+  };
+}
+
+async function admitRecoverablePointerPull(parent, pull, expected) {
+  const marker = parsePointerPullMarker(pull?.body);
+  const number = Number(pull?.number);
+  if (!marker
+      || pull?.state !== "open"
+      || pull?.draft === true
+      || !Number.isInteger(number) || number < 1
+      || pull?.html_url !== `https://github.com/${repoName(parent)}/pull/${number}`
+      || pull?.title !== pointerPullTitle(expected.candidate)
+      || normalizeWorkerPullRequestActor(pull?.user) === null
+      || pull?.base?.ref !== "dev"
+      || String(pull?.head?.repo?.full_name || "").toLowerCase() !== repoName(parent).toLowerCase()
+      || pull?.head?.ref !== expected.branch
+      || !isSha(pull?.head?.sha)
+      || marker.child.toLowerCase() !== expected.child.toLowerCase()
+      || marker.oldSha !== expected.oldSha
+      || marker.releasedSha !== expected.releasedSha
+      || marker.path !== expected.path
+      || marker.parentSha === expected.parentSha) {
+    return null;
+  }
+  const priorEvidence = {
+    child: expected.child,
+    child_sha: expected.releasedSha,
+    parent: repoName(parent),
+    parent_main: expected.mainSha,
+    parent_dev: marker.parentSha,
+    path: expected.path,
+    main_pointer: expected.mainPointer,
+    dev_pointer: marker.oldSha,
+    pointer_state: expected.pointerState,
+    receipt: expected.receipt
+  };
+  if (marker.planId !== submodulePlanId(priorEvidence)) return null;
+  const [branchHead, baseAdvance] = await Promise.all([
+    optionalRefHead(parent, expected.branch),
+    compare(parent, marker.parentSha, expected.parentSha, { inaccessible: true })
+  ]);
+  if (branchHead !== pull.head.sha
+      || baseAdvance?.status !== "ahead"
+      || !Number.isInteger(baseAdvance.ahead_by) || baseAdvance.ahead_by < 1
+      || baseAdvance.behind_by !== 0) {
+    return null;
+  }
+  const priorCandidate = {
+    ...expected.candidate,
+    devSha: marker.parentSha,
+    devPointer: marker.oldSha,
+    releasedSha: expected.releasedSha
+  };
+  const priorObservation = {
+    child: expected.child,
+    childRelease: { receiptUrl: expected.receipt },
+    candidate: priorCandidate
+  };
+  if (String(pull.body) !== pointerPullBody(priorObservation, { planId: marker.planId }, marker.headSha)) return null;
+  try {
+    await verifyPointerBranch(parent, priorCandidate, { planId: marker.planId }, marker.headSha, { requireTreeSha: true });
+    if (pull.head.sha === marker.headSha) {
+      return { state: "stale-base", pull, body: String(pull.body), marker };
+    }
+    await verifyPointerBranch(
+      parent,
+      expected.candidate,
+      { planId: expected.planId },
+      pull.head.sha,
+      { priorHead: marker.headSha, requireTreeSha: true }
+    );
+  } catch (error) {
+    if (error instanceof PointerTrustViolation) return null;
+    throw error;
+  }
+  return { state: "interrupted-provenance", pull, body: String(pull.body), marker };
 }
 
 export function buildSubmodulePlan(observation, policy = loadSubmodulePolicy()) {
@@ -666,6 +801,9 @@ export async function ensureSubmoduleUpdatePull(observation, plan) {
     assertTrustedPullHead(candidate.trustedPull, candidate, plan);
     return pointerPullResult(candidate.trustedPull, candidate, plan, "waiting-for-validation");
   }
+  if (candidate.recoverablePull) {
+    return await reconcileRecoverablePointerPull(observation, plan, candidate.recoverablePull);
+  }
   const branchRef = await optionalRefHead(parent, plan.branch);
   let headSha = branchRef;
   if (!branchRef) {
@@ -697,7 +835,7 @@ export async function ensureSubmoduleUpdatePull(observation, plan) {
   const pull = await gh.request("POST", `/repos/${repoName(parent)}/pulls`, {
     head: plan.branch,
     base: "dev",
-    title: `Update ${candidate.gitlink.name} to ${candidate.releasedSha.slice(0, 12)}`,
+    title: pointerPullTitle(candidate),
     body
   }).catch(async (error) => {
     if (error.status !== 422) throw error;
@@ -707,6 +845,111 @@ export async function ensureSubmoduleUpdatePull(observation, plan) {
   });
   assertTrustedPullHead(pull, candidate, plan, headSha);
   return pointerPullResult(pull, candidate, plan, "waiting-for-validation");
+}
+
+async function reconcileRecoverablePointerPull(observation, plan, observedAdmission) {
+  const candidate = observation.candidate;
+  const parent = parseRepo(candidate.repository);
+  const expected = {
+    candidate,
+    path: candidate.gitlink.path,
+    child: observation.child,
+    releasedSha: candidate.releasedSha,
+    oldSha: candidate.devPointer,
+    parentSha: candidate.devSha,
+    mainSha: candidate.mainSha,
+    mainPointer: candidate.mainPointer,
+    pointerState: candidate.pointerState,
+    receipt: observation.childRelease.receiptUrl || null,
+    policy: runtimeOptions.policy || loadSubmodulePolicy(),
+    branch: plan.branch,
+    planId: plan.planId
+  };
+  const pullNumber = observedAdmission.pull.number;
+  let pull = await gh.request("GET", `/repos/${repoName(parent)}/pulls/${pullNumber}`);
+  if (String(pull?.body) !== observedAdmission.body) {
+    throw new PointerTrustViolation("pointer PR body changed after recovery admission; preserved the concurrent edit");
+  }
+  let admission = await admitRecoverablePointerPull(parent, pull, expected);
+  if (!admission) throw new PointerTrustViolation("pointer PR no longer matches the exact admitted base-advance recovery");
+
+  let headSha = pull.head.sha;
+  if (admission.state === "stale-base") {
+    const baseCommit = await gh.request("GET", `/repos/${repoName(parent)}/git/commits/${candidate.devSha}`);
+    if (!isSha(baseCommit?.tree?.sha)) throw new PointerTrustViolation("current parent dev tree is inaccessible during pointer recovery");
+    const tree = await gh.request("POST", `/repos/${repoName(parent)}/git/trees`, {
+      base_tree: baseCommit.tree.sha,
+      tree: [{ path: candidate.gitlink.path, mode: "160000", type: "commit", sha: candidate.releasedSha }]
+    });
+    if (!isSha(tree?.sha)) throw new PointerTrustViolation("GitHub did not return the pointer recovery tree SHA");
+    const commit = await gh.request("POST", `/repos/${repoName(parent)}/git/commits`, {
+      message: pointerCommitMessage(observation, plan),
+      tree: tree.sha,
+      parents: [admission.marker.headSha, candidate.devSha]
+    });
+    if (!isSha(commit?.sha)) throw new PointerTrustViolation("GitHub did not return the pointer recovery commit SHA");
+
+    await assertObservationCurrent(observation);
+    const [currentDev, currentBranch] = await Promise.all([
+      optionalRefHead(parent, "dev"),
+      optionalRefHead(parent, plan.branch)
+    ]);
+    pull = await gh.request("GET", `/repos/${repoName(parent)}/pulls/${pullNumber}`);
+    if (currentDev !== candidate.devSha
+        || currentBranch !== admission.marker.headSha
+        || pull?.head?.sha !== admission.marker.headSha
+        || String(pull?.body) !== admission.body
+        || !await admitRecoverablePointerPull(parent, pull, expected)) {
+      throw new PointerTrustViolation("pointer recovery refs or PR changed before non-force update; preserved existing work");
+    }
+    try {
+      await gh.request("PATCH", `/repos/${repoName(parent)}/git/refs/heads/${encodeURIComponent(plan.branch)}`, {
+        sha: commit.sha,
+        force: false
+      });
+    } catch (error) {
+      throw new PointerTrustViolation(`pointer base-advance update conflicted; preserved existing work (${Number(error?.status) || "unknown"})`);
+    }
+    const [verifiedDev, verifiedBranch] = await Promise.all([
+      optionalRefHead(parent, "dev"),
+      optionalRefHead(parent, plan.branch)
+    ]);
+    if (verifiedDev !== candidate.devSha || verifiedBranch !== commit.sha) {
+      throw new PointerTrustViolation("pointer recovery did not retain the exact admitted parent and branch refs");
+    }
+    await verifyPointerBranch(parent, candidate, plan, commit.sha, {
+      priorHead: admission.marker.headSha,
+      requireTreeSha: true,
+      expectedTreeSha: tree.sha
+    });
+    headSha = commit.sha;
+  }
+
+  await assertObservationCurrent(observation);
+  pull = await gh.request("GET", `/repos/${repoName(parent)}/pulls/${pullNumber}`);
+  if (String(pull?.body) !== admission.body) {
+    throw new PointerTrustViolation("pointer PR body changed before provenance update; preserved the concurrent edit");
+  }
+  const interrupted = await admitRecoverablePointerPull(parent, pull, expected);
+  if (!interrupted || interrupted.state !== "interrupted-provenance" || pull.head.sha !== headSha) {
+    throw new PointerTrustViolation("pointer PR is not the exact interrupted recovery immediately before provenance update");
+  }
+  const body = pointerPullBody(observation, plan, headSha);
+  await gh.request("PATCH", `/repos/${repoName(parent)}/pulls/${pullNumber}`, { body });
+  const latest = await gh.request("GET", `/repos/${repoName(parent)}/pulls/${pullNumber}`);
+  if (latest?.state !== "open" || latest?.draft === true
+      || latest?.title !== pointerPullTitle(candidate)
+      || latest?.html_url !== `https://github.com/${repoName(parent)}/pull/${pullNumber}`
+      || String(latest?.body) !== body
+      || await optionalRefHead(parent, plan.branch) !== headSha) {
+    throw new PointerTrustViolation("pointer PR provenance update did not retain the exact admitted PR and branch");
+  }
+  assertTrustedPullHead(latest, candidate, plan, headSha);
+  await verifyPointerBranch(parent, candidate, plan, headSha, {
+    priorHead: admission.marker.headSha,
+    requireTreeSha: true
+  });
+  return pointerPullResult(latest, candidate, plan, "waiting-for-validation");
 }
 
 export async function finalizeSubmoduleUpdate(observation, plan, validation) {
@@ -800,21 +1043,22 @@ async function assertObservationCurrent(observation) {
   const candidate = observation.candidate;
   const parent = parseRepo(candidate.repository);
   const child = parseRepo(observation.child);
-  const [mainSha, devSha, mainPointer, devPointer, childMain] = await Promise.all([
+  const childBranch = observation.childRelease.branch || releasedBranchForChild(child, runtimeOptions.policy || loadSubmodulePolicy());
+  const [mainSha, devSha, mainPointer, devPointer, childHead] = await Promise.all([
     optionalRefHead(parent, "main"),
     optionalRefHead(parent, "dev"),
     getSubmoduleCommit(parent, candidate.gitlink.path, "main"),
     getSubmoduleCommit(parent, candidate.gitlink.path, "dev"),
-    gh.request("GET", `/repos/${repoName(child)}/commits/main`)
+    gh.request("GET", `/repos/${repoName(child)}/commits/${encodeURIComponent(childBranch)}`)
   ]);
   if (mainSha !== candidate.mainSha || devSha !== candidate.devSha
       || mainPointer !== candidate.mainPointer || devPointer !== candidate.devPointer
-      || childMain?.sha !== candidate.releasedSha) {
+      || childHead?.sha !== candidate.releasedSha) {
     throw new Error("submodule evidence changed; replan before mutation");
   }
 }
 
-async function verifyPointerBranch(parent, candidate, plan, headSha) {
+async function verifyPointerBranch(parent, candidate, plan, headSha, options = {}) {
   if (!isSha(headSha)) throw new Error("pointer branch head is invalid");
   const [commit, gitCommit, pointer, relation] = await Promise.all([
     gh.request("GET", `/repos/${repoName(parent)}/commits/${headSha}`),
@@ -822,13 +1066,21 @@ async function verifyPointerBranch(parent, candidate, plan, headSha) {
     getSubmoduleCommit(parent, candidate.gitlink.path, headSha),
     compare(parent, candidate.devSha, headSha)
   ]);
+  const expectedParents = options.priorHead
+    ? [options.priorHead, candidate.devSha]
+    : [candidate.devSha];
+  const actualParents = Array.isArray(gitCommit?.parents) ? gitCommit.parents.map((item) => item?.sha) : [];
   if (normalizeWorkerPullRequestActor(commit?.author) === null
       || gitCommit?.message !== pointerCommitMessage({ child: candidateChild(candidate), candidate }, plan)
-      || !Array.isArray(gitCommit?.parents) || gitCommit.parents.length !== 1 || gitCommit.parents[0]?.sha !== candidate.devSha
+      || JSON.stringify(actualParents) !== JSON.stringify(expectedParents)
+      || (options.requireTreeSha && (!isSha(commit?.sha) || commit.sha !== headSha
+        || !isSha(gitCommit?.sha) || gitCommit.sha !== headSha
+        || !isSha(gitCommit?.tree?.sha)))
+      || (options.expectedTreeSha && gitCommit?.tree?.sha !== options.expectedTreeSha)
       || pointer !== candidate.releasedSha
       || relation?.status !== "ahead" || relation.ahead_by !== 1 || relation.behind_by !== 0
       || !Array.isArray(relation.files) || relation.files.length !== 1 || relation.files[0]?.filename !== candidate.gitlink.path) {
-    throw new Error("submodule update branch is not the exact App-owned one-gitlink plan");
+    throw new PointerTrustViolation("submodule update branch is not the exact App-owned one-gitlink plan");
   }
 }
 
@@ -839,6 +1091,10 @@ function candidateChild(candidate) {
 
 function pointerCommitMessage(observation, plan) {
   return `Update ${observation.candidate.gitlink.path} to ${observation.candidate.releasedSha}\n\nDarkFactory-Submodule-Plan: ${plan.planId}`;
+}
+
+function pointerPullTitle(candidate) {
+  return `Update ${candidate.gitlink.name} to ${candidate.releasedSha.slice(0, 12)}`;
 }
 
 function pointerPullBody(observation, plan, headSha) {
@@ -885,22 +1141,40 @@ function assertTrustedPullHead(pull, candidate, plan, expectedHead = pull?.head?
 }
 
 export function isTrustedPointerPull(parent, pull, expected) {
-  const marker = String(pull?.body || "").match(
-    /<!-- darkfactory:submodule-update plan=(submodule-[0-9a-f]{20}) parent=([0-9a-f]{40}) child=([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+) old=([0-9a-f]{40}) new=([0-9a-f]{40}) path=([A-Za-z0-9_.\/-]+) head=([0-9a-f]{40}) -->/
-  );
+  const marker = parsePointerPullMarker(pull?.body);
   if (!marker || normalizeWorkerPullRequestActor(pull?.user) === null) return false;
   return pull?.base?.ref === "dev"
     && String(pull?.head?.repo?.full_name || "").toLowerCase() === repoName(parent).toLowerCase()
     && String(pull?.head?.ref || "").startsWith(expected.policy.branchPrefix)
-    && pull?.head?.sha === marker[7]
-    && marker[3].toLowerCase() === expected.child.toLowerCase()
-    && (!expected.oldSha || marker[4] === expected.oldSha)
-    && marker[5] === expected.releasedSha
-    && marker[6] === expected.path
-    && (!expected.planId || marker[1] === expected.planId)
-    && (!expected.parentSha || marker[2] === expected.parentSha)
+    && pull?.head?.sha === marker.headSha
+    && marker.child.toLowerCase() === expected.child.toLowerCase()
+    && (!expected.oldSha || marker.oldSha === expected.oldSha)
+    && marker.releasedSha === expected.releasedSha
+    && marker.path === expected.path
+    && (!expected.planId || marker.planId === expected.planId)
+    && (!expected.parentSha || marker.parentSha === expected.parentSha)
     && (!expected.branch || pull?.head?.ref === expected.branch)
-    && (!expected.headSha || marker[7] === expected.headSha);
+    && (!expected.headSha || marker.headSha === expected.headSha);
+}
+
+function parsePointerPullMarker(body) {
+  const matches = String(body || "").match(
+    /<!-- darkfactory:submodule-update plan=(submodule-[0-9a-f]{20}) parent=([0-9a-f]{40}) child=([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+) old=([0-9a-f]{40}) new=([0-9a-f]{40}) path=([A-Za-z0-9_.\/-]+) head=([0-9a-f]{40}) -->/g
+  ) || [];
+  if (matches.length !== 1) return null;
+  const marker = matches[0].match(
+    /^<!-- darkfactory:submodule-update plan=(submodule-[0-9a-f]{20}) parent=([0-9a-f]{40}) child=([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+) old=([0-9a-f]{40}) new=([0-9a-f]{40}) path=([A-Za-z0-9_.\/-]+) head=([0-9a-f]{40}) -->$/
+  );
+  if (!marker) return null;
+  return {
+    planId: marker[1],
+    parentSha: marker[2],
+    child: marker[3],
+    oldSha: marker[4],
+    releasedSha: marker[5],
+    path: marker[6],
+    headSha: marker[7]
+  };
 }
 
 export function classifyPointerState(mainPointer, devPointer, releasedSha, relation) {
@@ -1123,6 +1397,7 @@ function publicObservation(observation) {
     child: observation.child,
     child_release: observation.childRelease ? {
       repository: observation.childRelease.repository,
+      branch: observation.childRelease.branch || null,
       sha: observation.childRelease.sha || null,
       receipt: observation.childRelease.receiptUrl || null,
       main_checks: observation.childRelease.mainChecks || null
@@ -1138,7 +1413,9 @@ function publicObservation(observation) {
       released_sha: observation.candidate.releasedSha,
       relation: summarizeComparison(observation.candidate.relation),
       pointer_state: observation.candidate.pointerState,
-      pull_request: observation.candidate.trustedPull?.html_url || null,
+      pull_request: observation.candidate.trustedPull?.html_url
+        || observation.candidate.recoverablePull?.pull?.html_url
+        || null,
       evidence: observation.candidate.evidence
     } : null,
     local: observation.local || null,
