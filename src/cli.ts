@@ -18,12 +18,14 @@ import {
   defaultDraftPath,
   draftExists,
   formatDraftDiff,
+  issueDraftFreshness,
   issueDraftSummary,
   isRetryableIssueDraftReview,
   parseIssueTarget,
   parseOwnerIssueIntent,
   publishReviewedIssueDraft,
   readIssueDraftState,
+  resumeExpiredIssueDraft,
   reviewIssueDraft,
   validateEffort,
   validateRepository,
@@ -1397,6 +1399,7 @@ async function runIssueDraftCommand(command: ParsedHumanCommand): Promise<void> 
   let draftPath = optionString(command, "--draft");
   draftPath = draftPath ? path.resolve(draftPath) : defaultDraftPath(agentsHome, repository);
   const existingDraft = draftExists(draftPath);
+  const ownerResume = command.options["--resume"] === true;
   if (json && !optionString(command, "--input") && !existingDraft) {
     throw new Error("issue draft --json requires --input or an existing --draft so interactive prompts cannot corrupt JSON output");
   }
@@ -1406,7 +1409,13 @@ async function runIssueDraftCommand(command: ParsedHumanCommand): Promise<void> 
     state = await readIssueDraftState(draftPath);
     if (command.arguments[0] && state.repository.toLowerCase() !== repository.toLowerCase()) throw new Error("Issue draft repository does not match the explicit target");
     repository = state.repository;
+    if (ownerResume) {
+      state = await resumeExpiredIssueDraft(draftPath, await createIssueDevelopmentRuntime(repository, false));
+    } else if (state.status === "reviewed" && (await issueDraftFreshness(state)).resumeRequired) {
+      throw new Error("Issue draft review expired; rerun this exact local draft with --resume to require a fresh high confirmation before publication");
+    }
   } else {
+    if (ownerResume) throw new Error("issue draft --resume requires one existing expired local draft");
     const effort = validateEffort(optionString(command, "--effort") || "high");
     const inputPath = optionString(command, "--input");
     const intent = inputPath

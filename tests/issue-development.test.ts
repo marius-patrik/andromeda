@@ -67,12 +67,14 @@ function reviewedState(): IssueDraftState {
     blockReason: null
   });
   const prompt = (modelTier: "medium" | "high") => ({ selection: { modelTier, effort: "high" } });
+  const reviewedAt = new Date(Date.now() - 60_000).toISOString();
+  const createdAt = new Date(Date.now() - 120_000).toISOString();
   return {
     schemaVersion: 1,
     draftId: "0123456789abcdef0123456789abcdef",
     repository: "marius-patrik/DarkFactory",
-    createdAt: "2026-07-15T12:00:00.000Z",
-    updatedAt: "2026-07-15T12:01:00.000Z",
+    createdAt,
+    updatedAt: reviewedAt,
     status: "reviewed",
     initial: document,
     current: document,

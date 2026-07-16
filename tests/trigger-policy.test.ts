@@ -26,7 +26,7 @@ const root = path.resolve(import.meta.dirname, "..");
 
 test("trigger policy covers every development loop with explicit cadence, admission, and authorization", async () => {
   const policy = await readTriggerPolicy(root);
-  assert.equal(policy.policyVersion, "1.1.0");
+  assert.equal(policy.policyVersion, "1.2.0");
   assert.deepEqual(policy.loops.map((loop: any) => loop.id).sort(), [...REQUIRED_LOOP_IDS].sort());
   for (const loop of policy.loops) {
     assert.match(loop.idempotencyKey, /\{repository\}.*\{target\}.*\{sourceVersion\}/);
@@ -50,6 +50,36 @@ test("trigger policy covers every development loop with explicit cadence, admiss
   assert.equal(drafting.recoveryWorkflow, null);
   assert.deepEqual(drafting.eventTriggers, []);
   assert.equal(drafting.recovery, null);
+  const hygiene = policy.loops.find((loop: any) => loop.id === "issue-draft-hygiene");
+  assert.equal(hygiene.status, "active");
+  assert.equal(hygiene.modelPolicy, "zero-token");
+  assert.deepEqual(hygiene.authorization.permissions, ["contents:read"]);
+});
+
+test("issue draft hygiene is trusted-main, df-local, zero-token, sanitized, and package-owned", async () => {
+  const [workflow, source, managed] = await Promise.all([
+    readFile(path.join(root, ".github/workflows/df-issue-draft-hygiene.yml"), "utf8"),
+    readFile(path.join(root, ".github/scripts/df-issue-draft-hygiene.mjs"), "utf8"),
+    readFile(path.join(root, ".darkfactory/managed-repository.json"), "utf8")
+  ]);
+  assert.match(workflow, /cron: "19 \*\/6 \* \* \*"/);
+  assert.match(workflow, /runs-on: \[self-hosted, df-local\]/);
+  assert.match(workflow, /GITHUB_REF -ne "refs\/heads\/main"/);
+  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /GITHUB_STEP_SUMMARY/);
+  assert.match(workflow, /upload-artifact@v4/);
+  assert.doesNotMatch(`${workflow}\n${source}`, /agents run|modelTier|provider|DARK_FACTORY_PRIVATE_KEY/);
+  assert.match(source, /modelTokens: 0/);
+  assert.match(source, /sanitized: true/);
+  const manifest = JSON.parse(managed);
+  for (const required of [
+    ".darkfactory/issue-draft-policy.json",
+    ".github/workflows/df-issue-draft-hygiene.yml",
+    ".github/scripts/df-issue-draft-hygiene.mjs"
+  ]) {
+    assert.ok(manifest.packageFiles.includes(required), `${required} is package-owned`);
+    assert.ok(manifest.requiredFiles.includes(required), `${required} is required`);
+  }
 });
 
 test("policy validation rejects unknown loops, stale latency, missing receipt admission, and non-independent model policy", async () => {

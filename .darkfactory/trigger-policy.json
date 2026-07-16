@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "policyVersion": "1.1.0",
+  "policyVersion": "1.2.0",
   "trustedSourceRef": "refs/heads/main",
   "loops": [
     {
@@ -112,6 +112,28 @@
       },
       "retry": { "maxAttempts": 3, "backoffSeconds": 300, "noProgressLimit": 3, "escalationLabel": "df:ask-owner" },
       "ledgerKind": "issue-draft"
+    },
+    {
+      "id": "issue-draft-hygiene",
+      "ownerIssue": 48,
+      "status": "active",
+      "engine": "deterministic local draft inventory",
+      "eventWorkflows": [".github/workflows/df-issue-draft-hygiene.yml"],
+      "recoveryWorkflow": ".github/workflows/df-issue-draft-hygiene.yml",
+      "eventTriggers": [{ "event": "workflow_dispatch", "types": [] }, { "event": "schedule", "types": [] }],
+      "recovery": { "cron": "19 */6 * * *", "intervalMinutes": 360, "maxDetectionMinutes": 390 },
+      "settleSeconds": 0,
+      "debounceSeconds": 60,
+      "idempotencyKey": "issue-draft-hygiene:{repository}:{target}:{sourceVersion}",
+      "modelPolicy": "zero-token",
+      "authorization": {
+        "defaultMode": "local-observation",
+        "mutationAuthority": "immutable-local-lifecycle-receipts-only",
+        "permissions": ["contents:read"],
+        "receiptRequired": true
+      },
+      "retry": { "maxAttempts": 3, "backoffSeconds": 300, "noProgressLimit": 3, "escalationLabel": "df:ask-owner" },
+      "ledgerKind": "issue-draft-hygiene"
     },
     {
       "id": "prd-backlog-reconcile",

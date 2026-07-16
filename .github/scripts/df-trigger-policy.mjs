@@ -8,6 +8,7 @@ export const REQUIRED_LOOP_IDS = [
   "pr-autoreview-fix",
   "issue-autoreview-fix",
   "interactive-issue-drafting",
+  "issue-draft-hygiene",
   "prd-backlog-reconcile",
   "worker-dispatch",
   "worker-heartbeat-recovery",

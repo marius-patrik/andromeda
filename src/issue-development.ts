@@ -112,6 +112,17 @@ type AutoreviewRunnerModule = {
   }>;
 };
 
+type IssueDraftHygieneModule = {
+  readIssueDraftPolicy(controlRoot: string): Promise<unknown>;
+  issueDraftFreshness(state: IssueDraftState, policy: unknown, now?: Date): {
+    publicationEligible: boolean;
+    resumeRequired: boolean;
+    expiresAt: string | null;
+  };
+  assertIssueDraftPublicationFresh(state: IssueDraftState, policy: unknown, now?: Date): unknown;
+  recordIssueDraftOwnerResume(input: { agentsHome: string; state: IssueDraftState; policy: unknown; now?: Date }): Promise<unknown>;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -283,6 +294,62 @@ async function loadRuntimeModules(): Promise<{
     import(new URL("../.github/scripts/run-darkfactory-autoreview.mjs", import.meta.url).href)
   ]);
   return { model: model as unknown as ModelPolicyModule, autoreview: autoreview as unknown as AutoreviewModule, runner: runner as unknown as AutoreviewRunnerModule };
+}
+
+async function loadIssueDraftHygiene(): Promise<{ module: IssueDraftHygieneModule; policy: unknown }> {
+  const module = await import(new URL("../.github/scripts/df-issue-draft-hygiene.mjs", import.meta.url).href) as unknown as IssueDraftHygieneModule;
+  return { module, policy: await module.readIssueDraftPolicy(CONTROL_ROOT) };
+}
+
+export async function issueDraftFreshness(state: IssueDraftState, now = new Date()): Promise<Readonly<{
+  publicationEligible: boolean;
+  resumeRequired: boolean;
+  expiresAt: string | null;
+}>> {
+  const hygiene = await loadIssueDraftHygiene();
+  return Object.freeze(hygiene.module.issueDraftFreshness(state, hygiene.policy, now));
+}
+
+export async function resumeExpiredIssueDraft(
+  draftPath: string,
+  runtime: IssueDevelopmentRuntime
+): Promise<IssueDraftState> {
+  const lockPath = `${path.resolve(draftPath)}.publish.lock`;
+  let lock;
+  try {
+    lock = await open(lockPath, "wx", 0o600);
+    await lock.writeFile(JSON.stringify({ schemaVersion: 1, pid: process.pid, operation: "owner-resume" }), "utf8");
+  } catch (error) {
+    if (isRecord(error) && error.code === "EEXIST") throw new Error("Issue draft publication or owner resume is already in progress");
+    throw error;
+  }
+  try {
+    const state = await readIssueDraftState(draftPath);
+    if (state.status !== "reviewed" || state.review?.ok !== true) throw new Error("Owner resume requires one expired reviewed issue draft");
+    const now = runtime.now?.() ?? new Date();
+    const hygiene = await loadIssueDraftHygiene();
+    const freshness = hygiene.module.issueDraftFreshness(state, hygiene.policy, now);
+    if (!freshness.resumeRequired) throw new Error("Owner resume is admitted only after the versioned issue draft review expiry");
+    const receipt = await hygiene.module.recordIssueDraftOwnerResume({ agentsHome: runtime.agentsHome, state, policy: hygiene.policy, now });
+    const resumed = Object.freeze({
+      ...state,
+      updatedAt: now.toISOString(),
+      status: "drafted" as const,
+      review: null
+    });
+    await writeIssueDraftState(draftPath, resumed);
+    await runtime.ledger("issue-draft-owner-resume", state.repository, {
+      schemaVersion: 1,
+      draftId: state.draftId,
+      reviewedDigest: state.current.digest,
+      previousReviewTargetVersion: state.review.targetVersion,
+      receipt
+    });
+    return resumed;
+  } finally {
+    await lock.close();
+    await rm(lockPath, { force: true });
+  }
 }
 
 function githubObject(value: unknown, context: string): Record<string, unknown> {
@@ -519,6 +586,7 @@ export async function reviewIssueDraft(
         });
         const proposal = validateIssueAutofixProposal(turn.output, policy.limits);
         if (ownerText(proposal.body) !== ownerText(state.current.body)) throw new Error("Issue autofix cannot alter or remove owner-authored context");
+        if (!proposal.body.startsWith(`<!-- darkfactory:local-issue-draft id=${state.draftId} -->`)) throw new Error("Issue autofix cannot alter or remove the exact local draft identity marker");
         const nextDocument = draftDocument(proposal.title, proposal.body);
         const now = (runtime.now?.() ?? new Date()).toISOString();
         state = Object.freeze({ ...state, updatedAt: now, status: "drafted", current: nextDocument });
@@ -663,6 +731,7 @@ async function publishReviewedIssueDraftLocked(
   if (state.status !== "reviewed" || state.review?.ok !== true) throw new Error("Issue draft must have a clean high Autoreview confirmation before publication");
   if (state.current.digest !== approvedDigest) throw new Error(`Issue draft approval mismatch: expected ${state.current.digest}`);
   if (state.ownerQuestions.length > 0 || state.blockers.length > 0) throw new Error("Issue draft retains unresolved owner decisions or blockers");
+  const hygiene = await loadIssueDraftHygiene();
   await validateReviewedDraftEvidence(state);
   const marker = `<!-- darkfactory:local-issue-draft id=${state.draftId} digest=${state.current.digest} -->`;
   const publishedBody = state.current.body.replace(/^<!-- darkfactory:local-issue-draft[^\n]*-->\n?/, `${marker}\n`);
@@ -693,6 +762,7 @@ async function publishReviewedIssueDraftLocked(
     await writeIssueDraftState(draftPath, state);
     return state;
   }
+  hygiene.module.assertIssueDraftPublicationFresh(state, hygiene.policy, runtime.now?.() ?? new Date());
   await runtime.ledger("issue-draft-publication-admission", state.repository, {
     schemaVersion: 1,
     draftId: state.draftId,
@@ -714,6 +784,7 @@ async function publishReviewedIssueDraftLocked(
     throw new Error("Issue draft changed after publication admission");
   }
   state = admittedState;
+  hygiene.module.assertIssueDraftPublicationFresh(state, hygiene.policy, runtime.now?.() ?? new Date());
   await validateReviewedDraftEvidence(state);
   const created = githubObject(await runtime.github.request("POST", `/repos/${state.repository}/issues`, {
     title: state.current.title,

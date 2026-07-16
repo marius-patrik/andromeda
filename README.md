@@ -161,8 +161,18 @@ autofixed by the same bounded issue Autoreview engine used by Actions, and kept
 local until the human types or supplies the exact reviewed SHA-256 digest.
 Publication has a durable admission receipt, is idempotent by draft ID, and
 creates one issue only when the clean high confirmation and current digest
-still agree. Unresolved owner questions, provider or receipt failure, malformed
-output, stale state, or a concurrent edit leaves the draft unpublished.
+still agree. Policy `1.0.0` reminds the owner after 72 hours and expires review
+evidence after 168 hours. The trusted-main `df-local` hygiene workflow scans
+only the bounded canonical `$AGENTS_HOME/runtime/darkfactory/drafts` inventory,
+writes immutable local lifecycle receipts, and publishes a sanitized Actions
+summary/artifact with zero model tokens; it never drafts, deletes, or publishes
+content. An expired draft is publication-ineligible until the owner explicitly
+runs `df issue draft --draft <local-draft> --resume`, which preserves the draft
+content, discards stale review evidence, and requires a fresh high confirmation.
+Explicit draft paths outside the canonical inventory still expire at
+publication admission but do not receive scheduled reminders. Unresolved owner
+questions, provider or receipt failure, malformed output, stale state, or a
+concurrent edit leaves the draft unpublished.
 
 Existing issue review uses the exact target version:
 

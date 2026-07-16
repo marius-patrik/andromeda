@@ -75,7 +75,11 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
   the high model tier with independently selected effort, keeps atomic local
   draft state, runs the shared issue Autoreview/autofix protocol, shows the
   final diff, and requires exact reviewed-digest approval before idempotent
-  publication. Existing issue/PR commands require explicit versions; stale
+  publication. A separate zero-token trusted-main hygiene loop inventories
+  bounded canonical Agent OS draft state, emits sanitized durable owner
+  reminders after a versioned threshold, and expires review evidence until an
+  explicit owner resume completes a fresh high confirmation; it never drafts,
+  publishes, or deletes content. Existing issue/PR commands require explicit versions; stale
   state, missing canonical Agent OS, unresolved owner decisions, malformed
   model output, or incomplete receipts block before semantic mutation.
 

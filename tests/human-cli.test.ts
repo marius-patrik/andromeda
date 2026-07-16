@@ -51,6 +51,7 @@ test("per-command help exposes purpose, defaults, independent model/effort, perm
   ]) assert.match(help, new RegExp(section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(help, /Tier high is fixed by policy/);
   assert.match(help, /--effort/);
+  assert.match(help, /--resume/);
 });
 
 test("safe defaults, aliases, exact version gates, and unknown options fail closed", () => {
@@ -67,6 +68,7 @@ test("safe defaults, aliases, exact version gates, and unknown options fail clos
   assert.throws(() => parseHumanCliArgs(["runs", "list", "owner/repo", "--approve", "1"]), /unknown runs list option/);
   assert.throws(() => parseHumanCliArgs(["clean", "plan", "owner/repo", "--watch"]), /unknown clean plan option/);
   assert.throws(() => parseHumanCliArgs(["release", "status", "owner/repo", "--watch"]), /unknown release status option/);
+  assert.equal(parseHumanCliArgs(["issue", "draft", "--draft", "draft.json", "--resume"])?.options["--resume"], true);
 });
 
 test("JSON results have one stable versioned envelope", () => {
