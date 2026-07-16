@@ -12,6 +12,9 @@ const repo = { owner: "marius-patrik", repo: "DarkFactory" };
 const controlRevision = "c".repeat(40);
 const agentOsDataRevision = "d".repeat(40);
 const targetRevision = "a".repeat(40);
+const releaseMainRevision = "1".repeat(40);
+const releaseDevRevision = "2".repeat(40);
+const releaseHeadRevision = "3".repeat(40);
 
 function content(text: string) {
   return { type: "file", encoding: "base64", content: Buffer.from(text).toString("base64") };
@@ -191,7 +194,7 @@ test("branch policy accepts protected identical main/dev and exempts active PR h
     base: { ref: "dev" }
   };
   const { gh } = mockGh((method, requestPath) => {
-    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.endsWith("/compare/a...a")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.endsWith("/branches/main/protection") || requestPath.endsWith("/branches/dev/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/10")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://github.com/marius-patrik/DarkFactory/pull/10" };
     if (requestPath.includes("/commits/b/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
@@ -220,7 +223,7 @@ test("an open PR exempts only the exact same-repository branch head SHA", async 
     base: { ref: "dev" }
   };
   const { gh, calls } = mockGh((_method, requestPath) => {
-    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.endsWith("/compare/a...a")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/11")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/11" };
     if (requestPath.includes("/commits/stale-pr-head/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
@@ -236,22 +239,22 @@ test("an open PR exempts only the exact same-repository branch head SHA", async 
 test("release PRs satisfy the lane only when their same-repository head contains current dev", async () => {
   for (const [relation, eligible] of [["behind", false], ["ahead", true]] as const) {
     const branches = [
-      { name: "main", commit: { sha: "main-sha" } },
-      { name: "dev", commit: { sha: "dev-sha" } },
-      { name: "release/test", commit: { sha: "release-sha" } }
+      { name: "main", commit: { sha: releaseMainRevision } },
+      { name: "dev", commit: { sha: releaseDevRevision } },
+      { name: "release/test", commit: { sha: releaseHeadRevision } }
     ];
     const pull = {
       number: 20,
-      head: { ref: "release/test", sha: "release-sha", repo: { full_name: "marius-patrik/DarkFactory" } },
+      head: { ref: "release/test", sha: releaseHeadRevision, repo: { full_name: "marius-patrik/DarkFactory" } },
       base: { ref: "main" }
     };
     const { gh } = mockGh((_method, requestPath) => {
-      if (requestPath.endsWith("/compare/main...dev")) return { status: "ahead", ahead_by: 1, behind_by: 0 };
-      if (requestPath.endsWith("/compare/dev...release-sha")) return { status: relation, ahead_by: relation === "ahead" ? 1 : 0, behind_by: relation === "behind" ? 1 : 0 };
+      if (requestPath.endsWith(`/compare/${releaseMainRevision}...${releaseDevRevision}`)) return { status: "ahead", ahead_by: 1, behind_by: 0 };
+      if (requestPath.endsWith(`/compare/${releaseDevRevision}...${releaseHeadRevision}`)) return { status: relation, ahead_by: relation === "ahead" ? 1 : 0, behind_by: relation === "behind" ? 1 : 0 };
       if (requestPath.includes("/protection")) return protectedBranch();
       if (requestPath.endsWith("/pulls/20")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/20" };
-      if (requestPath.includes("/commits/release-sha/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-      if (requestPath.includes("/commits/release-sha/status")) return { total_count: 0, statuses: [] };
+      if (requestPath.includes(`/commits/${releaseHeadRevision}/check-runs`)) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+      if (requestPath.includes(`/commits/${releaseHeadRevision}/status`)) return { total_count: 0, statuses: [] };
       throw new Error(`unexpected ${requestPath}`);
     });
     const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
@@ -264,22 +267,22 @@ test("release PRs satisfy the lane only when their same-repository head contains
 
 test("release PR lineage fails closed when GitHub omits comparison counts", async () => {
   const branches = [
-    { name: "main", commit: { sha: "main-sha" } },
-    { name: "dev", commit: { sha: "dev-sha" } },
-    { name: "release/test", commit: { sha: "release-sha" } }
+    { name: "main", commit: { sha: releaseMainRevision } },
+    { name: "dev", commit: { sha: releaseDevRevision } },
+    { name: "release/test", commit: { sha: releaseHeadRevision } }
   ];
   const pull = {
     number: 21,
-    head: { ref: "release/test", sha: "release-sha", repo: { full_name: "marius-patrik/DarkFactory" } },
+    head: { ref: "release/test", sha: releaseHeadRevision, repo: { full_name: "marius-patrik/DarkFactory" } },
     base: { ref: "main" }
   };
   const { gh } = mockGh((_method, requestPath) => {
-    if (requestPath.endsWith("/compare/main...dev")) return { status: "ahead", ahead_by: 1, behind_by: 0 };
-    if (requestPath.endsWith("/compare/dev...release-sha")) return { status: "ahead" };
+    if (requestPath.endsWith(`/compare/${releaseMainRevision}...${releaseDevRevision}`)) return { status: "ahead", ahead_by: 1, behind_by: 0 };
+    if (requestPath.endsWith(`/compare/${releaseDevRevision}...${releaseHeadRevision}`)) return { status: "ahead" };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/21")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/21" };
-    if (requestPath.includes("/commits/release-sha/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/commits/release-sha/status")) return { total_count: 0, statuses: [] };
+    if (requestPath.includes(`/commits/${releaseHeadRevision}/check-runs`)) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes(`/commits/${releaseHeadRevision}/status`)) return { total_count: 0, statuses: [] };
     throw new Error(`unexpected ${requestPath}`);
   });
 
@@ -342,7 +345,7 @@ test("branch policy classifies behind, diverged, missing, and main-only data rep
   for (const status of ["behind", "diverged"]) {
     const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "b" } }];
     const { gh } = mockGh((_method, requestPath) => {
-      if (requestPath.endsWith("/compare/main...dev")) return { status, ahead_by: 1, behind_by: 1 };
+      if (requestPath.endsWith("/compare/a...b")) return { status, ahead_by: 1, behind_by: 1 };
       if (requestPath.includes("/protection")) return protectedBranch();
       throw new Error(`unexpected ${requestPath}`);
     });
@@ -374,7 +377,7 @@ test("malformed branch comparisons fail closed instead of appearing converged", 
   ]) {
     const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "b" } }];
     const { gh } = mockGh((_method, requestPath) => {
-      if (requestPath.endsWith("/compare/main...dev")) return comparison;
+      if (requestPath.endsWith("/compare/a...b")) return comparison;
       if (requestPath.includes("/protection")) return protectedBranch();
       throw new Error(`unexpected ${requestPath}`);
     });
@@ -554,7 +557,7 @@ test("the #241 shape remains diagnosed while its active head branch is exempt", 
   const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }, { name: "dark-factory/managed-repository-setup", commit: { sha: "b" } }];
   const pull = { number: 241, head: { ref: "dark-factory/managed-repository-setup", sha: "b", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "main" } };
   const { gh } = mockGh((_method, requestPath) => {
-    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.endsWith("/compare/a...a")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/241")) return { ...pull, updated_at: "2026-07-01T00:00:00Z", mergeable: false, mergeable_state: "dirty", html_url: "https://github.com/marius-patrik/DarkFactory/pull/241" };
     if (requestPath.includes("/commits/b/check-runs")) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "failure", html_url: "https://example.test/validate" }, { name: "Codex Review", status: "completed", conclusion: "failure" }] };
@@ -573,7 +576,7 @@ test("unknown completed check conclusions never become healthy", async () => {
   const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
   const pull = { number: 77, head: { ref: "feature/check", sha: "c", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
   const { gh } = mockGh((_method, requestPath) => {
-    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.endsWith("/compare/a...a")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/77")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/77" };
     if (requestPath.includes("/commits/c/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "mystery" }] };
@@ -595,7 +598,7 @@ test("pull request trusted gate names require the exact GitHub Actions app", asy
     const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
     const pull = { number: 79, head: { ref: `feature/${label}`, sha: `sha-${label}`, repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
     const { gh } = mockGh((_method, requestPath) => {
-      if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+      if (requestPath.endsWith("/compare/a...a")) return { status: "identical", ahead_by: 0, behind_by: 0 };
       if (requestPath.includes("/protection")) return protectedBranch();
       if (requestPath.endsWith("/pulls/79")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/79" };
       if (requestPath.includes(`/commits/sha-${label}/check-runs`)) {
@@ -615,7 +618,7 @@ test("current-SHA checks paginate completely and reject unstable or capped evide
   const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
   const pull = { number: 80, head: { ref: "feature/pages", sha: "paged-sha", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
   const baseResponse = (requestPath: string) => {
-    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.endsWith("/compare/a...a")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/80")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/80" };
     return null;
@@ -669,7 +672,7 @@ test("inaccessible and individually malformed check evidence fails closed", asyn
     const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
     const pull = { number: 78, head: { ref: "feature/check", sha: "d", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
     const { gh } = mockGh((_method, requestPath) => {
-      if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+      if (requestPath.endsWith("/compare/a...a")) return { status: "identical", ahead_by: 0, behind_by: 0 };
       if (requestPath.includes("/protection")) return protectedBranch();
       if (requestPath.endsWith("/pulls/78")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/78" };
       if (requestPath.includes("/commits/d/check-runs")) {
@@ -1099,7 +1102,7 @@ test("diagnose mode performs no GitHub writes and pins target reads when a branc
     if (requestPath.includes("/pulls?state=open")) return [];
     if (requestPath.includes("/issues?state=all")) return [];
     if (requestPath.endsWith(`/git/trees/${targetRevision}?recursive=1`)) return { truncated: false, tree: [{ path: "README.md", type: "blob" }] };
-    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.endsWith(`/compare/${targetRevision}...${targetRevision}`)) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.includes("/actions/secrets")) return { secrets: [] };
     if (requestPath.includes("/actions/runners")) return { runners: [{ status: "online", labels: [{ name: "df-local" }] }] };
@@ -1132,11 +1135,35 @@ test("diagnose mode performs no GitHub writes and pins target reads when a branc
   const targetSnapshotReads = calls.filter((call) => (
     call.path.startsWith("/repos/marius-patrik/DarkFactory/contents/") ||
     call.path.startsWith("/repos/marius-patrik/DarkFactory/git/trees/") ||
+    call.path.startsWith("/repos/marius-patrik/DarkFactory/compare/") ||
     (call.path.startsWith("/repos/marius-patrik/DarkFactory/commits?") && call.path.includes("path="))
   ) && !call.path.includes(controlRevision));
   assert.ok(targetSnapshotReads.length > 0);
   assert.equal(targetSnapshotReads.every((call) => call.path.includes(targetRevision)), true);
-  assert.equal(targetSnapshotReads.some((call) => /(?:ref|sha)=main(?:&|$)/.test(call.path) || call.path.includes("/git/trees/main?")), false);
+  assert.equal(targetSnapshotReads.some((call) => /(?:ref|sha)=main(?:&|$)/.test(call.path) || call.path.includes("/git/trees/main?") || call.path.includes("/compare/main...dev")), false);
+});
+
+test("missing default-branch snapshot skips all mutable target content reads", async () => {
+  const { gh, calls } = mockGh((_method, requestPath) => {
+    if (requestPath === "/repos/marius-patrik/DarkFactory") {
+      return { default_branch: "missing", allow_auto_merge: false, archived: false, disabled: false };
+    }
+    if (requestPath.includes("/branches?")) return [];
+    if (requestPath.includes("/pulls?state=open")) return [];
+    if (requestPath.includes("/issues?state=all")) return [];
+    throw new Error(`unexpected mutable target read ${requestPath}`);
+  });
+  const reports = await doctor.runRepositoryDoctor(gh, {
+    mode: "diagnose",
+    controlRepo: repo,
+    controlRevision,
+    agentOsDataRevision,
+    target: repo,
+    registry: { schemaVersion: 1, repositories: { "marius-patrik/DarkFactory": { state: "active" } } }
+  });
+  assert.ok(reports[0].findings.some((finding) => finding.id === "default-branch-head-missing"));
+  assert.ok(reports[0].observations.some((observation) => /audits were skipped/.test(observation)));
+  assert.equal(calls.some((call) => /\/contents\/|\/git\/trees\//.test(call.path)), false);
 });
 
 test("report mode routes issue writes to target authority and contents writes only to scoped ledger authority", async () => {
@@ -1155,7 +1182,7 @@ test("report mode routes issue writes to target authority and contents writes on
     if (requestPath.includes("/issues?state=all")) return [];
     if (requestPath.includes("/labels?") && requestPath.endsWith("page=1")) return doctor.DOCTOR_REPORT_LABEL_NAMES.map((name) => ({ name }));
     if (requestPath.endsWith(`/git/trees/${targetRevision}?recursive=1`)) return { truncated: false, tree: [{ path: "README.md", type: "blob" }] };
-    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.endsWith(`/compare/${targetRevision}...${targetRevision}`)) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.includes("/actions/secrets")) return { secrets: [] };
     if (requestPath.includes("/actions/runners")) return { runners: [{ status: "online", labels: [{ name: "df-local" }] }] };

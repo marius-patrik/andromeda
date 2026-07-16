@@ -329,8 +329,8 @@ async function auditTargetRepository(github, repository, metadata, options) {
   const findings = [];
   const observations = [];
 
-  if (defaultBranch && !defaultRevision) {
-    findings.push(doctorFinding("default-branch-head-missing", "branch policy", `The declared default branch \`${defaultBranch}\` was not present in the complete branch snapshot, so target content cannot be audited immutably.`, {
+  if (!defaultRevision) {
+    findings.push(doctorFinding("default-branch-head-missing", "branch policy", `The declared default branch \`${defaultBranch || "missing"}\` was not present in the complete branch snapshot, so target content cannot be audited immutably.`, {
       severity: "critical"
     }));
   }
@@ -338,6 +338,8 @@ async function auditTargetRepository(github, repository, metadata, options) {
   const branchAudit = await auditBranchAndReleaseState(github, repository, metadata, {
     branches,
     branchNames,
+    mainRevision,
+    devRevision,
     pulls,
     isData,
     now: options.now
@@ -347,7 +349,7 @@ async function auditTargetRepository(github, repository, metadata, options) {
 
   if (isData) {
     observations.push("Canonical data repository was inspected only under the main-only protection, administration, force-push, deletion, and branch-hygiene policy; managed-code, workflow, PRD, and submodule requirements do not apply.");
-  } else {
+  } else if (defaultRevision) {
     findings.push(...await auditManagedFileDrift(github, repository, defaultRevision, options.controlRepo, {
       controlRevision: options.controlRevision,
       agentOsDataRevision: options.agentOsDataRevision
@@ -360,11 +362,15 @@ async function auditTargetRepository(github, repository, metadata, options) {
     findings.push(...await auditPrdDrift(github, repository, defaultRevision, openIssues));
     findings.push(...await auditDocStaleness(repository, metadata, defaultRevision, github));
     findings.push(...await auditRetiredAuthorityNames(github, repository, defaultRevision));
+  } else {
+    observations.push("Target content, tree, document, and submodule audits were skipped because no immutable default-branch revision was available.");
+  }
 
+  if (!isData) {
     for (const branch of ["main", "dev"].filter((name) => branchNames.has(name))) {
       const revision = branch === "main" ? mainRevision : devRevision;
       findings.push(...await auditHealth(repository, branch, revision, github, { now: options.now }));
-      findings.push(...await auditSubmoduleState(github, repository, branch, revision));
+      if (defaultRevision) findings.push(...await auditSubmoduleState(github, repository, branch, revision));
     }
   }
 
@@ -418,6 +424,8 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
   const findings = [];
   const observations = [];
   const { branches, branchNames, pulls, isData } = context;
+  const mainRevision = context.mainRevision ?? branchSha(branches, "main");
+  const devRevision = context.devRevision ?? branchSha(branches, "dev");
 
   if (metadata.default_branch !== "main") {
     findings.push(doctorFinding(
@@ -442,7 +450,7 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
 
   let comparison = null;
   if (!isData && branchNames.has("main") && branchNames.has("dev")) {
-    const observedComparison = await compareBranches(github, repository, "main", "dev");
+    const observedComparison = await compareBranches(github, repository, mainRevision, devRevision);
     if (!isValidBranchComparison(observedComparison)) {
       findings.push(doctorFinding("main-dev-comparison-malformed", "branch convergence", "The main...dev comparison response is malformed or incomplete, so branch convergence is unobservable.", {
         severity: "critical",
@@ -501,7 +509,7 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
   findings.push(...pullAudit.findings);
 
   if (!isData && comparison) {
-    findings.push(...await auditReleaseLane(github, repository, comparison, pullAudit.pulls));
+    findings.push(...await auditReleaseLane(github, repository, comparison, pullAudit.pulls, devRevision));
   }
   return { findings, observations };
 }
@@ -680,7 +688,7 @@ async function auditPullRequests(github, repository, pulls, options = {}) {
   return { findings, pulls: enriched };
 }
 
-async function auditReleaseLane(github, repository, comparison, pulls) {
+async function auditReleaseLane(github, repository, comparison, pulls, devRevision) {
   const findings = [];
   const releaseCandidates = pulls.filter((pull) => pull.base?.ref === "main" && (pull.head?.ref === "dev" || pull.head?.ref?.startsWith("release/")));
   const trustedCandidates = releaseCandidates.filter((pull) => sameRepositoryPullHead(pull, repository));
@@ -702,9 +710,16 @@ async function auditReleaseLane(github, repository, comparison, pulls) {
       continue;
     }
 
+    if (!EXACT_COMMIT_PATTERN.test(pull.head?.sha || "")) {
+      findings.push(doctorFinding(`release-pr-${pull.number}-head-revision-malformed`, "release lane", `Release PR #${pull.number} has no exact head revision and cannot satisfy release policy.`, {
+        severity: "critical", evidence: [{ label: `PR #${pull.number}`, url: pull.html_url }]
+      }));
+      continue;
+    }
+
     let relation;
     try {
-      relation = await compareBranches(github, repository, "dev", pull.head?.sha || pull.head?.ref);
+      relation = await compareBranches(github, repository, devRevision, pull.head.sha);
     } catch (error) {
       if (![403, 404, 409, 422].includes(error?.status)) throw error;
       findings.push(doctorFinding(`release-pr-${pull.number}-dev-lineage-unobservable`, "release lane", `Current-dev ancestry for release PR #${pull.number} is unobservable; it cannot satisfy release policy.`, {
