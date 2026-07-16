@@ -182,7 +182,7 @@ test("branch policy accepts protected identical main/dev and exempts active PR h
     if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.endsWith("/branches/main/protection") || requestPath.endsWith("/branches/dev/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/10")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://github.com/marius-patrik/DarkFactory/pull/10" };
-    if (requestPath.includes("/commits/b/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] };
+    if (requestPath.includes("/commits/b/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
     if (requestPath.includes("/commits/b/status")) return { statuses: [] };
     throw new Error(`unexpected ${method} ${requestPath}`);
   });
@@ -211,7 +211,7 @@ test("an open PR exempts only the exact same-repository branch head SHA", async 
     if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/11")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/11" };
-    if (requestPath.includes("/commits/stale-pr-head/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] };
+    if (requestPath.includes("/commits/stale-pr-head/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
     if (requestPath.includes("/commits/stale-pr-head/status")) return { statuses: [] };
     throw new Error(`unexpected ${requestPath}`);
   });
@@ -238,7 +238,7 @@ test("release PRs satisfy the lane only when their same-repository head contains
       if (requestPath.endsWith("/compare/dev...release-sha")) return { status: relation, ahead_by: relation === "ahead" ? 1 : 0, behind_by: relation === "behind" ? 1 : 0 };
       if (requestPath.includes("/protection")) return protectedBranch();
       if (requestPath.endsWith("/pulls/20")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/20" };
-      if (requestPath.includes("/commits/release-sha/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] };
+      if (requestPath.includes("/commits/release-sha/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
       if (requestPath.includes("/commits/release-sha/status")) return { statuses: [] };
       throw new Error(`unexpected ${requestPath}`);
     });
@@ -266,7 +266,7 @@ test("release PR lineage fails closed when GitHub omits comparison counts", asyn
     if (requestPath.endsWith("/compare/dev...release-sha")) return { status: "ahead" };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/21")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/21" };
-    if (requestPath.includes("/commits/release-sha/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] };
+    if (requestPath.includes("/commits/release-sha/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
     if (requestPath.includes("/commits/release-sha/status")) return { statuses: [] };
     throw new Error(`unexpected ${requestPath}`);
   });
@@ -541,6 +541,31 @@ test("unknown completed check conclusions and malformed check payloads never bec
       branches, branchNames: new Set(["main", "dev"]), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
     });
     assert.ok(result.findings.some((finding) => finding.id === "pr-77-checks-unobservable"));
+  }
+});
+
+test("pull request trusted gate names require the exact GitHub Actions app", async () => {
+  for (const [label, appId, expectsMismatch] of [
+    ["trusted", 15368, false],
+    ["wrong-app", 99999, true],
+    ["unbound", null, true]
+  ] as const) {
+    const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
+    const pull = { number: 79, head: { ref: `feature/${label}`, sha: `sha-${label}`, repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
+    const { gh } = mockGh((_method, requestPath) => {
+      if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+      if (requestPath.includes("/protection")) return protectedBranch();
+      if (requestPath.endsWith("/pulls/79")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/79" };
+      if (requestPath.includes(`/commits/sha-${label}/check-runs`)) {
+        return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", ...(appId === null ? {} : { app: { id: appId } }) }] };
+      }
+      if (requestPath.includes(`/commits/sha-${label}/status`)) return { statuses: [] };
+      throw new Error(`unexpected ${requestPath}`);
+    });
+    const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+      branches, branchNames: new Set(["main", "dev"]), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
+    });
+    assert.equal(result.findings.some((finding) => finding.id === "pr-79-trusted-gate-app-mismatch"), expectsMismatch, label);
   }
 });
 

@@ -35,6 +35,7 @@ export const WORKER_SESSION_LOOKBACK_DAYS = 14;
 // public Actions App ID is stable across repositories and prevents a same-name
 // status/check from an arbitrary App from satisfying repository-doctor policy.
 export const TRUSTED_GATE_APP_ID = 15368;
+const TRUSTED_GATE_NAMES = new Set(["Validate", "Codex Review", "DarkFactory Autoreview"]);
 
 export const ANDROMEDA_LAYOUT = [
   { name: "DarkFactory", path: "plugins/DarkFactory", repo: "marius-patrik/DarkFactory" },
@@ -536,6 +537,7 @@ async function auditPullRequests(github, repository, pulls, options = {}) {
     const red = checks.filter((check) => check.state === "red");
     const pending = checks.filter((check) => check.state === "pending");
     const unknown = checks.filter((check) => check.state === "unknown");
+    const wrongApp = checks.filter((check) => TRUSTED_GATE_NAMES.has(check.name) && check.appId !== TRUSTED_GATE_APP_ID);
 
     if (ageDays >= STALE_PR_DAYS) {
       findings.push(doctorFinding(`pr-${pull.number}-stale`, "pull request health", `PR #${pull.number} has not changed for ${ageDays} days.`, {
@@ -554,6 +556,13 @@ async function auditPullRequests(github, repository, pulls, options = {}) {
         severity: "critical",
         evidence,
         repair: ["Re-fetch checks from the trusted API and repair the check producer/schema; never treat an unknown conclusion as green."]
+      }));
+    }
+    if (wrongApp.length) {
+      findings.push(doctorFinding(`pr-${pull.number}-trusted-gate-app-mismatch`, "pull request health", `PR #${pull.number} has trusted gate names produced by an untrusted or unobservable App: ${wrongApp.map((check) => `${check.name}@app:${check.appId ?? "unbound"}`).join(", ")}; GitHub Actions app_id ${TRUSTED_GATE_APP_ID} is required.`, {
+        severity: "critical",
+        evidence: [...evidence, ...wrongApp.flatMap((check) => check.url ? [{ label: `${check.name}@app:${check.appId ?? "unbound"}`, url: check.url }] : [])],
+        repair: ["Restore the base-trusted managed workflow producer; never accept a same-name gate from another App or an unbound commit status."]
       }));
     }
     const oldPending = pending.filter((check) => ageIn(now, check.startedAt, 60 * 60 * 1000) >= PENDING_CHECK_HOURS);

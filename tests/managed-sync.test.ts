@@ -323,7 +323,7 @@ test("readManagedFiles rejects duplicate package-owned payloads in managed data"
   }
 });
 
-test("readManagedFiles resolves only the canonical Agent OS data registry record", async () => {
+test("readManagedFiles resolves exactly one canonical Agent OS data authority while allowing unrelated registrations", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-agent-os-data-"));
   const previousRegistry = process.env.AGENTS_DATA_REPOS;
   const previousAgentsHome = process.env.AGENTS_HOME;
@@ -349,7 +349,7 @@ test("readManagedFiles resolves only the canonical Agent OS data registry record
     assert.throws(() => readManagedFiles(), /must use repository marius-patrik\/Andromeda-data/);
 
     await writeFile(registryPath, JSON.stringify([]));
-    assert.throws(() => readManagedFiles(), /only the agent-os-data record/);
+    assert.throws(() => readManagedFiles(), /exactly one agent-os-data record/);
 
     await writeFile(
       registryPath,
@@ -358,7 +358,19 @@ test("readManagedFiles resolves only the canonical Agent OS data registry record
         { id: "other-data", repo: "marius-patrik/other", path: join(root, "other") }
       ])
     );
-    assert.throws(() => readManagedFiles(), /only the agent-os-data record/);
+    assert.ok(readManagedFiles().some((file) => file.path === "AGENTS.md"));
+
+    await writeFile(
+      registryPath,
+      JSON.stringify([
+        { id: "agent-os-data", repo: "marius-patrik/Andromeda-data", path: root },
+        { id: "agent-os-data", repo: "marius-patrik/Andromeda-data", path: root }
+      ])
+    );
+    assert.throws(() => readManagedFiles(), /exactly one agent-os-data record/);
+
+    await writeFile(registryPath, JSON.stringify([null]));
+    assert.throws(() => readManagedFiles(), /Invalid Agent OS data repository registry record/);
   } finally {
     if (previousRegistry === undefined) delete process.env.AGENTS_DATA_REPOS;
     else process.env.AGENTS_DATA_REPOS = previousRegistry;
