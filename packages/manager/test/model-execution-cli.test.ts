@@ -93,7 +93,7 @@ describe("model execution CLI prompt boundary", () => {
   test("positional prompt produces the canonical independent-axis request", async () => {
     const root = await rootFixture();
     const request = await modelExecutionRequestFromCli({
-      values: ["review", "this"],
+      values: ["review this"],
       flags: flags(root),
       workdir: root,
     });
@@ -134,6 +134,9 @@ describe("model execution CLI prompt boundary", () => {
 
   test("multiple, missing, and malformed prompt sources fail closed", async () => {
     const root = await rootFixture();
+    await expect(
+      modelExecutionRequestFromCli({ values: ["review", "this"], flags: flags(root), workdir: root }),
+    ).rejects.toThrow("positional prompt must be exactly one value");
     await expect(
       modelExecutionRequestFromCli({ values: [], flags: flags(root), workdir: root }),
     ).rejects.toThrow("exactly one prompt source");
@@ -176,6 +179,7 @@ describe("model execution CLI prompt boundary", () => {
       ).rejects.toThrow(`run requires --${name}`);
     }
     expect(selectsModelExecution({ effort: "high" })).toBe(true);
+    expect(selectsModelExecution({ "execution-policy": "workspace-write" })).toBe(true);
     expect(selectsModelExecution({ receipt: path.join(root, "receipt.json") })).toBe(true);
     expect(selectsModelExecution({ provider: "codex", model: "gpt-5.6-sol" })).toBe(false);
     await expect(
@@ -277,6 +281,22 @@ describe("model execution CLI prompt boundary", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("agents: run requires --model-tier");
     await expect(readFile(receiptPath, "utf8")).rejects.toThrow();
+
+    const policyOnly = await runProcess(
+      [
+        process.execPath,
+        cliPath,
+        "run",
+        "--execution-policy",
+        "workspace-write",
+        "prompt",
+      ],
+      root,
+      executionEnv(state),
+    );
+    expect(policyOnly.code).toBe(1);
+    expect(policyOnly.stdout).toBe("");
+    expect(policyOnly.stderr.trim()).toBe("agents: run requires --model-tier");
   });
 
   test("installed Windows PowerShell launcher preserves the full contract through @args", async () => {

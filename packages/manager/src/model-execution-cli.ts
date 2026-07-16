@@ -78,7 +78,10 @@ export async function modelExecutionRequestFromCli(input: ModelExecutionCliInput
   if (input.flags["prompt-stdin"] !== undefined && !promptStdin) {
     throw new Error("run --prompt-stdin does not take a value");
   }
-  const positional = input.values.join(" ").trim();
+  if (input.values.length > 1) {
+    throw new Error("run positional prompt must be exactly one value");
+  }
+  const positional = input.values[0]?.trim() ?? "";
   const sourceCount = Number(Boolean(positional)) + Number(Boolean(promptFile)) + Number(promptStdin);
   if (sourceCount !== 1) {
     throw new Error("run requires exactly one prompt source: positional text, --prompt-file, or --prompt-stdin");
