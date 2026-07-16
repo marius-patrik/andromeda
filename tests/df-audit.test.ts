@@ -182,8 +182,8 @@ test("branch policy accepts protected identical main/dev and exempts active PR h
     if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.endsWith("/branches/main/protection") || requestPath.endsWith("/branches/dev/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/10")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://github.com/marius-patrik/DarkFactory/pull/10" };
-    if (requestPath.includes("/commits/b/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/commits/b/status")) return { statuses: [] };
+    if (requestPath.includes("/commits/b/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes("/commits/b/status")) return { total_count: 0, statuses: [] };
     throw new Error(`unexpected ${method} ${requestPath}`);
   });
   const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
@@ -211,8 +211,8 @@ test("an open PR exempts only the exact same-repository branch head SHA", async 
     if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/11")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/11" };
-    if (requestPath.includes("/commits/stale-pr-head/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/commits/stale-pr-head/status")) return { statuses: [] };
+    if (requestPath.includes("/commits/stale-pr-head/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes("/commits/stale-pr-head/status")) return { total_count: 0, statuses: [] };
     throw new Error(`unexpected ${requestPath}`);
   });
   const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
@@ -238,8 +238,8 @@ test("release PRs satisfy the lane only when their same-repository head contains
       if (requestPath.endsWith("/compare/dev...release-sha")) return { status: relation, ahead_by: relation === "ahead" ? 1 : 0, behind_by: relation === "behind" ? 1 : 0 };
       if (requestPath.includes("/protection")) return protectedBranch();
       if (requestPath.endsWith("/pulls/20")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/20" };
-      if (requestPath.includes("/commits/release-sha/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-      if (requestPath.includes("/commits/release-sha/status")) return { statuses: [] };
+      if (requestPath.includes("/commits/release-sha/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+      if (requestPath.includes("/commits/release-sha/status")) return { total_count: 0, statuses: [] };
       throw new Error(`unexpected ${requestPath}`);
     });
     const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
@@ -266,8 +266,8 @@ test("release PR lineage fails closed when GitHub omits comparison counts", asyn
     if (requestPath.endsWith("/compare/dev...release-sha")) return { status: "ahead" };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/21")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/21" };
-    if (requestPath.includes("/commits/release-sha/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/commits/release-sha/status")) return { statuses: [] };
+    if (requestPath.includes("/commits/release-sha/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes("/commits/release-sha/status")) return { total_count: 0, statuses: [] };
     throw new Error(`unexpected ${requestPath}`);
   });
 
@@ -288,8 +288,8 @@ test("post-branch health is bound to current head runs and checks and fails clos
       { name: "Validate", head_sha: "old-head", status: "completed", conclusion: "success" },
       { name: "Validate", head_sha: "current-head", status: "completed", conclusion: "failure", html_url: "https://example.test/run" }
     ] };
-    if (requestPath.includes("/commits/current-head/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "failure", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/commits/current-head/status")) return { statuses: [] };
+    if (requestPath.includes("/commits/current-head/check-runs")) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "failure", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes("/commits/current-head/status")) return { total_count: 0, statuses: [] };
     throw new Error(`unexpected ${requestPath}`);
   });
   const red = await doctor.auditHealth(repo, "main", "current-head", redGh, { now });
@@ -300,8 +300,8 @@ test("post-branch health is bound to current head runs and checks and fails clos
   const { gh: pendingGh } = mockGh((_method, requestPath) => {
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.includes("/actions/runs?")) return { workflow_runs: [{ name: "Validate", head_sha: "current-head", status: "in_progress", conclusion: null, run_started_at: "2026-07-13T00:00:00Z" }] };
-    if (requestPath.includes("/check-runs")) return { check_runs: [{ name: "Validate", status: "in_progress", conclusion: null, started_at: "2026-07-13T00:00:00Z", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/status")) return { statuses: [] };
+    if (requestPath.includes("/check-runs")) return { total_count: 2, check_runs: [{ name: "Validate", status: "in_progress", conclusion: null, started_at: "2026-07-13T00:00:00Z", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes("/status")) return { total_count: 0, statuses: [] };
     throw new Error(`unexpected ${requestPath}`);
   });
   const pending = await doctor.auditHealth(repo, "main", "current-head", pendingGh, { now });
@@ -312,8 +312,8 @@ test("post-branch health is bound to current head runs and checks and fails clos
   const { gh: missingGh } = mockGh((_method, requestPath) => {
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.includes("/actions/runs?")) return { workflow_runs: [{ name: "Validate", head_sha: "current-head", status: "completed", conclusion: "success" }] };
-    if (requestPath.includes("/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/status")) return { statuses: [] };
+    if (requestPath.includes("/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes("/status")) return { total_count: 0, statuses: [] };
     throw new Error(`unexpected ${requestPath}`);
   });
   const missing = await doctor.auditHealth(repo, "main", "current-head", missingGh, { now });
@@ -510,8 +510,8 @@ test("the #241 shape remains diagnosed while its active head branch is exempt", 
     if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.endsWith("/pulls/241")) return { ...pull, updated_at: "2026-07-01T00:00:00Z", mergeable: false, mergeable_state: "dirty", html_url: "https://github.com/marius-patrik/DarkFactory/pull/241" };
-    if (requestPath.includes("/commits/b/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "failure", html_url: "https://example.test/validate" }, { name: "Codex Review", status: "completed", conclusion: "failure" }] };
-    if (requestPath.includes("/commits/b/status")) return { statuses: [] };
+    if (requestPath.includes("/commits/b/check-runs")) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "failure", html_url: "https://example.test/validate" }, { name: "Codex Review", status: "completed", conclusion: "failure" }] };
+    if (requestPath.includes("/commits/b/status")) return { total_count: 0, statuses: [] };
     throw new Error(`unexpected ${requestPath}`);
   });
   const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
@@ -522,26 +522,21 @@ test("the #241 shape remains diagnosed while its active head branch is exempt", 
   assert.equal(result.findings.some((finding) => finding.id.includes("extra-branch-dark-factory")), false);
 });
 
-test("unknown completed check conclusions and malformed check payloads never become healthy", async () => {
-  for (const checkRuns of [
-    { check_runs: [{ name: "Validate", status: "completed", conclusion: "mystery" }] },
-    { check_runs: "malformed" }
-  ]) {
-    const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
-    const pull = { number: 77, head: { ref: "feature/check", sha: "c", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
-    const { gh } = mockGh((_method, requestPath) => {
-      if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
-      if (requestPath.includes("/protection")) return protectedBranch();
-      if (requestPath.endsWith("/pulls/77")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/77" };
-      if (requestPath.includes("/commits/c/check-runs")) return checkRuns;
-      if (requestPath.includes("/commits/c/status")) return { statuses: [] };
-      throw new Error(`unexpected ${requestPath}`);
-    });
-    const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
-      branches, branchNames: new Set(["main", "dev"]), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
-    });
-    assert.ok(result.findings.some((finding) => finding.id === "pr-77-checks-unobservable"));
-  }
+test("unknown completed check conclusions never become healthy", async () => {
+  const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
+  const pull = { number: 77, head: { ref: "feature/check", sha: "c", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
+  const { gh } = mockGh((_method, requestPath) => {
+    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.includes("/protection")) return protectedBranch();
+    if (requestPath.endsWith("/pulls/77")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/77" };
+    if (requestPath.includes("/commits/c/check-runs")) return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "mystery" }] };
+    if (requestPath.includes("/commits/c/status")) return { total_count: 0, statuses: [] };
+    throw new Error(`unexpected ${requestPath}`);
+  });
+  const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+    branches, branchNames: new Set(["main", "dev"]), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
+  });
+  assert.ok(result.findings.some((finding) => finding.id === "pr-77-checks-unobservable"));
 });
 
 test("pull request trusted gate names require the exact GitHub Actions app", async () => {
@@ -557,15 +552,68 @@ test("pull request trusted gate names require the exact GitHub Actions app", asy
       if (requestPath.includes("/protection")) return protectedBranch();
       if (requestPath.endsWith("/pulls/79")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/79" };
       if (requestPath.includes(`/commits/sha-${label}/check-runs`)) {
-        return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", ...(appId === null ? {} : { app: { id: appId } }) }] };
+        return { total_count: 1, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", ...(appId === null ? {} : { app: { id: appId } }) }] };
       }
-      if (requestPath.includes(`/commits/sha-${label}/status`)) return { statuses: [] };
+      if (requestPath.includes(`/commits/sha-${label}/status`)) return { total_count: 0, statuses: [] };
       throw new Error(`unexpected ${requestPath}`);
     });
     const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
       branches, branchNames: new Set(["main", "dev"]), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
     });
     assert.equal(result.findings.some((finding) => finding.id === "pr-79-trusted-gate-app-mismatch"), expectsMismatch, label);
+  }
+});
+
+test("current-SHA checks paginate completely and reject unstable or capped evidence", async () => {
+  const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }];
+  const pull = { number: 80, head: { ref: "feature/pages", sha: "paged-sha", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "dev" } };
+  const baseResponse = (requestPath: string) => {
+    if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
+    if (requestPath.includes("/protection")) return protectedBranch();
+    if (requestPath.endsWith("/pulls/80")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/80" };
+    return null;
+  };
+
+  const { gh: completeGh } = mockGh((_method, requestPath) => {
+    const base = baseResponse(requestPath);
+    if (base) return base;
+    if (requestPath.includes("/check-runs") && requestPath.endsWith("page=1")) {
+      return { total_count: 101, check_runs: Array.from({ length: 100 }, (_, index) => ({ name: `Other ${index}`, status: "completed", conclusion: "success", app: { id: 15368 } })) };
+    }
+    if (requestPath.includes("/check-runs") && requestPath.endsWith("page=2")) {
+      return { total_count: 101, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 99999 } }] };
+    }
+    if (requestPath.includes("/status") && requestPath.endsWith("page=1")) {
+      return { total_count: 101, statuses: Array.from({ length: 100 }, (_, index) => ({ context: `status-${index}`, state: "success" })) };
+    }
+    if (requestPath.includes("/status") && requestPath.endsWith("page=2")) return { total_count: 101, statuses: [{ context: "status-final", state: "success" }] };
+    throw new Error(`unexpected ${requestPath}`);
+  });
+  const complete = await doctor.auditBranchAndReleaseState(completeGh, repo, { default_branch: "main", allow_auto_merge: true }, {
+    branches, branchNames: new Set(["main", "dev"]), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
+  });
+  assert.ok(complete.findings.some((finding) => finding.id === "pr-80-trusted-gate-app-mismatch" && /99999/.test(finding.message)));
+
+  for (const variant of ["changing", "capped", "malformed"] as const) {
+    const { gh } = mockGh((_method, requestPath) => {
+      const base = baseResponse(requestPath);
+      if (base) return base;
+      if (requestPath.includes("/check-runs") && requestPath.endsWith("page=1")) {
+        if (variant === "capped") return { total_count: 2001, check_runs: [] };
+        if (variant === "malformed") return { check_runs: [] };
+        return { total_count: 101, check_runs: Array.from({ length: 100 }, (_, index) => ({ name: `Other ${index}`, status: "completed", conclusion: "success", app: { id: 15368 } })) };
+      }
+      if (requestPath.includes("/check-runs") && requestPath.endsWith("page=2")) return { total_count: 102, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+      if (requestPath.includes("/status")) return { total_count: 0, statuses: [] };
+      throw new Error(`unexpected ${requestPath}`);
+    });
+    await assert.rejects(
+      () => doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+        branches, branchNames: new Set(["main", "dev"]), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
+      }),
+      variant === "changing" ? /changing check runs totals/ : variant === "capped" ? /cannot prove complete check runs enumeration/ : /malformed check runs page/,
+      variant
+    );
   }
 });
 
@@ -579,12 +627,12 @@ test("inaccessible and individually malformed check evidence fails closed", asyn
       if (requestPath.endsWith("/pulls/78")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/78" };
       if (requestPath.includes("/commits/d/check-runs")) {
         if (variant === "inaccessible") throw Object.assign(new Error("forbidden"), { status: 403 });
-        return { check_runs: [{ ...(variant === "missing-name" ? {} : { name: "Validate" }), status: "completed", conclusion: "success" }] };
+        return { total_count: 1, check_runs: [{ ...(variant === "missing-name" ? {} : { name: "Validate" }), status: "completed", conclusion: "success" }] };
       }
       if (requestPath.includes("/commits/d/status")) {
         return variant === "missing-context"
-          ? { statuses: [{ state: "success" }] }
-          : { statuses: [] };
+          ? { total_count: 1, statuses: [{ state: "success" }] }
+          : { total_count: 0, statuses: [] };
       }
       throw new Error(`unexpected ${requestPath}`);
     });
@@ -874,8 +922,8 @@ test("diagnose mode performs no GitHub writes", async () => {
     if (requestPath.includes("/actions/secrets")) return { secrets: [] };
     if (requestPath.includes("/actions/runners")) return { runners: [{ status: "online", labels: [{ name: "df-local" }] }] };
     if (requestPath.includes("/actions/runs?")) return { workflow_runs: [{ name: "Validate", head_sha: "a", status: "completed", conclusion: "success" }] };
-    if (requestPath.includes("/commits/a/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/commits/a/status")) return { statuses: [] };
+    if (requestPath.includes("/commits/a/check-runs")) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes("/commits/a/status")) return { total_count: 0, statuses: [] };
     if (requestPath.includes("/commits?sha=")) return [];
     if (requestPath.includes("/contents/.github/workflows/df-work.yml")) return content("AGENTS_HOME bin\\agents.ps1 state doctor --json");
     if (requestPath.includes("/contents/AGENTS.md")) return content("Use AGENTS_HOME.");
@@ -919,8 +967,8 @@ test("report mode routes issue writes to target authority and contents writes on
     if (requestPath.includes("/actions/secrets")) return { secrets: [] };
     if (requestPath.includes("/actions/runners")) return { runners: [{ status: "online", labels: [{ name: "df-local" }] }] };
     if (requestPath.includes("/actions/runs?")) return { workflow_runs: [{ name: "Validate", head_sha: "a", status: "completed", conclusion: "success" }] };
-    if (requestPath.includes("/commits/a/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/commits/a/status")) return { statuses: [] };
+    if (requestPath.includes("/commits/a/check-runs")) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes("/commits/a/status")) return { total_count: 0, statuses: [] };
     if (requestPath.includes("/commits?sha=")) return [];
     if (requestPath.includes("/contents/.github/workflows/df-work.yml")) return content("AGENTS_HOME bin\\agents.ps1 state doctor --json");
     if (requestPath.includes("/contents/AGENTS.md")) return content("Use AGENTS_HOME.");

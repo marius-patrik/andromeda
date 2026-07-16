@@ -31,6 +31,8 @@ export const STALE_PR_DAYS = 7;
 export const STALE_ISSUE_DAYS = 30;
 export const PENDING_CHECK_HOURS = 2;
 export const WORKER_SESSION_LOOKBACK_DAYS = 14;
+const COMMIT_EVIDENCE_PAGE_SIZE = 100;
+const MAX_COMMIT_EVIDENCE_PAGES = 20;
 // Managed Validate and review workflows are GitHub Actions check suites. GitHub's
 // public Actions App ID is stable across repositories and prevents a same-name
 // status/check from an arbitrary App from satisfying repository-doctor policy.
@@ -1610,8 +1612,8 @@ async function getPullRequest(github, repository, number) {
 async function getCommitChecks(github, repository, sha) {
   if (!sha) return [];
   const results = await Promise.allSettled([
-    github.request("GET", `/repos/${repoName(repository)}/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`),
-    github.request("GET", `/repos/${repoName(repository)}/commits/${encodeURIComponent(sha)}/status`)
+    listCompleteCommitEvidencePages(github, repository, sha, "check runs", "check_runs", "check-runs"),
+    listCompleteCommitEvidencePages(github, repository, sha, "commit statuses", "statuses", "status")
   ]);
   const latest = new Map();
   for (const [index, result] of results.entries()) {
@@ -1627,12 +1629,9 @@ async function getCommitChecks(github, repository, sha) {
       startedAt: ""
     });
   }
-  const checkRuns = results[0].status === "fulfilled" ? results[0].value : null;
-  const status = results[1].status === "fulfilled" ? results[1].value : null;
-  if (checkRuns !== null && !Array.isArray(checkRuns?.check_runs)) {
-    latest.set("malformed:check-runs", { name: "check-runs payload", state: "unknown", conclusion: "malformed", url: "", startedAt: "" });
-  }
-  for (const [index, run] of (Array.isArray(checkRuns?.check_runs) ? checkRuns.check_runs : []).entries()) {
+  const checkRuns = results[0].status === "fulfilled" ? results[0].value : [];
+  const statuses = results[1].status === "fulfilled" ? results[1].value : [];
+  for (const [index, run] of checkRuns.entries()) {
     const validName = typeof run?.name === "string" && !!run.name.trim();
     const name = validName ? run.name.trim() : "malformed check run";
     const completed = run?.status === "completed";
@@ -1652,10 +1651,7 @@ async function getCommitChecks(github, repository, sha) {
       startedAt: run?.started_at || run?.created_at || ""
     });
   }
-  if (status !== null && !Array.isArray(status?.statuses)) {
-    latest.set("malformed:statuses", { name: "commit status payload", state: "unknown", conclusion: "malformed", url: "", startedAt: "" });
-  }
-  for (const [index, item] of (Array.isArray(status?.statuses) ? status.statuses : []).entries()) {
+  for (const [index, item] of statuses.entries()) {
     const validContext = typeof item?.context === "string" && !!item.context.trim();
     const context = validContext ? item.context.trim() : "malformed status";
     const state = !validContext
@@ -1674,6 +1670,39 @@ async function getCommitChecks(github, repository, sha) {
     });
   }
   return [...latest.values()];
+}
+
+async function listCompleteCommitEvidencePages(github, repository, sha, evidenceKind, collectionKey, endpoint) {
+  const items = [];
+  let expectedTotal = null;
+  const encodedSha = encodeURIComponent(sha);
+
+  for (let page = 1; page <= MAX_COMMIT_EVIDENCE_PAGES; page += 1) {
+    const response = await github.request("GET", `/repos/${repoName(repository)}/commits/${encodedSha}/${endpoint}?per_page=${COMMIT_EVIDENCE_PAGE_SIZE}&page=${page}`);
+    const total = response?.total_count;
+    const batch = response?.[collectionKey];
+    if (!Number.isInteger(total) || total < 0 || !Array.isArray(batch) || batch.length > COMMIT_EVIDENCE_PAGE_SIZE) {
+      throw new Error(`Repository doctor received a malformed ${evidenceKind} page for ${repoName(repository)} at ${sha}.`);
+    }
+    if (expectedTotal === null) expectedTotal = total;
+    else if (total !== expectedTotal) {
+      throw new Error(`Repository doctor observed changing ${evidenceKind} totals for ${repoName(repository)} at ${sha}.`);
+    }
+    if (expectedTotal > COMMIT_EVIDENCE_PAGE_SIZE * MAX_COMMIT_EVIDENCE_PAGES) {
+      throw new Error(`Repository doctor cannot prove complete ${evidenceKind} enumeration for ${repoName(repository)} at ${sha} within ${MAX_COMMIT_EVIDENCE_PAGES} pages.`);
+    }
+
+    items.push(...batch);
+    if (items.length > expectedTotal) {
+      throw new Error(`Repository doctor received excess ${evidenceKind} evidence for ${repoName(repository)} at ${sha}.`);
+    }
+    if (items.length === expectedTotal) return items;
+    if (batch.length < COMMIT_EVIDENCE_PAGE_SIZE) {
+      throw new Error(`Repository doctor received incomplete ${evidenceKind} evidence for ${repoName(repository)} at ${sha}.`);
+    }
+  }
+
+  throw new Error(`Repository doctor cannot prove complete ${evidenceKind} enumeration for ${repoName(repository)} at ${sha} within ${MAX_COMMIT_EVIDENCE_PAGES} pages.`);
 }
 
 async function getRecursiveTree(github, repository, ref) {
