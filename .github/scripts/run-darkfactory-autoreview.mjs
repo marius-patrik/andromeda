@@ -55,7 +55,7 @@ const PROTECTED_BRANCHES = new Set(["main", "dev"]);
 const ALLOWED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const TEXT_FILE_BYTES = 1000000;
 const WINDOWS_RESERVED_SEGMENT = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
-const SUCCESSFUL_RESULT_VERDICTS = new Set(["clean", "owner_override", "trusted_zero_diff"]);
+const ISSUE_SUCCESSFUL_RESULT_VERDICTS = new Set(["clean", "owner_override"]);
 
 function stableError(code, message) {
   const error = new Error(message);
@@ -297,12 +297,12 @@ export async function reconcileExactIssueCompletion({ gh, repository, number, ex
   };
 
   let evidence = await readEvidence();
-  if (!SUCCESSFUL_RESULT_VERDICTS.has(evidence.verdict)) return null;
+  if (!ISSUE_SUCCESSFUL_RESULT_VERDICTS.has(evidence.verdict)) return null;
   const labelStatus = evidence.reviewed ? "current" : "applied";
   if (!evidence.reviewed) {
     await gh.request("POST", `/repos/${repoName(repository)}/issues/${number}/labels`, { labels: ["df:reviewed"] });
     evidence = await readEvidence();
-    if (!SUCCESSFUL_RESULT_VERDICTS.has(evidence.verdict) || !evidence.reviewed) {
+    if (!ISSUE_SUCCESSFUL_RESULT_VERDICTS.has(evidence.verdict) || !evidence.reviewed) {
       throw stableError("automation_failure", "GitHub did not confirm the exact successful issue result and reviewed label together");
     }
   }
@@ -1303,6 +1303,11 @@ export function isTrustedZeroDiffReconciliation(snapshot) {
   const proof = snapshot?.trustedRevisionProof;
   if (snapshot?.kind !== "pull_request" || snapshot.engineAutomation !== true || !proof || typeof proof !== "object") return false;
   const emptyPathDigest = sha256(Buffer.alloc(0));
+  // Exact merge-base equality proves that the protected base is an ancestor of
+  // the head regardless of first-parent depth. The bounded first-parent chain is
+  // supplemental reviewer context only and is intentionally not an admission
+  // requirement; malformed or truncated supplemental evidence cannot weaken
+  // the exact merge-base, identical-tree, and empty-path proof below.
   return EXACT_GIT_OID.test(proof.base || "")
     && EXACT_GIT_OID.test(proof.head || "")
     && EXACT_GIT_OID.test(proof.baseTree || "")
@@ -1351,7 +1356,7 @@ export function resultComment(result) {
     `**Verdict:** ${trustedZeroDiff ? "Trusted zero-diff reconciliation" : (result.ok ? "Clean high confirmation" : "Blocked closed")}`,
     "",
     trustedZeroDiff
-      ? "The trusted DarkFactory release engine authored this exact PR, and base-trusted Git verification proved an empty changed-path inventory, identical base/head trees, and complete first-parent ancestry to the protected base. No model review rounds were run."
+      ? "The trusted DarkFactory release engine authored this exact PR, and base-trusted Git verification proved that the protected base is the exact merge base, the base/head trees are identical, and the changed-path inventory is empty. Bounded first-parent details are supplemental and are not represented as complete proof. No model review rounds were run."
       : result.ok
       ? "A complete medium review was clean and an independent high-tier confirmation was schema-valid and clean."
       : `The bounded protocol blocked with stable code \`${htmlEscape(result.code)}\`.`,

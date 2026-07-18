@@ -415,6 +415,8 @@ test("trusted engine zero-diff reconciliation bypasses every model round after e
   });
   assert.match(resultComment(result), /\*\*Verdict:\*\* Trusted zero-diff reconciliation/);
   assert.match(resultComment(result), /No model review rounds were run/);
+  assert.match(resultComment(result), /protected base is the exact merge base/);
+  assert.doesNotMatch(resultComment(result), /complete first-parent ancestry/);
   assert.doesNotMatch(resultComment(result), /complete medium review was clean/);
 });
 

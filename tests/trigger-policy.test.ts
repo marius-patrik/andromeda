@@ -797,6 +797,7 @@ test("Autoreview result classification admits only exact trusted successful verd
 
   assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Clean high confirmation"), version), "clean");
   assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Trusted zero-diff reconciliation"), version), "trusted_zero_diff");
+  assert.equal(recoveryModule.isSuccessfulPullCompletion("trusted_zero_diff"), true);
   assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Blocked closed"), version), "blocked");
   assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Auditable owner override"), version), "owner_override");
   assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Clean high confirmation", { login: "attacker", type: "User" }), version), "none");
@@ -805,6 +806,47 @@ test("Autoreview result classification admits only exact trusted successful verd
     autoreviewRunner.classifyExactAutoreviewResult(result("Blocked closed", trusted, version, "**Verdict:** Clean high confirmation"), version),
     "blocked"
   );
+});
+
+test("a PR-only trusted zero-diff verdict cannot complete or label an issue", async () => {
+  const issue = {
+    number: 55,
+    state: "open",
+    title: "Issue review remains model-gated",
+    body: "This issue has not received medium and high review.",
+    labels: [],
+  };
+  const version = issueVersion(issue);
+  const comments = [{
+    user: { login: "darkfactory-agent[bot]", type: "Bot" },
+    body: [
+      "<!-- darkfactory-autoreview -->",
+      `<!-- darkfactory-autoreview-target version=${version} -->`,
+      "## DarkFactory Autoreview",
+      "",
+      "**Verdict:** Trusted zero-diff reconciliation",
+    ].join("\n"),
+  }];
+  let labelMutations = 0;
+  const gh = {
+    request: async (method: string, requestPath: string) => {
+      if (method === "GET" && requestPath.endsWith("/issues/55")) return issue;
+      if (method === "GET" && requestPath.includes("/issues/55/comments")) return comments;
+      if (method === "POST" && requestPath.endsWith("/issues/55/labels")) {
+        labelMutations += 1;
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method} ${requestPath}`);
+    },
+  };
+  const completion = await autoreviewRunner.reconcileExactIssueCompletion({
+    gh,
+    repository: { owner: "marius-patrik", repo: "Andromeda" },
+    number: 55,
+    expectedVersion: version,
+  });
+  assert.equal(completion, null);
+  assert.equal(labelMutations, 0);
 });
 
 test("Autoreview recovery retries blocked results and dispatches exact reviewed-label repair only when needed", async () => {
