@@ -780,7 +780,7 @@ test("Autoreview recovery fails closed with owner evidence for missing, ambiguou
   assert.deepEqual(mutations, []);
 });
 
-test("Autoreview result classification admits only exact trusted clean or owner-override verdicts", () => {
+test("Autoreview result classification admits only exact trusted successful verdicts", () => {
   const version = `${"1".repeat(40)}:${"2".repeat(40)}`;
   const trusted = { login: "darkfactory-agent[bot]", type: "Bot" };
   const result = (verdict: string, user = trusted, targetVersion = version, suffix = "") => [{
@@ -796,6 +796,7 @@ test("Autoreview result classification admits only exact trusted clean or owner-
   }];
 
   assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Clean high confirmation"), version), "clean");
+  assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Trusted zero-diff reconciliation"), version), "trusted_zero_diff");
   assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Blocked closed"), version), "blocked");
   assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Auditable owner override"), version), "owner_override");
   assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Clean high confirmation", { login: "attacker", type: "User" }), version), "none");

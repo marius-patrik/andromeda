@@ -26,11 +26,15 @@ const {
   gitlinkManifestFact,
   gitlinkManifestFromEntries,
   indexExactTreeEntries,
+  isTrustedZeroDiffReconciliation,
   parseChangedPaths,
   parseExactCommitRecord,
   parseGitTreeEntries,
+  resultComment,
   serializeIssueReviewContext,
   serializePullReviewContext,
+  runAutoreviewForTarget,
+  trustedPullRevisionEvidence,
   trustedPullRevisionFacts,
   verifyExactPullDiff
 } = autoreviewRunnerModule;
@@ -319,6 +323,87 @@ test("trusted pull revision facts prove bounded reconciliation ancestry and tree
   });
   assert.throws(() => parseExactCommitRecord("not-an-oid"), /invalid commit ancestry object ID/);
   assert.throws(() => parseExactCommitRecord(`${merge} ${base} ${base}`), /invalid commit ancestry relationship/);
+  assert.throws(
+    () => parseExactCommitRecord([merge, ...Array.from({ length: 9 }, (_, index) => index.toString(16).padStart(40, "0"))].join(" ")),
+    /parent evidence exceeds/,
+  );
+});
+
+test("trusted revision evidence rejects a bounded-depth octopus chain that exceeds the fact-size bound", () => {
+  const oid = (value: number) => value.toString(16).padStart(40, "0");
+  const base = "f".repeat(39) + "e";
+  const head = oid(1);
+  const chain = Array.from({ length: 17 }, (_, index) => oid(index + 1));
+  const fakeGit = (args: string[]) => {
+    if (args[0] === "rev-parse" && args[1] === "refs/remotes/origin/df-base") return base;
+    if (args[0] === "rev-parse" && args[1] === "refs/remotes/origin/df-head") return head;
+    if (args[0] === "rev-parse" && args[1].endsWith("^{tree}")) return "a".repeat(40);
+    if (args[0] === "merge-base") return oid(9000);
+    if (args[0] === "rev-list") {
+      const current = args.at(-1) as string;
+      const index = chain.indexOf(current);
+      const firstParent = chain[index + 1];
+      const extraParents = Array.from({ length: 7 }, (_, offset) => oid(1000 + index * 10 + offset));
+      return [current, firstParent, ...extraParents].join(" ");
+    }
+    throw new Error(`Unexpected git call: ${args.join(" ")}`);
+  };
+  assert.throws(
+    () => trustedPullRevisionEvidence("repo", "token", "hooks", [], fakeGit),
+    /revision evidence exceeds the verified-fact bound/,
+  );
+});
+
+test("trusted engine zero-diff reconciliation bypasses every model round after exact revalidation", async () => {
+  const base = "a".repeat(40);
+  const head = "b".repeat(40);
+  const tree = "c".repeat(40);
+  const snapshot = {
+    kind: "pull_request",
+    repository: "marius-patrik/Andromeda",
+    number: 306,
+    version: `${base}:${head}`,
+    baseSha: base,
+    headSha: head,
+    engineAutomation: true,
+    files: {},
+    trustedRevisionProof: {
+      base,
+      head,
+      baseTree: tree,
+      headTree: tree,
+      mergeBase: base,
+      baseIsAncestor: true,
+      reachedBase: true,
+      complete: true,
+      changedPathCount: 0,
+      changedPathDigest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    },
+  };
+  let reads = 0;
+  let modelTurns = 0;
+  const result = await runAutoreviewForTarget({
+    target: { read: async () => { reads += 1; return snapshot; } },
+    policy: {},
+    modelPolicy: {},
+    review: async () => { modelTurns += 1; throw new Error("model route must not run"); },
+    record: async () => { throw new Error("model round must not be recorded"); },
+  });
+
+  assert.equal(isTrustedZeroDiffReconciliation(snapshot), true);
+  assert.equal(reads, 2);
+  assert.equal(modelTurns, 0);
+  assert.deepEqual(result, {
+    schemaVersion: 1,
+    ok: true,
+    state: "trusted_zero_diff",
+    code: null,
+    targetVersion: snapshot.version,
+    rounds: [],
+  });
+  assert.match(resultComment(result), /\*\*Verdict:\*\* Trusted zero-diff reconciliation/);
+  assert.match(resultComment(result), /No model review rounds were run/);
+  assert.doesNotMatch(resultComment(result), /complete medium review was clean/);
 });
 
 async function fixture(options: { verdicts: any[]; policy?: any; mutateDuringReviewAt?: number; recordFailsAt?: number; promptMismatchAt?: number }) {

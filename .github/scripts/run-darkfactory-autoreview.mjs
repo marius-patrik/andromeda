@@ -55,7 +55,7 @@ const PROTECTED_BRANCHES = new Set(["main", "dev"]);
 const ALLOWED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const TEXT_FILE_BYTES = 1000000;
 const WINDOWS_RESERVED_SEGMENT = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
-const SUCCESSFUL_RESULT_VERDICTS = new Set(["clean", "owner_override"]);
+const SUCCESSFUL_RESULT_VERDICTS = new Set(["clean", "owner_override", "trusted_zero_diff"]);
 
 function stableError(code, message) {
   const error = new Error(message);
@@ -266,6 +266,7 @@ export function classifyExactAutoreviewResult(comments, version) {
   if (!lines.includes(autoreviewTargetVersionMarker(version))) return "stale";
   const verdict = lines.find((line) => line.startsWith("**Verdict:** ")) || "";
   if (verdict === "**Verdict:** Clean high confirmation") return "clean";
+  if (verdict === "**Verdict:** Trusted zero-diff reconciliation") return "trusted_zero_diff";
   if (verdict === "**Verdict:** Auditable owner override") return "owner_override";
   if (verdict === "**Verdict:** Blocked closed") return "blocked";
   return "unknown";
@@ -430,7 +431,7 @@ export function assertPullPolicy(pull, repository, expectations = {}) {
   if (!engineAutomation && linked.length === 0) {
     throw stableError("target_policy_blocked", "Pull request must link an execution issue");
   }
-  return { branch, linked };
+  return { branch, linked, engineAutomation };
 }
 
 async function ensureRepository(root, repository, token, hooksRoot) {
@@ -678,6 +679,9 @@ export function verifyExactPullDiff(repoRoot, token, hooksRoot, git = runGit) {
 
 const EXACT_GIT_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const FIRST_PARENT_PROOF_LIMIT = 16;
+const COMMIT_PARENT_PROOF_LIMIT = 8;
+const REVISION_FACT_BYTES = 3500;
+const REVISION_FACTS_TOTAL_BYTES = 7000;
 
 function exactGitOid(value, context) {
   const oid = String(value || "").trim();
@@ -691,6 +695,9 @@ export function parseExactCommitRecord(output) {
   const fields = String(output || "").trim().split(/\s+/).filter(Boolean);
   if (fields.length === 0) throw stableError("target_policy_blocked", "Git returned an empty commit ancestry record");
   const [commit, ...parents] = fields.map((value) => exactGitOid(value, "commit ancestry"));
+  if (parents.length > COMMIT_PARENT_PROOF_LIMIT) {
+    throw stableError("target_policy_blocked", "Git commit parent evidence exceeds the Autoreview bound");
+  }
   if (new Set(parents).size !== parents.length || parents.includes(commit)) {
     throw stableError("target_policy_blocked", "Git returned an invalid commit ancestry relationship");
   }
@@ -713,7 +720,7 @@ function exactCommitRecord(repoRoot, ref, token, hooksRoot, git) {
   return { ...record, tree };
 }
 
-export function trustedPullRevisionFacts(repoRoot, token, hooksRoot, changedPaths = [], git = runGit) {
+export function trustedPullRevisionEvidence(repoRoot, token, hooksRoot, changedPaths = [], git = runGit) {
   const base = exactGitOid(git(
     ["rev-parse", "refs/remotes/origin/df-base"],
     repoRoot,
@@ -767,11 +774,34 @@ export function trustedPullRevisionFacts(repoRoot, token, hooksRoot, changedPath
   const normalizedPaths = changedPaths.map(assertSafeRepositoryPath);
   const changedPathDigest = sha256(Buffer.from(normalizedPaths.join("\0"), "utf8"));
 
-  return [
+  const facts = [
     `Exact fetched revision proof: baseCommit=${base},baseTree=${baseTree}; headCommit=${head},headTree=${headTree}; mergeBase=${mergeBase}; baseIsAncestor=${mergeBase === base}.`,
     `Exact fetched first-parent ancestry from head toward base: reachedBase=${reachedBase},complete=${complete},limit=${FIRST_PARENT_PROOF_LIMIT}; ${ancestryFact}.`,
     `Exact fetched changed-path inventory: count=${normalizedPaths.length},orderedNulSha256=${changedPathDigest}.`
   ];
+  if (facts.some((fact) => Buffer.byteLength(fact, "utf8") > REVISION_FACT_BYTES)
+    || Buffer.byteLength(facts.join("\n"), "utf8") > REVISION_FACTS_TOTAL_BYTES) {
+    throw stableError("target_policy_blocked", "Serialized revision evidence exceeds the verified-fact bound");
+  }
+  return {
+    facts,
+    proof: {
+      base,
+      head,
+      baseTree,
+      headTree,
+      mergeBase,
+      baseIsAncestor: mergeBase === base,
+      reachedBase,
+      complete,
+      changedPathCount: normalizedPaths.length,
+      changedPathDigest
+    }
+  };
+}
+
+export function trustedPullRevisionFacts(repoRoot, token, hooksRoot, changedPaths = [], git = runGit) {
+  return trustedPullRevisionEvidence(repoRoot, token, hooksRoot, changedPaths, git).facts;
 }
 
 function changedPullFiles(repoRoot, token, hooksRoot) {
@@ -914,7 +944,7 @@ export async function createPullRequestTarget({
     verifyExactPullDiff(repoRoot, token, hooksRoot);
     const baseGitlinks = exactGitlinkManifest(repoRoot, "refs/remotes/origin/df-base", token, hooksRoot);
     const headGitlinks = exactGitlinkManifest(repoRoot, "refs/remotes/origin/df-head", token, hooksRoot);
-    const revisionFacts = trustedPullRevisionFacts(
+    const revisionEvidence = trustedPullRevisionEvidence(
       repoRoot,
       token,
       hooksRoot,
@@ -948,9 +978,11 @@ export async function createPullRequestTarget({
       reviewContext,
       files: changed.files,
       autofixDeniedPaths: changed.autofixDeniedPaths,
+      engineAutomation: policyEvidence.engineAutomation,
+      trustedRevisionProof: revisionEvidence.proof,
       verifiedFacts: [
         `Exact fetched diff passed git diff --check for ${pull.base.sha}...${pull.head.sha}.`,
-        ...revisionFacts,
+        ...revisionEvidence.facts,
         gitlinkManifestFact("base", baseGitlinks),
         gitlinkManifestFact("head", headGitlinks)
       ],
@@ -1247,17 +1279,62 @@ function roundSummary(round) {
   };
 }
 
-function resultComment(result) {
+export function isTrustedZeroDiffReconciliation(snapshot) {
+  const proof = snapshot?.trustedRevisionProof;
+  if (snapshot?.kind !== "pull_request" || snapshot.engineAutomation !== true || !proof || typeof proof !== "object") return false;
+  const emptyPathDigest = sha256(Buffer.alloc(0));
+  return EXACT_GIT_OID.test(proof.base || "")
+    && EXACT_GIT_OID.test(proof.head || "")
+    && EXACT_GIT_OID.test(proof.baseTree || "")
+    && proof.base === snapshot.baseSha
+    && proof.head === snapshot.headSha
+    && proof.baseTree === proof.headTree
+    && proof.mergeBase === proof.base
+    && proof.baseIsAncestor === true
+    && proof.reachedBase === true
+    && proof.complete === true
+    && proof.changedPathCount === 0
+    && proof.changedPathDigest === emptyPathDigest
+    && Object.keys(snapshot.files || {}).length === 0;
+}
+
+function trustedZeroDiffResult(snapshot) {
+  return Object.freeze({
+    schemaVersion: 1,
+    ok: true,
+    state: "trusted_zero_diff",
+    code: null,
+    targetVersion: snapshot.version,
+    rounds: Object.freeze([])
+  });
+}
+
+export async function runAutoreviewForTarget({ target, policy, modelPolicy, review, record }) {
+  const admitted = await target.read();
+  if (!isTrustedZeroDiffReconciliation(admitted)) {
+    return runAutoreview({ policy, modelPolicy, target, review, record });
+  }
+  const confirmed = await target.read();
+  if (confirmed.version !== admitted.version || !isTrustedZeroDiffReconciliation(confirmed)) {
+    throw stableError("stale_target", "Trusted zero-diff reconciliation changed before result publication");
+  }
+  return trustedZeroDiffResult(confirmed);
+}
+
+export function resultComment(result) {
   const lastReview = [...result.rounds].reverse().find((round) => round.verdict);
   const findings = lastReview?.verdict?.blockingFindings || [];
+  const trustedZeroDiff = result.ok && result.state === "trusted_zero_diff";
   const lines = [
     REVIEW_MARKER,
     ...(result.targetVersion ? [autoreviewTargetVersionMarker(result.targetVersion)] : []),
     "## DarkFactory Autoreview",
     "",
-    `**Verdict:** ${result.ok ? "Clean high confirmation" : "Blocked closed"}`,
+    `**Verdict:** ${trustedZeroDiff ? "Trusted zero-diff reconciliation" : (result.ok ? "Clean high confirmation" : "Blocked closed")}`,
     "",
-    result.ok
+    trustedZeroDiff
+      ? "The trusted DarkFactory release engine authored this exact PR, and base-trusted Git verification proved an empty changed-path inventory, identical base/head trees, and complete first-parent ancestry to the protected base. No model review rounds were run."
+      : result.ok
       ? "A complete medium review was clean and an independent high-tier confirmation was schema-valid and clean."
       : `The bounded protocol blocked with stable code \`${htmlEscape(result.code)}\`.`,
     "",
@@ -1265,7 +1342,9 @@ function resultComment(result) {
     "",
     "| # | Phase | Tier | Effort | Outcome |",
     "| -: | --- | --- | --- | --- |",
-    ...result.rounds.map((round) => `| ${round.sequence} | ${htmlEscape(round.phase)} | ${htmlEscape(round.request?.modelTier || "none")} | ${htmlEscape(round.request?.effort || "none")} | ${htmlEscape(round.outcome)} |`),
+    ...(trustedZeroDiff
+      ? ["| 0 | trusted_zero_diff | none | none | clean |"]
+      : result.rounds.map((round) => `| ${round.sequence} | ${htmlEscape(round.phase)} | ${htmlEscape(round.request?.modelTier || "none")} | ${htmlEscape(round.request?.effort || "none")} | ${htmlEscape(round.outcome)} |`)),
     "",
     "### Complete current blocking findings",
     "",
@@ -1408,7 +1487,7 @@ export async function executeAutoreview(environment = process.env) {
       return { ok: true, state: "owner_override" };
     }
 
-    const result = await runAutoreview({
+    const result = await runAutoreviewForTarget({
       policy,
       modelPolicy,
       target,
