@@ -406,6 +406,85 @@ test("trusted engine zero-diff reconciliation bypasses every model round after e
   assert.doesNotMatch(resultComment(result), /complete medium review was clean/);
 });
 
+test("zero-diff admission rejects incomplete trust evidence, detects a revalidation race, and otherwise uses normal review", async () => {
+  const policy = await loadAutoreviewPolicy(controlRoot);
+  const modelPolicy = await loadModelPolicy(controlRoot);
+  const base = "a".repeat(40);
+  const head = "b".repeat(40);
+  const tree = "c".repeat(40);
+  const emptyDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+  const trusted = {
+    kind: "pull_request",
+    repository: "marius-patrik/Andromeda",
+    number: 306,
+    version: `${base}:${head}`,
+    baseSha: base,
+    headSha: head,
+    engineAutomation: true,
+    files: {},
+    trustedRevisionProof: {
+      base,
+      head,
+      baseTree: tree,
+      headTree: tree,
+      mergeBase: base,
+      baseIsAncestor: true,
+      reachedBase: true,
+      complete: true,
+      changedPathCount: 0,
+      changedPathDigest: emptyDigest,
+    },
+  };
+
+  for (const rejected of [
+    { ...trusted, engineAutomation: false },
+    { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, headTree: "d".repeat(40) } },
+    { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, reachedBase: false } },
+    { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, changedPathCount: 1 } },
+    { ...trusted, files: { "reviewable.txt": { sha256: "f".repeat(64) } } },
+  ]) assert.equal(isTrustedZeroDiffReconciliation(rejected), false);
+
+  let staleReads = 0;
+  await assert.rejects(
+    () => runAutoreviewForTarget({
+      target: {
+        read: async () => {
+          staleReads += 1;
+          return staleReads === 1 ? trusted : { ...trusted, version: `${base}:${"d".repeat(40)}` };
+        },
+      },
+      policy,
+      modelPolicy,
+      review: async () => { throw new Error("model route must not run before zero-diff revalidation"); },
+      record: async () => {},
+    }),
+    (error: any) => error?.code === "stale_target",
+  );
+
+  let modelTurns = 0;
+  const normalSnapshot = {
+    ...trusted,
+    engineAutomation: false,
+    files: { "reviewable.txt": { sha256: "f".repeat(64) } },
+    trustedRevisionProof: { ...trusted.trustedRevisionProof, changedPathCount: 1 },
+  };
+  const normal = await runAutoreviewForTarget({
+    target: {
+      read: async () => normalSnapshot,
+      fix: async () => { throw new Error("clean normal review must not request a fix"); },
+    },
+    policy,
+    modelPolicy,
+    review: async ({ request }: any) => {
+      modelTurns += 1;
+      return { verdict: clean(), receipt: receipt(request), prompt: prompt(request) };
+    },
+    record: async () => {},
+  });
+  assert.equal(normal.state, "clean");
+  assert.equal(modelTurns, 2);
+});
+
 async function fixture(options: { verdicts: any[]; policy?: any; mutateDuringReviewAt?: number; recordFailsAt?: number; promptMismatchAt?: number }) {
   const policy = options.policy || await loadAutoreviewPolicy(controlRoot);
   const modelPolicy = await loadModelPolicy(controlRoot);
