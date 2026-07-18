@@ -27,9 +27,11 @@ const {
   gitlinkManifestFromEntries,
   indexExactTreeEntries,
   parseChangedPaths,
+  parseExactCommitRecord,
   parseGitTreeEntries,
   serializeIssueReviewContext,
   serializePullReviewContext,
+  trustedPullRevisionFacts,
   verifyExactPullDiff
 } = autoreviewRunnerModule;
 const controlRoot = path.resolve(import.meta.dirname, "..");
@@ -268,6 +270,55 @@ test("exact pull diff check is immutable and propagates a failed git gate", () =
     () => verifyExactPullDiff("repo", "token", "hooks", () => { throw new Error("diff check failed"); }),
     /diff check failed/,
   );
+});
+
+test("trusted pull revision facts prove bounded reconciliation ancestry and tree identity", () => {
+  const base = "a".repeat(40);
+  const head = "b".repeat(40);
+  const proposalBase = "c".repeat(40);
+  const merge = "d".repeat(40);
+  const incorporatedMain = "e".repeat(40);
+  const baseTree = "f".repeat(40);
+  const headTree = "1".repeat(40);
+  const responses = new Map([
+    ["rev-parse refs/remotes/origin/df-base", base],
+    ["rev-parse refs/remotes/origin/df-head", head],
+    [`rev-parse ${base}^{tree}`, baseTree],
+    [`rev-parse ${head}^{tree}`, headTree],
+    [`rev-parse ${proposalBase}^{tree}`, baseTree],
+    [`rev-parse ${merge}^{tree}`, baseTree],
+    [`merge-base ${base} ${head}`, base],
+    [`rev-list --parents -n 1 ${head}`, `${head} ${proposalBase}`],
+    [`rev-list --parents -n 1 ${proposalBase}`, `${proposalBase} ${merge}`],
+    [`rev-list --parents -n 1 ${merge}`, `${merge} ${base} ${incorporatedMain}`],
+  ]);
+  const facts = trustedPullRevisionFacts(
+    "repo",
+    "token",
+    "hooks",
+    ["docs/reconciliation/release.json"],
+    (args: string[]) => {
+      const key = args.join(" ");
+      const response = responses.get(key);
+      if (!response) throw new Error(`Unexpected git call: ${key}`);
+      return response;
+    },
+  );
+
+  assert.match(facts[0], new RegExp(`baseCommit=${base},baseTree=${baseTree}`));
+  assert.match(facts[0], new RegExp(`headCommit=${head},headTree=${headTree}`));
+  assert.match(facts[0], new RegExp(`mergeBase=${base}; baseIsAncestor=true`));
+  assert.match(facts[1], /reachedBase=true,complete=true,limit=16/);
+  assert.match(facts[1], new RegExp(`commit=${proposalBase},tree=${baseTree},parents=${merge}`));
+  assert.match(facts[1], new RegExp(`commit=${merge},tree=${baseTree},parents=${base},${incorporatedMain}`));
+  assert.match(facts[2], /count=1,orderedNulSha256=[0-9a-f]{64}/);
+
+  assert.deepEqual(parseExactCommitRecord(`${merge} ${base} ${incorporatedMain}`), {
+    commit: merge,
+    parents: [base, incorporatedMain],
+  });
+  assert.throws(() => parseExactCommitRecord("not-an-oid"), /invalid commit ancestry object ID/);
+  assert.throws(() => parseExactCommitRecord(`${merge} ${base} ${base}`), /invalid commit ancestry relationship/);
 });
 
 async function fixture(options: { verdicts: any[]; policy?: any; mutateDuringReviewAt?: number; recordFailsAt?: number; promptMismatchAt?: number }) {

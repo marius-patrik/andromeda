@@ -676,6 +676,104 @@ export function verifyExactPullDiff(repoRoot, token, hooksRoot, git = runGit) {
   );
 }
 
+const EXACT_GIT_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const FIRST_PARENT_PROOF_LIMIT = 16;
+
+function exactGitOid(value, context) {
+  const oid = String(value || "").trim();
+  if (!EXACT_GIT_OID.test(oid)) {
+    throw stableError("target_policy_blocked", `Git returned an invalid ${context} object ID`);
+  }
+  return oid;
+}
+
+export function parseExactCommitRecord(output) {
+  const fields = String(output || "").trim().split(/\s+/).filter(Boolean);
+  if (fields.length === 0) throw stableError("target_policy_blocked", "Git returned an empty commit ancestry record");
+  const [commit, ...parents] = fields.map((value) => exactGitOid(value, "commit ancestry"));
+  if (new Set(parents).size !== parents.length || parents.includes(commit)) {
+    throw stableError("target_policy_blocked", "Git returned an invalid commit ancestry relationship");
+  }
+  return { commit, parents };
+}
+
+function exactCommitRecord(repoRoot, ref, token, hooksRoot, git) {
+  const record = parseExactCommitRecord(git(
+    ["rev-list", "--parents", "-n", "1", ref],
+    repoRoot,
+    token,
+    hooksRoot
+  ));
+  const tree = exactGitOid(git(
+    ["rev-parse", `${record.commit}^{tree}`],
+    repoRoot,
+    token,
+    hooksRoot
+  ), "commit tree");
+  return { ...record, tree };
+}
+
+export function trustedPullRevisionFacts(repoRoot, token, hooksRoot, changedPaths = [], git = runGit) {
+  const base = exactGitOid(git(
+    ["rev-parse", "refs/remotes/origin/df-base"],
+    repoRoot,
+    token,
+    hooksRoot
+  ), "base commit");
+  const head = exactGitOid(git(
+    ["rev-parse", "refs/remotes/origin/df-head"],
+    repoRoot,
+    token,
+    hooksRoot
+  ), "head commit");
+  const baseTree = exactGitOid(git(
+    ["rev-parse", `${base}^{tree}`],
+    repoRoot,
+    token,
+    hooksRoot
+  ), "base tree");
+  const headTree = exactGitOid(git(
+    ["rev-parse", `${head}^{tree}`],
+    repoRoot,
+    token,
+    hooksRoot
+  ), "head tree");
+  const mergeBase = exactGitOid(git(
+    ["merge-base", base, head],
+    repoRoot,
+    token,
+    hooksRoot
+  ), "merge base");
+
+  const ancestry = [];
+  const seen = new Set();
+  let cursor = head;
+  for (let depth = 0; cursor !== base && depth < FIRST_PARENT_PROOF_LIMIT; depth += 1) {
+    if (seen.has(cursor)) throw stableError("target_policy_blocked", "Git returned cyclic first-parent ancestry evidence");
+    seen.add(cursor);
+    const record = exactCommitRecord(repoRoot, cursor, token, hooksRoot, git);
+    if (record.commit !== cursor) throw stableError("target_policy_blocked", "Git ancestry record does not match the requested commit");
+    ancestry.push(record);
+    if (record.parents.length === 0) break;
+    cursor = record.parents[0];
+  }
+  const reachedBase = cursor === base;
+  const complete = reachedBase || ancestry.at(-1)?.parents.length === 0;
+  const ancestryFact = ancestry.length === 0
+    ? "none (head equals base)"
+    : ancestry.map((record) => (
+      `commit=${record.commit},tree=${record.tree},parents=${record.parents.length > 0 ? record.parents.join(",") : "none"}`
+    )).join("; ");
+  const normalizedPaths = changedPaths.map(assertSafeRepositoryPath);
+  const changedPathDigest = sha256(Buffer.from(normalizedPaths.join("\0"), "utf8"));
+
+  return [
+    `Exact fetched revision proof: baseCommit=${base},baseTree=${baseTree}; headCommit=${head},headTree=${headTree}; mergeBase=${mergeBase}; baseIsAncestor=${mergeBase === base}.`,
+    `Exact fetched first-parent ancestry from head toward base: reachedBase=${reachedBase},complete=${complete},limit=${FIRST_PARENT_PROOF_LIMIT}; ${ancestryFact}.`,
+    `Exact fetched changed-path inventory: count=${normalizedPaths.length},orderedNulSha256=${changedPathDigest}.`
+  ];
+}
+
 function changedPullFiles(repoRoot, token, hooksRoot) {
   const names = parseChangedPaths(runGit(
     ["diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "refs/remotes/origin/df-base...refs/remotes/origin/df-head"],
@@ -816,6 +914,12 @@ export async function createPullRequestTarget({
     verifyExactPullDiff(repoRoot, token, hooksRoot);
     const baseGitlinks = exactGitlinkManifest(repoRoot, "refs/remotes/origin/df-base", token, hooksRoot);
     const headGitlinks = exactGitlinkManifest(repoRoot, "refs/remotes/origin/df-head", token, hooksRoot);
+    const revisionFacts = trustedPullRevisionFacts(
+      repoRoot,
+      token,
+      hooksRoot,
+      changed.reviewedFiles.map((entry) => entry.path)
+    );
     const reviewContext = serializePullReviewContext({
       target: {
         kind: "pull_request",
@@ -846,6 +950,7 @@ export async function createPullRequestTarget({
       autofixDeniedPaths: changed.autofixDeniedPaths,
       verifiedFacts: [
         `Exact fetched diff passed git diff --check for ${pull.base.sha}...${pull.head.sha}.`,
+        ...revisionFacts,
         gitlinkManifestFact("base", baseGitlinks),
         gitlinkManifestFact("head", headGitlinks)
       ],
