@@ -21,6 +21,7 @@ import {
 } from "./df-lib.mjs";
 import {
   AUTOREVIEW_CHECK_NAME,
+  assertAutofixPathsEligible,
   loadAutoreviewPolicy,
   runAutoreview,
   validateAutofixProposal
@@ -632,6 +633,40 @@ export function classifyChangedTreeEntry(filePath, baseEntries, headEntries) {
   };
 }
 
+export function buildChangedTreeEvidence(names, baseEntries, headEntries) {
+  if (!Array.isArray(names)) throw stableError("target_policy_blocked", "Changed path evidence must be an array");
+  const baseByPath = indexExactTreeEntries(baseEntries);
+  const headByPath = indexExactTreeEntries(headEntries);
+  const entries = [];
+  const deniedByFoldedPath = new Map();
+  for (const entry of [...baseEntries, ...headEntries]) {
+    if (entry.mode !== "160000" || entry.type !== "commit") continue;
+    assertSafeRepositoryPath(entry.path);
+    const foldedPath = entry.path.toLowerCase();
+    const existing = deniedByFoldedPath.get(foldedPath);
+    if (existing && existing !== entry.path) {
+      throw stableError("target_policy_blocked", "Base and head gitlink manifests contain case-colliding paths");
+    }
+    deniedByFoldedPath.set(foldedPath, entry.path);
+  }
+  const caseFoldedPaths = new Set();
+  for (const filePath of names) {
+    assertSafeRepositoryPath(filePath);
+    const foldedPath = filePath.toLowerCase();
+    if (caseFoldedPaths.has(foldedPath)) throw stableError("target_policy_blocked", "Pull request contains case-colliding changed paths");
+    caseFoldedPaths.add(foldedPath);
+    const baseEntry = baseByPath.get(filePath);
+    const headEntry = headByPath.get(filePath);
+    const evidence = classifyChangedTreeEntry(
+      filePath,
+      baseEntry ? [baseEntry] : [],
+      headEntry ? [headEntry] : []
+    );
+    entries.push(evidence);
+  }
+  return { entries, autofixDeniedPaths: [...deniedByFoldedPath.values()] };
+}
+
 export function verifyExactPullDiff(repoRoot, token, hooksRoot, git = runGit) {
   return git(
     ["diff", "--check", "--no-ext-diff", "--no-textconv", "refs/remotes/origin/df-base...refs/remotes/origin/df-head", "--"],
@@ -651,23 +686,11 @@ function changedPullFiles(repoRoot, token, hooksRoot) {
   ));
   const baseEntries = exactTreeEntries(repoRoot, "refs/remotes/origin/df-base", token, hooksRoot);
   const headEntries = exactTreeEntries(repoRoot, "refs/remotes/origin/df-head", token, hooksRoot);
-  const baseByPath = indexExactTreeEntries(baseEntries);
-  const headByPath = indexExactTreeEntries(headEntries);
+  const changedTree = buildChangedTreeEvidence(names, baseEntries, headEntries);
   const files = {};
   const reviewedFiles = [];
-  const caseFoldedPaths = new Set();
-  for (const filePath of names) {
-    assertSafeRepositoryPath(filePath);
-    const foldedPath = filePath.toLowerCase();
-    if (caseFoldedPaths.has(foldedPath)) throw stableError("target_policy_blocked", "Pull request contains case-colliding changed paths");
-    caseFoldedPaths.add(foldedPath);
-    const baseEntry = baseByPath.get(filePath);
-    const headEntry = headByPath.get(filePath);
-    const evidence = classifyChangedTreeEntry(
-      filePath,
-      baseEntry ? [baseEntry] : [],
-      headEntry ? [headEntry] : []
-    );
+  for (const evidence of changedTree.entries) {
+    const filePath = evidence.path;
     if (evidence.contentKind === "none") {
       reviewedFiles.push(evidence);
       continue;
@@ -698,7 +721,7 @@ function changedPullFiles(repoRoot, token, hooksRoot) {
     if (evidence.autofixEligible) files[filePath] = { sha256: hash, isTest };
     reviewedFiles.push({ ...evidence, sha256: hash, content: decoded });
   }
-  return { files, reviewedFiles };
+  return { files, reviewedFiles, autofixDeniedPaths: changedTree.autofixDeniedPaths };
 }
 
 function pullDiff(repoRoot, token, hooksRoot) {
@@ -820,6 +843,7 @@ export async function createPullRequestTarget({
       url: pull.html_url || `https://github.com/${repoName(repository)}/pull/${number}`,
       reviewContext,
       files: changed.files,
+      autofixDeniedPaths: changed.autofixDeniedPaths,
       verifiedFacts: [
         `Exact fetched diff passed git diff --check for ${pull.base.sha}...${pull.head.sha}.`,
         gitlinkManifestFact("base", baseGitlinks),
@@ -844,10 +868,15 @@ export async function createPullRequestTarget({
     });
     try {
       if (turn.receipt.outcome !== "success") throw stableError("provider_route_blocked", "Autofix model route is unavailable");
-      const proposal = validateAutofixProposal(turn.output, snapshot.files, policy);
+      const proposal = validateAutofixProposal(turn.output, snapshot.files, policy, snapshot.autofixDeniedPaths);
 
       const current = await read();
       if (current.version !== snapshot.version) throw stableError("stale_target", "Pull request changed before autofix mutation");
+      try {
+        assertAutofixPathsEligible(proposal.changes.map((change) => change.path), current.autofixDeniedPaths);
+      } catch (error) {
+        throw stableError("stale_target", error instanceof Error ? error.message : "Autofix path eligibility changed before mutation");
+      }
       runGit(["checkout", "--force", "-B", "df-autoreview", "refs/remotes/origin/df-head"], repoRoot, token, hooksRoot);
       for (const change of proposal.changes) {
         const targetPath = path.join(repoRoot, ...change.path.split("/"));

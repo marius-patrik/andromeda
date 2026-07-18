@@ -1,31 +1,27 @@
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+// @ts-ignore Workflow policy helpers are native ESM, not built TypeScript modules.
+const autoreviewModule: any = await import("../.github/scripts/df-autoreview.mjs");
 // @ts-ignore Workflow entrypoint helpers are native ESM, not built TypeScript modules.
 const autoreviewRunnerModule: any = await import("../.github/scripts/run-darkfactory-autoreview.mjs");
 
 const {
-  classifyChangedTreeEntry,
-  indexExactTreeEntries,
+  buildChangedTreeEvidence,
   parseChangedPaths
 } = autoreviewRunnerModule;
+const { assertAutofixPathsEligible, loadAutoreviewPolicy, validateAutofixProposal } = autoreviewModule;
+const controlRoot = fileURLToPath(new URL("../", import.meta.url));
 
 function changedEvidence(names: Buffer, baseEntries: any[], headEntries: any[]) {
-  const baseByPath = indexExactTreeEntries(baseEntries);
-  const headByPath = indexExactTreeEntries(headEntries);
+  const tree = buildChangedTreeEvidence(parseChangedPaths(names), baseEntries, headEntries);
   const files: Record<string, unknown> = {};
-  const reviewedFiles = parseChangedPaths(names).map((filePath: string) => {
-    const baseEntry = baseByPath.get(filePath);
-    const headEntry = headByPath.get(filePath);
-    const evidence = classifyChangedTreeEntry(
-      filePath,
-      baseEntry ? [baseEntry] : [],
-      headEntry ? [headEntry] : []
-    );
-    if (evidence.autofixEligible) files[filePath] = { sha256: "unread" };
+  const reviewedFiles = tree.entries.map((evidence: any) => {
+    if (evidence.autofixEligible) files[evidence.path] = { sha256: "unread" };
     return evidence;
   });
-  return { files, reviewedFiles };
+  return { files, reviewedFiles, autofixDeniedPaths: tree.autofixDeniedPaths };
 }
 
 test("gitlink pointer changes preserve exact base and head OIDs and stay out of autofix", () => {
@@ -79,4 +75,52 @@ test("gitlink renames preserve both exact paths and OIDs and keep both sides out
     { path: oldPath, deleted: true, oid: baseOid, baseOid, headOid: null, autofixEligible: false },
     { path: newPath, deleted: false, oid: headOid, baseOid: null, headOid, autofixEligible: false }
   ]);
+});
+
+test("every base or head gitlink path rejects zero-hash autofix at validation and mutation", async () => {
+  const policy = await loadAutoreviewPolicy(controlRoot);
+  const oldPath = "modules/old-name";
+  const newPath = "modules/new-name";
+  const baseOid = "e".repeat(40);
+  const headOid = "f".repeat(40);
+  const deletion = changedEvidence(
+    Buffer.from(`${oldPath}\0`),
+    [{ mode: "160000", type: "commit", oid: baseOid, path: oldPath }],
+    []
+  );
+  const rename = changedEvidence(
+    Buffer.from(`${oldPath}\0${newPath}\0`),
+    [{ mode: "160000", type: "commit", oid: baseOid, path: oldPath }],
+    [{ mode: "160000", type: "commit", oid: headOid, path: newPath }]
+  );
+  const unchanged = changedEvidence(
+    Buffer.alloc(0),
+    [{ mode: "160000", type: "commit", oid: baseOid, path: oldPath }],
+    [{ mode: "160000", type: "commit", oid: baseOid, path: oldPath }]
+  );
+
+  for (const [path, deniedPaths] of [
+    [oldPath, deletion.autofixDeniedPaths],
+    [oldPath, rename.autofixDeniedPaths],
+    [newPath, rename.autofixDeniedPaths],
+    [oldPath, unchanged.autofixDeniedPaths]
+  ] as const) {
+    const proposal = {
+      schemaVersion: 1,
+      summary: "Attempt to recreate an ineligible gitlink path.",
+      changes: [{
+        path,
+        expectedSha256: "0".repeat(64),
+        contentBase64: Buffer.from("replacement\n").toString("base64")
+      }]
+    };
+    assert.throws(
+      () => validateAutofixProposal(proposal, {}, policy, deniedPaths),
+      /ineligible changed path/
+    );
+    assert.throws(
+      () => assertAutofixPathsEligible([path], deniedPaths),
+      /ineligible changed path/
+    );
+  }
 });
