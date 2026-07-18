@@ -426,7 +426,7 @@ function gitRepositoryInventory(repoRoot, token, hooksRoot) {
 
 export function releaseIssueNumbers(body) {
   const markerLines = String(body || "").split(/\r?\n/)
-    .filter((line) => line.includes("darkfactory:release-issues"));
+    .filter((line) => /<!--\s*darkfactory:release-issues\b/i.test(line));
   if (markerLines.length === 0) return [];
   if (markerLines.length !== 1) throw stableError("target_policy_blocked", "Release pull request must contain exactly one release-issues marker");
   const match = /^<!-- darkfactory:release-issues ([1-9]\d*(?:,[1-9]\d*)*) -->$/.exec(markerLines[0]);

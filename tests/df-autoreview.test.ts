@@ -762,6 +762,10 @@ test("release-engine automation PRs are admitted on exact App provenance and own
       /trusted App-authored release branch|release.issue|release-issues/i
     );
   }
+  assert.deepEqual(
+    assertPullPolicy(ordinaryPull("Closes #42\nThis change documents the darkfactory:release-issues marker syntax."), repository).linked,
+    [42]
+  );
 
   // Same branch shape without the trusted App actor stays blocked.
   assert.throws(
