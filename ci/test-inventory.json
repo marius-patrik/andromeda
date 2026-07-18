@@ -60,7 +60,7 @@
     },
     {
       "id": "darkfactory",
-      "path": "plugins/DarkFactory",
+      "path": "packages/darkfactory",
       "suite": "darkfactory",
       "platforms": ["ubuntu-latest"],
       "submodule": true,
@@ -68,7 +68,7 @@
     },
     {
       "id": "memory",
-      "path": "plugins/Memory",
+      "path": "packages/memory",
       "suite": "memory",
       "platforms": ["ubuntu-latest", "windows-latest"],
       "submodule": true,
@@ -124,11 +124,11 @@
     }
   ],
   "parkedPlugins": [
-    "plugins/LifeQuest",
-    "plugins/SkyAgent"
+    "packages/lifequest",
+    "packages/skyagent"
   ],
   "parkedApps": [
-    "apps/Fabrica",
-    "apps/Singularity"
+    "packages/fabrica",
+    "packages/singularity"
   ]
 }

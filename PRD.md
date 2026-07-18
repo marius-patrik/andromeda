@@ -48,8 +48,8 @@ until the owner reopens it.
 - **`~/.agents` / `AGENTS_HOME`** — only authoritative runtime state root; a
   checkout of the Andromeda-data authority.
 - **`packages/`** — implementation domains, each rooted as one direct child.
-- **`plugins/`** — managed product plugins and authored plugin capabilities.
-- **`apps/`** — managed product applications.
+- **`plugins/`** — authored repository-owned plugin capabilities; managed product
+  repository gitlinks live under `packages/`.
 - **`data/`** — development pins for separate state and ledger repositories.
 
 Historical product, repository, and layout names are evidence to migrate and
@@ -64,7 +64,7 @@ retire. They are not supported aliases or compatibility contracts.
 | `packages/harness` | Canonical session event handling and tool execution today. Owner-ruled target (2026-07-13, #218): the operation engine owning orchestration, with the orchestrator runtime migrating from the manager |
 | `packages/gateway` | Local model registry, routing, health, quota, and transient control-plane relay; switcher control plane and cloud OAuth dispatch |
 | `packages/inference` | Gateway-backed Python agent loop, status, persistence, redaction, and package validation; engine discovery and serve profiles |
-| `plugins/DarkFactory` | Thin GitHub control-plane adapter: issues/PRs/labels ↔ work units, enforcement sync, review gates. No second brain. |
+| `packages/darkfactory` | Thin GitHub control-plane adapter: issues/PRs/labels ↔ work units, enforcement sync, review gates. No second brain. |
 
 Binding architecture rule: the manager manages and the harness operates — as
 the owner-ruled target architecture. Local system management (state, installs,
@@ -312,9 +312,9 @@ come first: the system may only learn in ways it can prove it can stop.
   flag.
 - The substrate serves per-role adapters behind the same engine contract.
 
-### Cognitive memory operations (plugins/memory — owner-ruled, epic #227)
+### Cognitive memory operations (packages/memory — owner-ruled, epic #227)
 
-The reflection/cognitive layer lives in a new `plugins/memory` plugin, which
+The reflection/cognitive layer lives in a new `packages/memory` plugin, which
 also absorbs existing memory operations tooling. The canonical memory
 authority and state contracts remain manager/core-owned — the plugin operates
 strictly through them.
@@ -359,7 +359,7 @@ strictly through them.
 
 - Every active component's full test suite runs in Validate on every PR:
   `packages/{core,gateway,harness,inference,manager}` and
-  `plugins/DarkFactory`; parked plugins and applications stay excluded.
+  `packages/darkfactory`; parked plugins and applications stay excluded.
 - Real-behavior legs, not only mocks: a real gateway process round-trip
   (plain and streaming) against an OpenAI-wire backend and an engine
   discovery→registration→routing pass; no hardcoded registry counts.
@@ -470,11 +470,12 @@ packages/manager/
 packages/harness/
 packages/gateway/
 packages/inference/
-plugins/DarkFactory/
-plugins/LifeQuest/
-plugins/SkyAgent/
-apps/Singularity/
-apps/Fabrica/
+packages/darkfactory/
+packages/memory/
+packages/lifequest/
+packages/skyagent/
+packages/singularity/
+packages/fabrica/
 skills/
 hooks/
 roles/
@@ -544,7 +545,7 @@ the lane breakdown lives in the program plan (`context/PLAN.md`):
 8. **Autolearn** — the #225 epic: brakes-first self-improvement, recorded
    scope only, execution owner-gated.
 9. **Memory plugin** — the #227 epic: reflection, dreams, and corpus
-   processing in `plugins/memory` through the canonical memory contract, with
+   processing in `packages/memory` through the canonical memory contract, with
    the Dream tooling migrated.
 
 Program acceptance: one continuous woven live session — an operator task from

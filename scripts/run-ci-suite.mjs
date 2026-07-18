@@ -163,19 +163,19 @@ const suites = {
     ]);
   },
   darkfactory() {
-    run("initialize pinned DarkFactory", "git", ["submodule", "update", "--init", "--depth", "1", "plugins/DarkFactory"]);
-    const cwd = path.join(root, "plugins", "DarkFactory");
+    run("initialize pinned DarkFactory", "git", ["submodule", "update", "--init", "--depth", "1", "packages/darkfactory"]);
+    const cwd = path.join(root, "packages", "darkfactory");
     runNpm("DarkFactory dependency install", ["ci"], cwd);
     runNpm("DarkFactory full check", ["run", "check"], cwd);
   },
   memory() {
-    run("initialize pinned Memory", "git", ["submodule", "update", "--init", "--depth", "1", "plugins/Memory"]);
-    run("Memory types", "bun", ["./node_modules/typescript/bin/tsc", "--noEmit", "-p", "plugins/Memory/tsconfig.json"]);
+    run("initialize pinned Memory", "git", ["submodule", "update", "--init", "--depth", "1", "packages/memory"]);
+    run("Memory types", "bun", ["./node_modules/typescript/bin/tsc", "--noEmit", "-p", "packages/memory/tsconfig.json"]);
     run("Memory integration", "bun", [
       "test",
       "--timeout=30000",
       "--max-concurrency=1",
-      "plugins/Memory/test/memory-plugin.test.ts",
+      "packages/memory/test/memory-plugin.test.ts",
     ]);
   },
   release() {
