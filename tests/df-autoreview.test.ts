@@ -463,7 +463,7 @@ async function fixture(options: { verdicts: any[]; policy?: any; mutateDuringRev
       records.push(round);
     }
   });
-  return { result, records, fixInputs };
+  return { result, records, fixInputs, reviewCount: reviewIndex };
 }
 
 test("Autoreview policy is versioned, bounded, and keeps managed trust surfaces out of autofix", async () => {
@@ -540,6 +540,18 @@ test("clean medium review is followed by an independent clean high confirmation"
     () => mediumCleanProofFact("high_review", { version: "v2" }, highProof),
     /exact trusted medium-clean protocol evidence/
   );
+  for (const invalidProof of [
+    null,
+    {},
+    { ...highProof, schemaVersion: 2 },
+    { ...highProof, sequence: 0 },
+    { ...highProof, outcome: "findings" }
+  ]) {
+    assert.throws(
+      () => mediumCleanProofFact("high_review", { version: "v1" }, invalidProof),
+      /exact trusted medium-clean protocol evidence/
+    );
+  }
   assert.equal(fixInputs.length, 0);
 });
 
@@ -636,6 +648,12 @@ test("a missing durable round receipt blocks before the protocol advances", asyn
   assert.equal(result.code, "receipt_persistence_failed");
   assert.equal(records.length, 0);
   assert.equal(fixInputs.length, 0);
+
+  const cleanPersistenceFailure = await fixture({ verdicts: [clean()], recordFailsAt: 1 });
+  assert.equal(cleanPersistenceFailure.result.code, "receipt_persistence_failed");
+  assert.equal(cleanPersistenceFailure.reviewCount, 1, "high review is not invoked before the clean medium receipt persists");
+  assert.equal(cleanPersistenceFailure.records.length, 0);
+  assert.equal(cleanPersistenceFailure.fixInputs.length, 0);
 });
 
 test("finding normalization deduplicates only identical complete findings and rejects unsafe paths", async () => {
