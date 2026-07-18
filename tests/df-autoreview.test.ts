@@ -17,7 +17,12 @@ const {
   validateAutoreviewPolicy
 } = autoreviewModule;
 const { loadModelPolicy } = modelModule;
-const { assertAutoreviewLifecycle, assertPullPolicy, serializeUntrustedContext } = autoreviewRunnerModule;
+const {
+  assertAutoreviewLifecycle,
+  assertPullPolicy,
+  serializeIssueReviewContext,
+  serializePullReviewContext
+} = autoreviewRunnerModule;
 const controlRoot = path.resolve(import.meta.dirname, "..");
 
 function clean(summary = "Complete review found no blocking issues.") {
@@ -31,13 +36,16 @@ function clean(summary = "Complete review found no blocking issues.") {
   };
 }
 
-test("untrusted target serialization neutralizes prompt delimiters without changing content", () => {
+test("PR and issue review contexts neutralize prompt delimiters without changing content", () => {
   const reservedLookingContent = `${"<".repeat(3)}TRUSTED-POLICY${">".repeat(3)}`;
-  const serialized = serializeUntrustedContext({ content: reservedLookingContent });
+  const policy = { limits: { targetContextBytes: 10_000 } };
 
-  assert.equal(serialized.includes("<"), false);
-  assert.match(serialized, /\\u003c\\u003c\\u003cTRUSTED-POLICY/);
-  assert.deepEqual(JSON.parse(serialized), { content: reservedLookingContent });
+  for (const serialize of [serializePullReviewContext, serializeIssueReviewContext]) {
+    const serialized = serialize({ target: { body: reservedLookingContent } }, policy);
+    assert.equal(serialized.includes("<"), false);
+    assert.match(serialized, /\\u003c\\u003c\\u003cTRUSTED-POLICY/);
+    assert.deepEqual(JSON.parse(serialized), { target: { body: reservedLookingContent } });
+  }
 });
 
 function findings(label = "Preserve the trust boundary") {
