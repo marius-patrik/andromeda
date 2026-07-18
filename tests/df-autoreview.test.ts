@@ -158,6 +158,8 @@ test("exact Git tree evidence is strict, bounded, and keeps gitlinks out of auto
     oid,
     baseOid: null,
     headOid: oid,
+    replacementMode: null,
+    replacementOid: null,
     contentKind: "none",
     autofixEligible: false,
     sha256: null,
@@ -185,8 +187,22 @@ test("exact Git tree evidence is strict, bounded, and keeps gitlinks out of auto
   const replacementBlob = { ...blob, path: gitlink.path };
   const replacedGitlink = classifyChangedTreeEntry(gitlink.path, [gitlink], [replacementBlob]);
   assert.deepEqual(
-    { kind: replacedGitlink.kind, contentKind: replacedGitlink.contentKind, baseOid: replacedGitlink.baseOid, autofixEligible: replacedGitlink.autofixEligible },
-    { kind: "gitlink", contentKind: "blob", baseOid: oid, autofixEligible: false },
+    replacedGitlink,
+    {
+      path: gitlink.path,
+      kind: "gitlink",
+      deleted: false,
+      mode: "160000",
+      oid,
+      baseOid: oid,
+      headOid: null,
+      replacementMode: "100644",
+      replacementOid: oid,
+      contentKind: "blob",
+      autofixEligible: false,
+      sha256: null,
+      content: null,
+    },
   );
   assert.throws(() => classifyChangedTreeEntry("../unsafe", [], []), /unsafe changed path/);
   assert.throws(() => classifyChangedTreeEntry(gitlink.path, [], [gitlink, gitlink]), /ambiguous exact-tree evidence/);
