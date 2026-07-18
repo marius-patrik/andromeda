@@ -26,15 +26,11 @@ const {
   gitlinkManifestFact,
   gitlinkManifestFromEntries,
   indexExactTreeEntries,
-  isTrustedZeroDiffReconciliation,
   parseChangedPaths,
   parseExactCommitRecord,
   parseGitTreeEntries,
-  resultComment,
   serializeIssueReviewContext,
   serializePullReviewContext,
-  runAutoreviewForTarget,
-  autoreviewResultLedger,
   trustedPullRevisionEvidence,
   trustedPullRevisionEvidenceForPolicy,
   trustedPullRevisionFacts,
@@ -362,15 +358,16 @@ test("trusted revision evidence compacts bounded-depth octopus ancestry without 
     "token",
     "hooks",
     [],
-    () => { ordinaryGitCalls += 1; throw new Error("ordinary PR must not collect bypass evidence"); },
+    () => { ordinaryGitCalls += 1; throw new Error("ordinary PR must not collect engine-only revision evidence"); },
   ), null);
   assert.equal(ordinaryGitCalls, 0);
 });
 
-test("trusted engine zero-diff reconciliation bypasses every model round after exact revalidation", async () => {
+test("trusted engine zero-diff reconciliation runs the normal provider-agnostic review protocol", async () => {
+  const policy = await loadAutoreviewPolicy(controlRoot);
+  const modelPolicy = await loadModelPolicy(controlRoot);
   const base = "a".repeat(40);
   const head = "b".repeat(40);
-  const tree = "c".repeat(40);
   const snapshot = {
     kind: "pull_request",
     repository: "marius-patrik/Andromeda",
@@ -380,155 +377,17 @@ test("trusted engine zero-diff reconciliation bypasses every model round after e
     headSha: head,
     headRef: "reconcile/main-into-dev",
     engineAutomation: true,
-    engineActorDecision: {
-      normalizedActor: "darkfactory-agent",
-      login: "darkfactory-agent[bot]",
-      type: "Bot",
-      typename: null,
-      ownedBranch: "reconcile/main-into-dev",
-    },
     files: {},
-    trustedRevisionProof: {
-      base,
-      head,
-      baseTree: tree,
-      headTree: tree,
-      mergeBase: base,
-      baseIsAncestor: true,
-      reachedBase: true,
-      complete: true,
-      changedPathCount: 0,
-      changedPathDigest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    },
+    verifiedFacts: [
+      `Exact fetched revision proof: baseCommit=${base}; headCommit=${head}; baseIsAncestor=true.`,
+      "Exact fetched changed-path inventory: count=0,orderedNulSha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.",
+    ],
   };
-  let reads = 0;
   let modelTurns = 0;
-  const result = await runAutoreviewForTarget({
-    target: { read: async () => { reads += 1; return snapshot; } },
-    policy: {},
-    modelPolicy: {},
-    review: async () => { modelTurns += 1; throw new Error("model route must not run"); },
-    record: async () => { throw new Error("model round must not be recorded"); },
-  });
-
-  assert.equal(isTrustedZeroDiffReconciliation(snapshot), true);
-  assert.equal(reads, 2);
-  assert.equal(modelTurns, 0);
-  assert.deepEqual(result, {
-    schemaVersion: 1,
-    ok: true,
-    state: "trusted_zero_diff",
-    code: null,
-    targetVersion: snapshot.version,
-    rounds: [],
-    trustedEvidence: {
-      schemaVersion: 1,
-      admission: "trusted_engine_zero_diff",
-      actorDecision: snapshot.engineActorDecision,
-      headRef: snapshot.headRef,
-      baseSha: base,
-      headSha: head,
-      revisionProof: snapshot.trustedRevisionProof,
-    },
-  });
-  assert.deepEqual(autoreviewResultLedger(result), {
-    ok: true,
-    state: "trusted_zero_diff",
-    code: null,
-    targetVersion: snapshot.version,
-    rounds: [],
-    trustedEvidence: result.trustedEvidence,
-  });
-  assert.match(resultComment(result), /\*\*Verdict:\*\* Trusted zero-diff reconciliation/);
-  assert.match(resultComment(result), /No model review rounds were run/);
-  assert.match(resultComment(result), /protected base is the exact merge base/);
-  assert.doesNotMatch(resultComment(result), /complete first-parent ancestry/);
-  assert.doesNotMatch(resultComment(result), /complete medium review was clean/);
-});
-
-test("zero-diff admission rejects incomplete trust evidence, detects a revalidation race, and otherwise uses normal review", async () => {
-  const policy = await loadAutoreviewPolicy(controlRoot);
-  const modelPolicy = await loadModelPolicy(controlRoot);
-  const base = "a".repeat(40);
-  const head = "b".repeat(40);
-  const tree = "c".repeat(40);
-  const emptyDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-  const trusted = {
-    kind: "pull_request",
-    repository: "marius-patrik/Andromeda",
-    number: 306,
-    version: `${base}:${head}`,
-    baseSha: base,
-    headSha: head,
-    headRef: "release/dev-to-main",
-    engineAutomation: true,
-    engineActorDecision: {
-      normalizedActor: "darkfactory-agent",
-      login: "darkfactory-agent[bot]",
-      type: "Bot",
-      typename: null,
-      ownedBranch: "release/dev-to-main",
-    },
-    files: {},
-    trustedRevisionProof: {
-      base,
-      head,
-      baseTree: tree,
-      headTree: tree,
-      mergeBase: base,
-      baseIsAncestor: true,
-      reachedBase: true,
-      complete: true,
-      changedPathCount: 0,
-      changedPathDigest: emptyDigest,
-    },
-  };
-
-  for (const rejected of [
-    { ...trusted, engineAutomation: false },
-    { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, headTree: "d".repeat(40) } },
-    { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, mergeBase: "d".repeat(40), baseIsAncestor: false } },
-    { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, changedPathCount: 1 } },
-    { ...trusted, files: { "reviewable.txt": { sha256: "f".repeat(64) } } },
-  ]) assert.equal(isTrustedZeroDiffReconciliation(rejected), false);
-  assert.equal(isTrustedZeroDiffReconciliation({
-    ...trusted,
-    trustedRevisionProof: {
-      ...trusted.trustedRevisionProof,
-      reachedBase: false,
-      complete: false,
-      ancestryBoundedOut: true,
-    },
-  }), true);
-
-  let staleReads = 0;
-  await assert.rejects(
-    () => runAutoreviewForTarget({
-      target: {
-        read: async () => {
-          staleReads += 1;
-          return staleReads === 1 ? trusted : { ...trusted, version: `${base}:${"d".repeat(40)}` };
-        },
-      },
-      policy,
-      modelPolicy,
-      review: async () => { throw new Error("model route must not run before zero-diff revalidation"); },
-      record: async () => {},
-    }),
-    (error: any) => error?.code === "stale_target",
-  );
-
-  let modelTurns = 0;
-  const normalSnapshot = {
-    ...trusted,
-    engineAutomation: false,
-    files: { "reviewable.txt": { sha256: "f".repeat(64) } },
-    trustedRevisionProof: { ...trusted.trustedRevisionProof, changedPathCount: 1 },
-  };
-  const normal = await runAutoreviewForTarget({
+  const result = await runAutoreview({
     target: {
-      read: async () => normalSnapshot,
-      fix: async () => { throw new Error("clean normal review must not request a fix"); },
+      read: async () => snapshot,
+      fix: async () => { throw new Error("clean zero-diff review must not request a fix"); },
     },
     policy,
     modelPolicy,
@@ -538,7 +397,7 @@ test("zero-diff admission rejects incomplete trust evidence, detects a revalidat
     },
     record: async () => {},
   });
-  assert.equal(normal.state, "clean");
+  assert.equal(result.state, "clean");
   assert.equal(modelTurns, 2);
 });
 

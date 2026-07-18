@@ -182,7 +182,7 @@ async function observePullRecoveryCandidate(repository, pull, admittedCommentId 
   );
   const gate = await currentTrustedPullGate(repository, pull, checks);
   if (gate.state === "pending") return null;
-  if (gate.state === "green" && isSuccessfulPullCompletion(completion)) return null;
+  if (gate.state === "green" && isSuccessfulCompletion(completion)) return null;
 
   const base = {
     kind: "pull_request",
@@ -205,7 +205,7 @@ async function observePullRecoveryCandidate(repository, pull, admittedCommentId 
   return {
     ...base,
     recoveryAction: "rerun-pull-request-target",
-    recoveryReason: isSuccessfulPullCompletion(completion)
+    recoveryReason: completion === "clean" || completion === "owner_override"
       ? "successful-comment-with-red-gate"
       : completion === "blocked" ? "blocked-result" : "missing-or-stale-result"
   };
@@ -616,10 +616,7 @@ async function assertIssueCandidateCurrent(candidate, admittedCommentId = null) 
 
 function assertNoConcurrentResult(candidate, comments, admittedCommentId, issue = null) {
   const completion = classifyExactAutoreviewResult(comments, candidate.version);
-  const successful = candidate.kind === "pull_request"
-    ? isSuccessfulPullCompletion(completion)
-    : isSuccessfulCompletion(completion);
-  if (successful) {
+  if (isSuccessfulCompletion(completion)) {
     if (candidate.kind === "pull_request" || issueLabels(issue).has("df:reviewed")) return true;
   }
   const kind = candidate.kind === "pull_request" ? "pull-request" : "issue";
@@ -634,10 +631,6 @@ function assertNoConcurrentResult(candidate, comments, admittedCommentId, issue 
 
 function isSuccessfulCompletion(value) {
   return value === "clean" || value === "owner_override";
-}
-
-export function isSuccessfulPullCompletion(value) {
-  return isSuccessfulCompletion(value) || value === "trusted_zero_diff";
 }
 
 function issueLabels(issue) {
