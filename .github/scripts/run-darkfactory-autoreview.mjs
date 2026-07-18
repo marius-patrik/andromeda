@@ -144,7 +144,8 @@ export async function runComposedTurn({
             observedAt: new Date().toISOString(),
             facts: [
               `Target ${snapshot.kind} ${snapshot.number} is open at version ${snapshot.version}.`,
-              `Repository default branch is ${snapshot.defaultBranch}.`
+              `Repository default branch is ${snapshot.defaultBranch}.`,
+              ...(Array.isArray(snapshot.verifiedFacts) ? snapshot.verifiedFacts : [])
             ]
           },
           effort: request.effort,
@@ -460,6 +461,41 @@ function trustedBaseRules(repoRoot, token, hooksRoot) {
   return sections;
 }
 
+export function parseGitTreeEntries(output) {
+  const entries = Buffer.from(output || []).toString("utf8").split("\0").filter(Boolean).map((record) => {
+    const match = /^(\d{6}) (blob|tree|commit) ([0-9a-f]{40,64})\t([\s\S]+)$/.exec(record);
+    if (!match) throw stableError("target_policy_blocked", "Git returned a malformed exact-tree record");
+    return { mode: match[1], type: match[2], oid: match[3], path: assertSafeRepositoryPath(match[4]) };
+  });
+  const paths = new Set();
+  for (const entry of entries) {
+    if (paths.has(entry.path)) throw stableError("target_policy_blocked", "Git returned duplicate exact-tree paths");
+    paths.add(entry.path);
+  }
+  return entries;
+}
+
+function exactTreeEntries(repoRoot, ref, token, hooksRoot, pathspec = null) {
+  const args = ["ls-tree", "-r", "-z", ref];
+  if (pathspec !== null) args.push("--", pathspec);
+  return parseGitTreeEntries(runGit(args, repoRoot, token, hooksRoot, { binary: true, maxBuffer: 16 * 1024 * 1024 }));
+}
+
+function exactGitlinkManifest(repoRoot, ref, token, hooksRoot) {
+  const gitlinks = exactTreeEntries(repoRoot, ref, token, hooksRoot)
+    .filter((entry) => entry.mode === "160000" && entry.type === "commit")
+    .map((entry) => ({ path: entry.path, oid: entry.oid }));
+  if (gitlinks.length > 200) throw stableError("target_policy_blocked", "Exact gitlink manifest exceeds the Autoreview bound");
+  return gitlinks;
+}
+
+function gitlinkManifestFact(label, manifest) {
+  const rendered = manifest.length > 0
+    ? manifest.map((entry) => `${entry.path}=${entry.oid}`).join("; ")
+    : "none";
+  return `Exact fetched ${label} gitlink manifest: ${rendered}.`;
+}
+
 function changedPullFiles(repoRoot, token, hooksRoot) {
   const names = runGit(
     ["diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "refs/remotes/origin/df-base...refs/remotes/origin/df-head"],
@@ -476,6 +512,20 @@ function changedPullFiles(repoRoot, token, hooksRoot) {
     const foldedPath = filePath.toLowerCase();
     if (caseFoldedPaths.has(foldedPath)) throw stableError("target_policy_blocked", "Pull request contains case-colliding changed paths");
     caseFoldedPaths.add(foldedPath);
+    const entries = exactTreeEntries(repoRoot, "refs/remotes/origin/df-head", token, hooksRoot, filePath);
+    if (entries.length === 0) {
+      reviewedFiles.push({ path: filePath, kind: "deleted", deleted: true, mode: null, oid: null, sha256: null, content: null });
+      continue;
+    }
+    if (entries.length !== 1 || entries[0].path !== filePath) {
+      throw stableError("target_policy_blocked", `Changed path ${filePath} has ambiguous exact-tree evidence`);
+    }
+    const entry = entries[0];
+    if (entry.mode === "160000" && entry.type === "commit") {
+      reviewedFiles.push({ path: filePath, kind: "gitlink", deleted: false, mode: entry.mode, oid: entry.oid, sha256: null, content: null });
+      continue;
+    }
+    if (entry.type !== "blob") throw stableError("target_policy_blocked", `Changed path ${filePath} is not a reviewable blob or gitlink`);
     const child = spawnSync("git", ["show", `refs/remotes/origin/df-head:${filePath}`], {
       cwd: repoRoot,
       encoding: null,
@@ -484,8 +534,7 @@ function changedPullFiles(repoRoot, token, hooksRoot) {
       windowsHide: true
     });
     if (child.status !== 0) {
-      reviewedFiles.push({ path: filePath, deleted: true, sha256: null, content: null });
-      continue;
+      throw stableError("target_policy_blocked", `Changed blob ${filePath} cannot be read from the exact head`);
     }
     const content = Buffer.from(child.stdout || []);
     if (content.length > TEXT_FILE_BYTES || content.includes(0)) {
@@ -501,7 +550,7 @@ function changedPullFiles(repoRoot, token, hooksRoot) {
     const lower = filePath.toLowerCase();
     const isTest = /(^|\/)(?:test|tests|__tests__)(\/|$)|(?:\.test|\.spec)\.[a-z0-9]+$/.test(lower);
     files[filePath] = { sha256: hash, isTest };
-    reviewedFiles.push({ path: filePath, deleted: false, sha256: hash, content: decoded });
+    reviewedFiles.push({ path: filePath, kind: "file", deleted: false, mode: entry.mode, oid: entry.oid, sha256: hash, content: decoded });
   }
   return { files, reviewedFiles };
 }
@@ -595,6 +644,14 @@ export async function createPullRequestTarget({
       linkedIssues.push({ number: issue.number, title: issue.title || "", body: issue.body || "", labels: (issue.labels || []).map((label) => label.name || label) });
     }
     const changed = changedPullFiles(repoRoot, token, hooksRoot);
+    runGit(
+      ["diff", "--check", "refs/remotes/origin/df-base...refs/remotes/origin/df-head", "--"],
+      repoRoot,
+      token,
+      hooksRoot
+    );
+    const baseGitlinks = exactGitlinkManifest(repoRoot, "refs/remotes/origin/df-base", token, hooksRoot);
+    const headGitlinks = exactGitlinkManifest(repoRoot, "refs/remotes/origin/df-head", token, hooksRoot);
     const reviewContext = ensureContextBounded(JSON.stringify({
       target: {
         kind: "pull_request",
@@ -622,6 +679,11 @@ export async function createPullRequestTarget({
       url: pull.html_url || `https://github.com/${repoName(repository)}/pull/${number}`,
       reviewContext,
       files: changed.files,
+      verifiedFacts: [
+        `Exact fetched diff passed git diff --check for ${pull.base.sha}...${pull.head.sha}.`,
+        gitlinkManifestFact("base", baseGitlinks),
+        gitlinkManifestFact("head", headGitlinks)
+      ],
       headSha: pull.head.sha,
       baseSha: pull.base.sha,
       headRef: pull.head.ref

@@ -17,7 +17,7 @@ const {
   validateAutoreviewPolicy
 } = autoreviewModule;
 const { loadModelPolicy } = modelModule;
-const { assertAutoreviewLifecycle, assertPullPolicy } = autoreviewRunnerModule;
+const { assertAutoreviewLifecycle, assertPullPolicy, parseGitTreeEntries } = autoreviewRunnerModule;
 const controlRoot = path.resolve(import.meta.dirname, "..");
 
 function clean(summary = "Complete review found no blocking issues.") {
@@ -112,6 +112,19 @@ function prompt(request: any) {
     artifacts: [{ id: "output/pr-reviewer", version: "0.3.0", checksum }]
   };
 }
+
+test("exact Git tree parsing preserves gitlink OIDs and rejects ambiguous records", () => {
+  const oid = "a".repeat(40);
+  assert.deepEqual(
+    parseGitTreeEntries(Buffer.from(`160000 commit ${oid}\tpackages/darkfactory\0`)),
+    [{ mode: "160000", type: "commit", oid, path: "packages/darkfactory" }],
+  );
+  assert.throws(
+    () => parseGitTreeEntries(Buffer.from(`160000 commit ${oid}\tpackages/darkfactory\u0000160000 commit ${oid}\tpackages/darkfactory\u0000`)),
+    /duplicate exact-tree paths/,
+  );
+  assert.throws(() => parseGitTreeEntries(Buffer.from("malformed\0")), /malformed exact-tree record/);
+});
 
 async function fixture(options: { verdicts: any[]; policy?: any; mutateDuringReviewAt?: number; recordFailsAt?: number; promptMismatchAt?: number }) {
   const policy = options.policy || await loadAutoreviewPolicy(controlRoot);
