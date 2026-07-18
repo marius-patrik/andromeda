@@ -143,9 +143,13 @@ export function classifyConvergence(mainSha, devSha, comparison, mainTreeSha = n
 
 export function evaluateRequiredChecks(protection, checkRuns, statuses, policyChecks) {
   const required = requiredCheckBindings(protection);
+  const policyNames = new Set(policyChecks);
   const expected = new Map(policyChecks.map((name) => [name, ACTIONS_APP_ID]));
   for (const binding of required) {
-    expected.set(binding.context, binding.appId ?? expected.get(binding.context) ?? null);
+    expected.set(
+      binding.context,
+      policyNames.has(binding.context) ? ACTIONS_APP_ID : (binding.appId ?? null)
+    );
   }
   const latest = new Map();
   for (const run of Array.isArray(checkRuns?.check_runs) ? checkRuns.check_runs : []) {
@@ -170,7 +174,7 @@ export function evaluateRequiredChecks(protection, checkRuns, statuses, policyCh
   }
   const checks = [...expected].map(([name, expectedAppId]) => {
     const actual = latest.get(name);
-    const appBound = expectedAppId === null || (actual?.appId === expectedAppId && actual.appId === ACTIONS_APP_ID);
+    const appBound = expectedAppId === null || actual?.appId === expectedAppId;
     return {
       name, expectedAppId, actualAppId: actual?.appId ?? null,
       id: actual?.id ?? null, url: actual?.url ?? null,
