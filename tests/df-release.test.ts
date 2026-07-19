@@ -185,7 +185,10 @@ test("release check evidence is complete and bound to the exact trusted workflow
         const suiteId = Number(path.match(/check_suite_id=(\d+)/)?.[1]);
         return { total_count: 1, workflow_runs: [{
           id: suiteId + 700, check_suite_id: suiteId, head_sha: SHA.main, path: workflowPaths.get(suiteId),
-          event: "push", status: "completed", conclusion: "success", run_attempt: 1
+          event: "push", head_branch: "main",
+          repository: { id: 42, full_name: "marius-patrik/example" },
+          head_repository: { id: 42, full_name: "marius-patrik/example" },
+          pull_requests: [], status: "completed", conclusion: "success", run_attempt: 1
         }] };
       }
       if (path.includes("/status?") && path.endsWith("page=1")) {
@@ -352,6 +355,14 @@ test("standard policy gates require exact and unambiguous workflow provenance", 
     head_sha: SHA.main,
     path: `${suiteId === 911 ? ".github/workflows/darkfactory-autoreview.yml" : ".github/workflows/ci.yml"}@main`,
     event: suiteId === 911 ? "workflow_dispatch" : "pull_request",
+    head_branch: suiteId === 911 ? "main" : "feature",
+    repository: { id: 42, full_name: "marius-patrik/example" },
+    head_repository: { id: 42, full_name: "marius-patrik/example" },
+    pull_requests: suiteId === 911 ? [] : [{
+      number: 7,
+      head: { ref: "feature", sha: SHA.main, repo: { id: 42 } },
+      base: { ref: "main", sha: SHA.dev, repo: { id: 42 } }
+    }],
     status: "completed",
     conclusion: "success",
     run_attempt: 1
@@ -378,6 +389,7 @@ test("standard policy gates require exact and unambiguous workflow provenance", 
     { name: "wrong path", run: { ...workflowRun(910), path: ".github/workflows/untrusted.yml" } },
     { name: "wrong ref", run: { ...workflowRun(910), path: ".github/workflows/ci.yml@feature" } },
     { name: "wrong event", run: { ...workflowRun(910), event: "issues" } },
+    { name: "wrong repository", run: { ...workflowRun(910), head_repository: { id: 43, full_name: "attacker/example" } } },
     { name: "wrong head", run: { ...workflowRun(910), head_sha: SHA.dev } },
     { name: "wrong suite", run: { ...workflowRun(910), check_suite_id: 999 } },
     { name: "wrong state", run: { ...workflowRun(910), status: "in_progress", conclusion: null } },
@@ -402,6 +414,35 @@ test("standard policy gates require exact and unambiguous workflow provenance", 
   );
   assert.equal(ambiguous.check_runs[0]._trustedPolicyWorkflow, false);
   assert.deepEqual(release.evaluatePolicySelectedChecks(ambiguous, { statuses: [] }, ["Validate"]).red, ["Validate"]);
+
+  let baseWorkflowSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const unqualified = { ...workflowRun(910), path: ".github/workflows/ci.yml" };
+  release.configureReleaseRuntime({
+    gh: {
+      request: async (_method: string, path: string) => {
+        if (path.includes("/actions/runs?")) return { total_count: 1, workflow_runs: [unqualified] };
+        if (path.includes("/contents/.github/workflows/ci.yml?")) {
+          return {
+            type: "file",
+            sha: path.includes(encodeURIComponent(SHA.main))
+              ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              : baseWorkflowSha
+          };
+        }
+        throw new Error(`unexpected mocked request: ${path}`);
+      }
+    },
+    controlRepo: { owner: "marius-patrik", repo: "DarkFactory" }
+  });
+  const sameDefinition = await release.bindTrustedPolicyCheckRuns(
+    repo(), SHA.main, { total_count: 1, check_runs: [checks[0]] }, ["Validate"]
+  );
+  assert.equal(sameDefinition.check_runs[0]._trustedPolicyWorkflow, true);
+  baseWorkflowSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  const headControlled = await release.bindTrustedPolicyCheckRuns(
+    repo(), SHA.main, { total_count: 1, check_runs: [checks[0]] }, ["Validate"]
+  );
+  assert.equal(headControlled.check_runs[0]._trustedPolicyWorkflow, false);
 
   let workflowReads = 0;
   release.configureReleaseRuntime({
@@ -938,8 +979,16 @@ function workflowRuns(path: string, headSha: string, conclusion = "success") {
       id: suiteId + 1000,
       check_suite_id: suiteId,
       head_sha: headSha,
-      path: autoreview ? ".github/workflows/darkfactory-autoreview.yml" : ".github/workflows/ci.yml",
+      path: `${autoreview ? ".github/workflows/darkfactory-autoreview.yml" : ".github/workflows/ci.yml"}@main`,
       event: autoreview ? "pull_request_target" : "pull_request",
+      head_branch: "release-test",
+      repository: { id: 42, full_name: "marius-patrik/example" },
+      head_repository: { id: 42, full_name: "marius-patrik/example" },
+      pull_requests: [{
+        number: 7,
+        head: { ref: "release-test", sha: headSha, repo: { id: 42 } },
+        base: { ref: "main", sha: SHA.dev, repo: { id: 42 } }
+      }],
       status: "completed",
       conclusion,
       run_attempt: 1

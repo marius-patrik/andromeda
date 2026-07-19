@@ -30,12 +30,12 @@ const MAX_COMMIT_STATUSES = 2000;
 const TRUSTED_POLICY_WORKFLOWS = Object.freeze({
   "Validate": Object.freeze({
     path: ".github/workflows/ci.yml",
-    refs: Object.freeze(["main", "refs/heads/main"]),
+    refs: Object.freeze(["main", "dev", "refs/heads/main", "refs/heads/dev"]),
     events: Object.freeze(["pull_request", "push"])
   }),
   "DarkFactory Autoreview": Object.freeze({
     path: ".github/workflows/darkfactory-autoreview.yml",
-    refs: Object.freeze(["main", "refs/heads/main"]),
+    refs: Object.freeze(["main", "dev", "refs/heads/main", "refs/heads/dev"]),
     events: Object.freeze(["pull_request_target", "workflow_dispatch"])
   })
 });
@@ -786,10 +786,10 @@ async function isTrustedPolicyWorkflowRun(repository, sha, checkRun, binding) {
   if (!isRecord(run)
       || run.check_suite_id !== suiteId
       || run.head_sha !== sha
-      || !isTrustedWorkflowPath(run.path, binding)
       || !binding.events.includes(run.event)
       || !Number.isSafeInteger(run.id) || run.id < 1
       || !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1) return false;
+  if (!await hasTrustedWorkflowProvenance(repository, sha, run, binding)) return false;
   if (checkRun.status === "completed") {
     return run.status === "completed" && run.conclusion === checkRun.conclusion;
   }
@@ -836,6 +836,12 @@ async function scanCompleteWorkflowRuns(repository, suiteId) {
         headSha: run.head_sha ?? null,
         path: run.path ?? null,
         event: run.event ?? null,
+        headBranch: run.head_branch ?? null,
+        repository: run?.repository?.full_name ?? null,
+        repositoryId: run?.repository?.id ?? null,
+        headRepository: run?.head_repository?.full_name ?? null,
+        headRepositoryId: run?.head_repository?.id ?? null,
+        pullRequests: workflowPullEvidence(run.pull_requests),
         status: run.status ?? null,
         conclusion: run.conclusion ?? null,
         runAttempt: run.run_attempt ?? null
@@ -847,13 +853,83 @@ async function scanCompleteWorkflowRuns(repository, suiteId) {
   throw new Error("release workflow-run binding exceeded the bounded page limit");
 }
 
-function isTrustedWorkflowPath(value, binding) {
+async function hasTrustedWorkflowProvenance(repository, sha, run, binding) {
+  const pathEvidence = trustedWorkflowPath(run.path, binding);
+  if (!pathEvidence) return false;
+  const fullName = repoName(repository);
+  if (String(run?.repository?.full_name || "").toLowerCase() !== fullName.toLowerCase()
+      || String(run?.head_repository?.full_name || "").toLowerCase() !== fullName.toLowerCase()
+      || !Number.isSafeInteger(run?.repository?.id) || run.repository.id < 1
+      || run?.head_repository?.id !== run.repository.id) return false;
+
+  let trustedRef = null;
+  let trustedBaseSha = null;
+  if (["pull_request", "pull_request_target"].includes(run.event)) {
+    const pulls = Array.isArray(run.pull_requests) ? run.pull_requests : [];
+    if (pulls.length !== 1) return false;
+    const [pull] = pulls;
+    if (!isRecord(pull)
+        || pull?.head?.sha !== sha
+        || pull?.head?.ref !== run.head_branch
+        || pull?.head?.repo?.id !== run.head_repository.id
+        || pull?.base?.repo?.id !== run.repository.id
+        || typeof pull?.base?.ref !== "string"
+        || typeof pull?.base?.sha !== "string" || !/^[0-9a-f]{40}$/i.test(pull.base.sha)) return false;
+    trustedRef = pull.base.ref;
+    trustedBaseSha = pull.base.sha;
+  } else if (["push", "workflow_dispatch"].includes(run.event)) {
+    if (!Array.isArray(run.pull_requests) || run.pull_requests.length !== 0 || typeof run.head_branch !== "string") return false;
+    trustedRef = run.head_branch;
+  } else {
+    return false;
+  }
+  if (!binding.refs.includes(trustedRef) && !binding.refs.includes(`refs/heads/${trustedRef}`)) return false;
+  if (pathEvidence.ref && pathEvidence.ref !== trustedRef && pathEvidence.ref !== `refs/heads/${trustedRef}`) return false;
+
+  if (run.event === "pull_request" && !pathEvidence.ref) {
+    return await workflowFileMatchesTrustedBase(repository, binding.path, sha, trustedBaseSha);
+  }
+  return true;
+}
+
+function trustedWorkflowPath(value, binding) {
   if (typeof value !== "string") return false;
   const separator = value.indexOf("@");
   const workflowPath = separator === -1 ? value : value.slice(0, separator);
   const workflowRef = separator === -1 ? null : value.slice(separator + 1);
   if (workflowPath !== binding.path) return false;
-  return workflowRef === null || (workflowRef.length > 0 && !workflowRef.includes("@") && binding.refs.includes(workflowRef));
+  if (workflowRef !== null && (workflowRef.length === 0 || workflowRef.includes("@") || !binding.refs.includes(workflowRef))) {
+    return false;
+  }
+  return { path: workflowPath, ref: workflowRef };
+}
+
+async function workflowFileMatchesTrustedBase(repository, workflowPath, headSha, baseSha) {
+  const endpoint = `/repos/${repoName(repository)}/contents/${workflowPath}`;
+  const [head, base] = await Promise.all([
+    gh.request("GET", `${endpoint}?ref=${encodeURIComponent(headSha)}`),
+    gh.request("GET", `${endpoint}?ref=${encodeURIComponent(baseSha)}`)
+  ]);
+  return isRecord(head)
+    && isRecord(base)
+    && head.type === "file"
+    && base.type === "file"
+    && typeof head.sha === "string"
+    && /^[0-9a-f]{40}$/i.test(head.sha)
+    && head.sha === base.sha;
+}
+
+function workflowPullEvidence(value) {
+  if (!Array.isArray(value)) return null;
+  return value.map((pull) => ({
+    number: pull?.number ?? null,
+    headRef: pull?.head?.ref ?? null,
+    headSha: pull?.head?.sha ?? null,
+    headRepoId: pull?.head?.repo?.id ?? null,
+    baseRef: pull?.base?.ref ?? null,
+    baseSha: pull?.base?.sha ?? null,
+    baseRepoId: pull?.base?.repo?.id ?? null
+  })).sort((left, right) => Number(left.number ?? 0) - Number(right.number ?? 0));
 }
 
 async function assertRefsUnchanged(repository, mainSha, devSha) {
