@@ -274,6 +274,10 @@ def wake(
 ) -> None:
     target_workspace = _resolve_workspace(workspace)
     target_lineage = _resolve_lineage(target_workspace, lineage)
+    console.print(
+        f"[dim]Loading Genesis runtime for lineage [bold]{target_lineage}[/bold] "
+        f"in workspace [bold]{target_workspace}[/bold] ({device})...[/dim]"
+    )
     runtime = load_runtime(
         target_workspace,
         lineage_id=target_lineage,
@@ -283,26 +287,30 @@ def wake(
             temperature=temperature,
         ),
     )
+    console.print("[green]Genesis Organism awake.[/green]\n")
 
     async def run_once(content: str, session_id: str | None) -> str:
-        result = await runtime.observe(
-            Observation(source="user", content=content), session_id=session_id
-        )
-        for output in result.messages:
-            console.print(output)
-        if not result.messages:
-            console.print(
-                f"[dim]No communication.respond output. Tools: "
-                f"{[value.tool for value in result.tool_results]}[/dim]"
+        with console.status("[bold green]Organism observing & reasoning...[/bold green]"):
+            result = await runtime.observe(
+                Observation(source="user", content=content), session_id=session_id
             )
+        for output in result.messages:
+            console.print(f"[bold cyan]genesis>[/bold cyan] {output}")
         return result.session_id
 
     if interactive:
         active_session = session
-        console.print("Interactive Wake session. Enter /exit to stop.")
+        console.print("[bold]Interactive Wake session.[/bold] Type your message and press Enter. Enter /exit to stop.\n")
         while True:
-            content = console.input("[bold]you>[/bold] ")
+            try:
+                content = console.input("[bold yellow]you>[/bold yellow] ")
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Session closed.[/dim]")
+                break
+            if not content.strip():
+                continue
             if content.strip() in {"/exit", "/quit"}:
+                console.print("[dim]Session closed.[/dim]")
                 break
             active_session = asyncio.run(run_once(content, active_session))
     elif message is not None:
