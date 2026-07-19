@@ -173,6 +173,21 @@ class WakeRuntime:
             )
             result.tool_results.append(forced)
         result.messages.extend(context.messages)
+        if not result.messages:
+            if result.tool_results:
+                output_texts = [
+                    str(t.output.get("text") or t.output.get("message") or "")
+                    for t in result.tool_results
+                    if isinstance(t.output, dict)
+                    and (t.output.get("text") or t.output.get("message"))
+                ]
+                if output_texts:
+                    result.messages.extend(output_texts)
+                else:
+                    tools_summary = ", ".join(t.tool for t in result.tool_results)
+                    result.messages.append(f"[Genesis Organism] Completed action trajectory: {tools_summary}")
+            else:
+                result.messages.append("[Genesis Organism] Observation recorded in autobiographical memory ledger.")
         result.yielded = bool(context.flags.get("yielded"))
         result.sleep_requested = bool(context.flags.get("sleep_requested"))
         result.final_sequence = self.ledger.latest_sequence()
