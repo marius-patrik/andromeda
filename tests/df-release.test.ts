@@ -202,7 +202,7 @@ test("release check evidence is complete and bound to the exact trusted workflow
   const statuses = await release.listCompleteCommitStatuses(repo(), SHA.main);
   assert.equal(statuses.statuses.length, 101);
   const trusted = await release.bindTrustedPolicyCheckRuns(repo(), SHA.main, complete, ["Validate"]);
-  assert.ok(trusted.check_runs.some((run: any) => run.id === finalCheck.id));
+  assert.equal(trusted.check_runs.find((run: any) => run.id === finalCheck.id)?._trustedPolicyWorkflow, true);
 
   const spoof = { ...finalCheck, id: 501, check_suite: { id: 901 } };
   const collision = await release.bindTrustedPolicyCheckRuns(
@@ -218,6 +218,128 @@ test("release check evidence is complete and bound to the exact trusted workflow
   );
   assert.equal(additional.check_runs[0].id, custom.id);
   assert.equal(release.evaluatePolicySelectedChecks(additional, { statuses: [] }, ["Artifact Scan"]).green, true);
+});
+
+test("release evidence inventories reject changing, duplicate, malformed, truncated, and oversized pages", async () => {
+  const completePage = (kind: "checks" | "statuses") => Array.from({ length: 100 }, (_, index) => kind === "checks"
+    ? { id: index + 1, name: `Check ${index}` }
+    : { id: index + 1, context: `Status ${index}` });
+  const cases = [
+    {
+      name: "changing total",
+      response: (kind: "checks" | "statuses", page: number) => page === 1
+        ? { total_count: 101, [kind === "checks" ? "check_runs" : "statuses"]: completePage(kind) }
+        : { total_count: 102, [kind === "checks" ? "check_runs" : "statuses"]: [{ id: 101 }] }
+    },
+    {
+      name: "duplicate id",
+      response: (kind: "checks" | "statuses", page: number) => page === 1
+        ? { total_count: 101, [kind === "checks" ? "check_runs" : "statuses"]: completePage(kind) }
+        : { total_count: 101, [kind === "checks" ? "check_runs" : "statuses"]: [{ id: 100 }] }
+    },
+    {
+      name: "malformed id",
+      response: (kind: "checks" | "statuses") => ({
+        total_count: 1, [kind === "checks" ? "check_runs" : "statuses"]: [{ id: 0 }]
+      })
+    },
+    {
+      name: "truncated page",
+      response: (kind: "checks" | "statuses") => ({
+        total_count: 101,
+        [kind === "checks" ? "check_runs" : "statuses"]: completePage(kind).slice(0, 99)
+      })
+    },
+    {
+      name: "oversized inventory",
+      response: (kind: "checks" | "statuses") => ({
+        total_count: 2001, [kind === "checks" ? "check_runs" : "statuses"]: []
+      })
+    }
+  ];
+  for (const kind of ["checks", "statuses"] as const) {
+    for (const scenario of cases) {
+      const gh = {
+        request: async (_method: string, path: string) => {
+          const page = Number(path.match(/page=(\d+)/)?.[1]);
+          return scenario.response(kind, page);
+        }
+      };
+      release.configureReleaseRuntime({ gh, controlRepo: { owner: "marius-patrik", repo: "DarkFactory" } });
+      const operation = kind === "checks"
+        ? release.listCompleteCheckRuns(repo(), SHA.main)
+        : release.listCompleteCommitStatuses(repo(), SHA.main);
+      await assert.rejects(operation, /release (check-run|commit-status) inventory/, `${kind}: ${scenario.name}`);
+    }
+  }
+});
+
+test("standard policy gates require exact and unambiguous workflow provenance", async () => {
+  const checks = [
+    {
+      id: 601, name: "Validate", head_sha: SHA.main, status: "completed", conclusion: "success",
+      app: { id: 15368 }, check_suite: { id: 910 }
+    },
+    {
+      id: 602, name: "DarkFactory Autoreview", head_sha: SHA.main, status: "completed", conclusion: "success",
+      app: { id: 15368 }, check_suite: { id: 911 }
+    }
+  ];
+  const workflowRun = (suiteId: number) => ({
+    id: suiteId + 1000,
+    check_suite_id: suiteId,
+    head_sha: SHA.main,
+    path: suiteId === 911 ? ".github/workflows/darkfactory-autoreview.yml" : ".github/workflows/ci.yml",
+    event: suiteId === 911 ? "workflow_dispatch" : "pull_request",
+    status: "completed",
+    conclusion: "success",
+    run_attempt: 1
+  });
+  let runs = new Map<number, any[]>([
+    [910, [workflowRun(910)]],
+    [911, [workflowRun(911)]]
+  ]);
+  const gh = {
+    request: async (_method: string, path: string) => {
+      const suiteId = Number(path.match(/check_suite_id=(\d+)/)?.[1]);
+      const workflowRuns = runs.get(suiteId) ?? [];
+      return { total_count: workflowRuns.length, workflow_runs: workflowRuns };
+    }
+  };
+  release.configureReleaseRuntime({ gh, controlRepo: { owner: "marius-patrik", repo: "DarkFactory" } });
+  const valid = await release.bindTrustedPolicyCheckRuns(
+    repo(), SHA.main, { total_count: 2, check_runs: checks }, checks.map((check) => check.name)
+  );
+  assert.ok(valid.check_runs.every((run: any) => run._trustedPolicyWorkflow === true));
+  assert.equal(release.evaluatePolicySelectedChecks(valid, { statuses: [] }, checks.map((check) => check.name)).green, true);
+
+  const invalidRuns = [
+    { name: "wrong path", run: { ...workflowRun(910), path: ".github/workflows/untrusted.yml" } },
+    { name: "wrong event", run: { ...workflowRun(910), event: "issues" } },
+    { name: "wrong head", run: { ...workflowRun(910), head_sha: SHA.dev } },
+    { name: "wrong suite", run: { ...workflowRun(910), check_suite_id: 999 } },
+    { name: "wrong state", run: { ...workflowRun(910), status: "in_progress", conclusion: null } },
+    { name: "wrong conclusion", run: { ...workflowRun(910), conclusion: "failure" } }
+  ];
+  for (const scenario of invalidRuns) {
+    runs = new Map([[910, [scenario.run]]]);
+    const bound = await release.bindTrustedPolicyCheckRuns(
+      repo(), SHA.main, { total_count: 1, check_runs: [checks[0]] }, ["Validate"]
+    );
+    assert.equal(bound.check_runs[0]._trustedPolicyWorkflow, false, scenario.name);
+    assert.deepEqual(
+      release.evaluatePolicySelectedChecks(bound, { statuses: [] }, ["Validate"]).red,
+      ["Validate"],
+      scenario.name
+    );
+  }
+
+  runs = new Map([[910, [workflowRun(910), { ...workflowRun(910), id: 1911 }]]]);
+  const ambiguous = await release.bindTrustedPolicyCheckRuns(
+    repo(), SHA.main, { total_count: 1, check_runs: [checks[0]] }, ["Validate"]
+  );
+  assert.equal(ambiguous.check_runs[0]._trustedPolicyWorkflow, false);
+  assert.deepEqual(release.evaluatePolicySelectedChecks(ambiguous, { statuses: [] }, ["Validate"]).red, ["Validate"]);
 });
 
 test("release plans are deterministic for identical, ahead, diverged, and blocked evidence", () => {
