@@ -170,13 +170,14 @@
     "packages/migrate/singularity"
   ],
   "scaffoldedComponents": [
-    "packages/agent",
-    "packages/app",
-    "packages/mainframe",
-    "packages/manager",
+    "packages/clients",
+    "packages/clients/app",
+    "packages/clients/terminal",
+    "packages/clients/web",
     "packages/migrate",
+    "packages/migrate/memory",
+    "packages/protocol",
     "packages/sdk",
-    "packages/terminal",
-    "packages/migrate/memory"
+    "packages/server"
   ]
 }

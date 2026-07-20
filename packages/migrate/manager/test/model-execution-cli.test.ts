@@ -8,7 +8,7 @@ import { canonicalChildEnvironment } from "../src/runtime-paths";
 import { ensureSharedState, sharedStateAt, writeSessionConfig, type SharedState } from "../src/state";
 
 const cliPath = path.resolve(import.meta.dir, "..", "src", "cli.ts");
-const repositoryRoot = path.resolve(import.meta.dir, "..", "..", "..");
+const repositoryRoot = path.resolve(import.meta.dir, "..", "..", "..", "..");
 const installerPath = path.join(repositoryRoot, "install", "install.sh");
 
 const roots: string[] = [];

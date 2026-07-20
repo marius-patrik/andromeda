@@ -44,7 +44,10 @@ const nestedRepositoryMetadata = [
   /^packages\/(?:.*\/)?(?:AGENTS|PRD)\.md$/i,
   // A component may carry exactly one contract README at its own root; anything
   // deeper is a package pretending to be its own repository again.
-  /^packages\/[a-z0-9-]+\/.+\/README\.md$/i,
+  // clients/ groups the client components one level deeper; each still owns
+  // exactly one contract README at its own root.
+  /^packages\/(?!clients\/)[a-z0-9-]+\/.+\/README\.md$/i,
+  /^packages\/clients\/[a-z0-9-]+\/.+\/README\.md$/i,
 ];
 // packages/migrate holds former standalone repositories verbatim, frozen for
 // migration. Their original metadata is evidence and is not rewritten here;
