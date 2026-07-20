@@ -21,10 +21,10 @@ const requiredLayout = [
   "src/migrate/harness",
   "src/migrate/inference",
   "src/migrate/manager",
-  "skills",
-  "hooks",
-  "roles",
-  "commands",
+  "agents/.global/skills",
+  "agents/.global/hooks",
+  "agents/.global/roles",
+  "agents/.global/commands",
 ];
 for (const relative of requiredLayout) {
   if (!fs.statSync(path.join(root, relative), { throwIfNoEntry: false })?.isDirectory()) {
@@ -50,7 +50,7 @@ const nestedRepositoryMetadata = [
 // src/migrate holds former standalone repositories verbatim, frozen for
 // migration. Their original metadata is evidence and is not rewritten here;
 // code leaves migrate by reimplementation against the sdk.
-const migrateTree = /^(?:src\/migrate|(?:hooks|roles|skills)(?:\/|$))/;
+const migrateTree = /^(?:src\/migrate|agents\/\.global\/(?:hooks|roles|skills)(?:\/|$))/;
 // agents/ holds agent projects, and templates/ holds folded template repositories,
 // versioning, and project docs. Like migrate, they are carried rather than
 // built as part of this product, so the single-product interior rules do not

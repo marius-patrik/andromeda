@@ -22,7 +22,7 @@ test("managed Validate provisions Go and uv before dependency installation", asy
 });
 
 test("monorepo validation uses the uv CLI without a cross-repository go.work", async () => {
-  const commands = await readFile("docs/.agents/.project/COMMANDS.md", "utf8");
+  const commands = await readFile("agents/.project/COMMANDS.md", "utf8");
   assert.doesNotMatch(commands, /python(?:3)?\s+-m\s+uv/);
   assert.match(commands, /\buv sync --frozen\b/);
   assert.equal(existsSync("go.work"), false);
@@ -73,7 +73,9 @@ test("documented branch policy matches the enforced check names", async () => {
   const policy = await readFile(".darkfactory/branching-policy.md", "utf8");
   // Assert the substance rather than the exact prose: both protected branches,
   // strict GitHub-Actions-bound protection, and both required check names.
-  assert.match(policy, /`dev` and `main`/);
+  // Trunk-based: main is the only long-lived branch.
+  assert.match(policy, /`main` is the only long-lived branch/);
+  assert.match(policy, /Every merge into `main` publishes a release/);
   assert.match(policy, /strict,? GitHub-Actions-bound/);
   assert.match(policy, /`Validate` and\s+`DarkFactory Autoreview`/);
   assert.match(policy, /independent schema-valid\s+clean high confirmation/);
