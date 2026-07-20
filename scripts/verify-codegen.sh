@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CORE="$ROOT/packages/migrate/core"
+PROTO_ROOT="$ROOT/packages/mcp"
 BUF="$ROOT/node_modules/.bin/buf"
 TEMP="$(mktemp -d)"
 trap 'rm -rf "$TEMP"' EXIT
@@ -33,10 +34,10 @@ done
 
 (
   cd "$CORE"
-  "$BUF" format --diff --exit-code proto
-  "$BUF" lint proto
-  "$BUF" generate proto
-  "$BUF" generate proto --template buf.gen.python.yaml
+  "$BUF" format --diff --exit-code "$PROTO_ROOT/proto"
+  "$BUF" lint "$PROTO_ROOT/proto"
+  "$BUF" generate "$PROTO_ROOT/proto"
+  "$BUF" generate "$PROTO_ROOT/proto" --template buf.gen.python.yaml
 )
 
 for relative in "${outputs[@]}"; do

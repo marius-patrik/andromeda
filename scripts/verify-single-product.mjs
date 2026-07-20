@@ -20,7 +20,7 @@ const requiredLayout = [
   "packages/migrate/gateway",
   "packages/migrate/harness",
   "packages/migrate/inference",
-  "packages/clients/cli/manager",
+  "packages/clients/cli",
   "packages/.global/skills",
   "packages/.global/hooks",
   "packages/.global/roles",
@@ -103,9 +103,9 @@ const retiredContent = [
 
 const retiredVariableRejectionFiles = new Set([
   "install/install.sh",
-  "packages/clients/cli/manager/src/runtime-paths.ts",
-  "packages/clients/cli/manager/src/state-doctor.ts",
-  "packages/clients/cli/manager/test/state.test.ts",
+  "packages/clients/cli/src/runtime-paths.ts",
+  "packages/clients/cli/src/state-doctor.ts",
+  "packages/clients/cli/test/state.test.ts",
 ]);
 
 // This policy file necessarily spells the retired identifiers it rejects.
@@ -140,18 +140,18 @@ if (typeof productVersion !== "string" || !productVersion) issues.push("root pac
 if (rootPackage.name !== "@marius-patrik/agents-manager") {
   issues.push("root package.json must remain the recorded @marius-patrik/agents-manager package-name exception");
 }
-if (rootPackage.bin?.agents !== "./packages/clients/cli/manager/src/cli.ts") {
+if (rootPackage.bin?.andromeda !== "./packages/clients/cli/src/cli.ts") {
   issues.push("root package.json must own the authoritative agents CLI entrypoint");
 }
 
 const expectedJavaScriptWorkspaces = new Map([
-  ["packages/clients/cli/manager/package.json", "@marius-patrik/andromeda-manager"],
+  ["packages/clients/cli/package.json", "@marius-patrik/andromeda"],
   ["packages/sdk/shared-ts/package.json", "@agent-os/shared-ts"],
-  ["packages/clients/cli/package.json", "@agent-os/tui"],
+  
   ["packages/clients/web/package.json", "@agent-os/web"],
 ]);
 const declaredWorkspaces = new Set(rootPackage.workspaces ?? []);
-for (const required of ["packages/clients/cli/manager", "packages/clients/*", "packages/sdk/shared-ts"]) {
+for (const required of ["packages/clients/cli", "packages/clients/web", "packages/sdk/shared-ts"]) {
   if (!declaredWorkspaces.has(required)) issues.push(`root package.json does not own workspace pattern: ${required}`);
 }
 for (const [relative, expectedName] of expectedJavaScriptWorkspaces) {

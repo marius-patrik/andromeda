@@ -21,7 +21,7 @@ component-specific validation commands belong in `packages/.project/COMMANDS.md`
 
 Component boundaries:
 
-- `packages/clients/cli/manager` owns the `agents` CLI, canonical state, installs,
+- `packages/clients/cli` owns the `agents` CLI, canonical state, installs,
   credentials/secrets, providers, sessions, memory, packages, lifecycle
   management, and — until the #218 harness migration is implemented and
   accepted — orchestration.

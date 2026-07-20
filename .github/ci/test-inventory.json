@@ -38,9 +38,9 @@
       ],
       "requiredPaths": [
         "packages/migrate/harness/test/tools.test.ts",
-        "packages/clients/cli/manager/test/session.test.ts",
-        "packages/clients/cli/manager/test/session-adapters.test.ts",
-        "packages/clients/cli/manager/test/tui-tools.test.ts"
+        "packages/clients/cli/test/session.test.ts",
+        "packages/clients/cli/test/session-adapters.test.ts",
+        "packages/clients/cli/test/tui-tools.test.ts"
       ]
     },
     {
@@ -58,16 +58,16 @@
     },
     {
       "id": "manager",
-      "path": "packages/clients/cli/manager",
+      "path": "packages/clients/cli",
       "suite": "manager",
       "platforms": [
         "ubuntu-latest",
         "windows-latest"
       ],
       "requiredPaths": [
-        "packages/clients/cli/manager/test/state-doctor.test.ts",
-        "packages/clients/cli/manager/test/state-v2.test.ts",
-        "packages/clients/cli/manager/test/event-sync.test.ts"
+        "packages/clients/cli/test/state-doctor.test.ts",
+        "packages/clients/cli/test/state-v2.test.ts",
+        "packages/clients/cli/test/event-sync.test.ts"
       ]
     },
     {
@@ -162,7 +162,6 @@
     "packages/clients",
     "packages/clients/app",
     "packages/clients/cli",
-    "packages/clients/cli/manager",
     "packages/clients/web",
     "packages/darkfactory",
     "packages/mcp",

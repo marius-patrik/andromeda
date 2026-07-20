@@ -8,10 +8,10 @@ import {
   listMemoryRecords,
   rebuildMemoryProjections,
   renderStartupMemory,
-} from "../../../clients/cli/manager/src/memory";
-import { enableEventSync, exportEventBundle, importEventBundle } from "../../../clients/cli/manager/src/event-sync";
-import { writeSecret } from "../../../clients/cli/manager/src/secrets";
-import { ensureSharedState, sharedStateAt, type SharedState } from "../../../clients/cli/manager/src/state";
+} from "../../../clients/cli/src/memory";
+import { enableEventSync, exportEventBundle, importEventBundle } from "../../../clients/cli/src/event-sync";
+import { writeSecret } from "../../../clients/cli/src/secrets";
+import { ensureSharedState, sharedStateAt, type SharedState } from "../../../clients/cli/src/state";
 import { createSession, loadSessionEvents, withSessionWriteTransaction } from "../../harness/session";
 import {
   applyMemoryCandidate,

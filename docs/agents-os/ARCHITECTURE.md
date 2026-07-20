@@ -13,7 +13,7 @@ Agent OS remains one product inside or outside a container:
 
 - `agents-manager` owns state discovery, provider pinning, sessions, memory,
   capabilities, package registries, and lifecycle commands.
-- `packages/clients/cli/manager`, `packages/migrate/harness`, `packages/migrate/core`, `packages/migrate/gateway`,
+- `packages/clients/cli`, `packages/migrate/harness`, `packages/migrate/core`, `packages/migrate/gateway`,
   and `packages/migrate/inference` are implementation components, not separate products.
 - `packages/darkfactory` is a GitHub control-plane package, not a second agent
   brain.
