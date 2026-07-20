@@ -1,11 +1,3 @@
-[submodule "data"]
-	path = data/andromeda
-	url = https://github.com/marius-patrik/Andromeda-data.git
-	branch = main
-[submodule "darkfactory-data"]
-	path = data/darkfactory
-	url = https://github.com/marius-patrik/darkfactory-data.git
-	branch = main
 [submodule "packages/darkfactory"]
 	path = agents/darkfactory
 	url = https://github.com/marius-patrik/DarkFactory.git
@@ -21,4 +13,8 @@
 [submodule "packages/singularity"]
 	path = packages/migrate/singularity
 	url = https://github.com/marius-patrik/Singularity.git
+	branch = main
+[submodule "Andromeda-data"]
+	path = Andromeda-data
+	url = https://github.com/marius-patrik/Andromeda-data.git
 	branch = main

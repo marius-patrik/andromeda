@@ -16,7 +16,7 @@ const tracked = execFileSync("git", ["-C", root, "ls-files", "--cached", "--othe
 const issues = [];
 issues.push(...inventoryIssues(root));
 const requiredLayout = [
-  "data",
+  "Andromeda-data",
   "packages/migrate/core",
   "packages/migrate/gateway",
   "packages/migrate/harness",
@@ -62,7 +62,7 @@ for (const relative of tracked) {
 const gitmodules = fs.readFileSync(path.join(root, ".gitmodules"), "utf8");
 for (const match of gitmodules.matchAll(/^\s*path\s*=\s*(.+)\s*$/gm)) {
   const submodulePath = match[1].trim();
-  if (!["data/", "packages/", "agents/"].some((prefix) => submodulePath.startsWith(prefix))) {
+  if (!["Andromeda-data", "packages/", "agents/"].some((prefix) => submodulePath === prefix || submodulePath.startsWith(prefix))) {
     issues.push(`managed repository submodule is outside data/, packages/, or agents/: ${submodulePath}`);
   }
 }
