@@ -1,8 +1,8 @@
 node_modules/
 
 .agents/*
-!agents/.project/
-!agents/.project/**
+!packages/migrate/agents/.project/
+!packages/migrate/agents/.project/**
 !.agents/plugins/
 !.agents/plugins/marketplace.json
 __pycache__/
