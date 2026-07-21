@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { SessionDescriptor, TurnRequest } from "../../../migrate/harness/session";
+import type { SessionDescriptor, TurnRequest } from "../../../sdk/harness/session";
 import { commandInvocation } from "./process-command";
 
 export type NarrowExecutionPolicy = "read-only" | "workspace-write";

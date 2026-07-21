@@ -31,13 +31,13 @@
     },
     {
       "id": "harness",
-      "path": "packages/migrate/harness",
+      "path": "packages/sdk/harness",
       "suite": "harness",
       "platforms": [
         "ubuntu-latest"
       ],
       "requiredPaths": [
-        "packages/migrate/harness/test/tools.test.ts",
+        "packages/sdk/harness/test/tools.test.ts",
         "packages/clients/cli/test/session.test.ts",
         "packages/clients/cli/test/session-adapters.test.ts",
         "packages/clients/cli/test/tui-tools.test.ts"

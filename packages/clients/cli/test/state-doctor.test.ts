@@ -10,7 +10,7 @@ import { rebuildMemoryProjections, rememberMemory, type MemoryEvent } from "../s
 import { activateIdentityBundle, installCapability } from "../src/capabilities";
 import { recordSourceInstall } from "../src/source-install";
 import { enableEventSync } from "../src/event-sync";
-import { createSession, rebuildSessionProjections, sessionPaths } from "../../../migrate/harness/session";
+import { createSession, rebuildSessionProjections, sessionPaths } from "../../../sdk/harness/session";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const sourceRoot = path.resolve(repoRoot, "../../..");

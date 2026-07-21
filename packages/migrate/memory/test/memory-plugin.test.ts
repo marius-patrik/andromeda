@@ -12,7 +12,7 @@ import {
 import { enableEventSync, exportEventBundle, importEventBundle } from "../../../clients/cli/src/event-sync";
 import { writeSecret } from "../../../clients/cli/src/secrets";
 import { ensureSharedState, sharedStateAt, type SharedState } from "../../../clients/cli/src/state";
-import { createSession, loadSessionEvents, withSessionWriteTransaction } from "../../harness/session";
+import { createSession, loadSessionEvents, withSessionWriteTransaction } from "../../../sdk/harness/session";
 import {
   applyMemoryCandidate,
   dreamCursorPath,

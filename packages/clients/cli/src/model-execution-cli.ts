@@ -1,7 +1,7 @@
 import type { Readable } from "node:stream";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
-import type { SessionMode } from "../../../migrate/harness/session";
+import type { SessionMode } from "../../../sdk/harness/session";
 import {
   readPromptFile,
   readPromptStdin,

@@ -27,7 +27,7 @@ Component boundaries:
   accepted — orchestration.
 - `packages/migrate/core` owns protobuf contracts and generated Go, TypeScript, and
   Python clients.
-- `packages/migrate/harness` owns canonical session events and the event-backed tool
+- `packages/sdk/harness` owns canonical session events and the event-backed tool
   loop, with the owner-ruled target (#218) of becoming the operation engine
   owning orchestration; it does not own state-root or provider-discovery
   policy.

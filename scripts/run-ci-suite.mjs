@@ -26,7 +26,7 @@ function managerTests() {
 
 function harnessTests() {
   return [
-    ...discoverBunTests(path.join("packages", "migrate", "harness", "test")),
+    ...discoverBunTests(path.join("packages", "sdk", "harness", "test")),
     path.join("packages", "clients", "cli", "test", "session.test.ts"),
     path.join("packages", "clients", "cli", "test", "session-adapters.test.ts"),
     path.join("packages", "clients", "cli", "test", "tui-tools.test.ts"),

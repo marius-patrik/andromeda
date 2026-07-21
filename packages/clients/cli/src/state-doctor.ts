@@ -6,7 +6,7 @@ import { readStateManifest, stateV2Paths, type AgentStateManifest } from "./stat
 import { readToolStatus, toolStateSpecs, type ToolStatus } from "./state-consolidation";
 import { readProviderRegistry, verifyProviderRegistration, type ProviderId } from "./provider-registry";
 import { inspectMemoryIntegrity } from "./memory";
-import { inspectSessionIntegrity } from "../../../migrate/harness/session";
+import { inspectSessionIntegrity } from "../../../sdk/harness/session";
 import { inspectOrchestratorIntegrity } from "./orchestrator";
 import { inspectCapabilityIntegrity } from "./capabilities";
 import { inspectSourceInstall } from "./source-install";

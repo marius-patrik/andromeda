@@ -17,7 +17,7 @@ import {
   pluginRuntimeProjectionPath,
   publishPluginRuntimeProjection,
 } from "../../../clients/cli/src/state-v2";
-import { listSessionIds, loadSessionEventBatch, type SessionEvent } from "../../harness/session";
+import { listSessionIds, loadSessionEventBatch, type SessionEvent } from "../../../sdk/harness/session";
 
 export const MEMORY_PLUGIN_SCHEMA_VERSION = 1 as const;
 export const DREAM_V13_CURSOR_VERSION = "1.3" as const;

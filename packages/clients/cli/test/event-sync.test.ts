@@ -12,7 +12,7 @@ import {
   sessionPaths,
   withSessionWriteLock,
   withSessionWriteTransaction,
-} from "../../../migrate/harness/session";
+} from "../../../sdk/harness/session";
 import { doctorState } from "../src/state-doctor";
 import { appendOrchestratorLedger, initializeOrchestratorState } from "../src/orchestrator";
 import {

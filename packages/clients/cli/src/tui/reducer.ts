@@ -1,4 +1,4 @@
-import type { SessionMode, Usage } from "../../../../migrate/harness/session";
+import type { SessionMode, Usage } from "../../../../sdk/harness/session";
 
 export interface StatusBarState {
   providers: string[];

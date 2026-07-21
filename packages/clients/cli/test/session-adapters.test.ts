@@ -3,8 +3,8 @@ import { unlinkSync, writeFileSync } from "node:fs";
 import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ProviderAdapter, SessionEvent, SessionTranscript, TurnRequest } from "../../../migrate/harness/session";
-import { createSession, loadSessionEvents, loadTranscript, runSessionTurn, streamSessionTurn } from "../../../migrate/harness/session";
+import type { ProviderAdapter, SessionEvent, SessionTranscript, TurnRequest } from "../../../sdk/harness/session";
+import { createSession, loadSessionEvents, loadTranscript, runSessionTurn, streamSessionTurn } from "../../../sdk/harness/session";
 import {
   agySessionAdapter,
   attestAgyNativeInvocation,
@@ -26,7 +26,7 @@ import {
   transcriptAsPrompt,
   withCanonicalStartup,
 } from "../src/session-adapters";
-import type { SessionDescriptor } from "../../../migrate/harness/session";
+import type { SessionDescriptor } from "../../../sdk/harness/session";
 import { ensureSharedState, sharedStateAt } from "../src/state";
 import { rememberMemory } from "../src/memory";
 import { inspectProviderExecutable, readProviderRegistry, verifyProviderRegistration, writeProviderRegistration } from "../src/provider-registry";
