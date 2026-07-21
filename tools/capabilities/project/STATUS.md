@@ -12,7 +12,7 @@
   `server`, `clients/{cli,app,web}`, and `plugins`. They hold contract READMEs
   rather than implementation; the fail-closed inventory requires that a
   component gaining code also gains a test suite.
-- The previous implementation is carried under `packages/migrate` — `manager`,
+- The previous implementation is carried under `packages/bot` — `manager`,
   `core`, `harness`, `gateway`, `inference`, `memory`, `dream`, `experience`,
   and the folded predecessors of the developmental runtime, the retired
   gateway, the legacy manager, and the workspace substrate — frozen and mined

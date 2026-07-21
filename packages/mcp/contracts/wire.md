@@ -248,7 +248,7 @@ surface.
 | **TypeScript** | private workspace `@marius-patrik/andromeda-sdk` | `import { RegistryService } from "@marius-patrik/andromeda-sdk/gen"` | `packages/web` |
 | **Python** | `agent.gen` bootstrap + `andromeda.v1` | `import agent.gen; from andromeda.v1 import session_frames_pb2, registry_pb2` | `packages/server/inference/python-agent` |
 
-`packages/web` and `packages/app` are currently private placeholder workspaces.
+`packages/web` is currently a private placeholder workspace.
 They import the private `@marius-patrik/andromeda-sdk` workspace and will host
 Andromeda's future in-repository web and app clients.
 There is no user-facing CLI or installer in `packages/sdk`.
