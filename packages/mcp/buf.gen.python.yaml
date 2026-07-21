@@ -17,6 +17,6 @@ managed:
 
 plugins:
   - remote: buf.build/protocolbuffers/python:v35.0
-    out: ../inference/python-agent/agent/gen
+    out: ../migrate/inference/python-agent/agent/gen
   - remote: buf.build/protocolbuffers/pyi:v35.0
-    out: ../inference/python-agent/agent/gen
+    out: ../migrate/inference/python-agent/agent/gen

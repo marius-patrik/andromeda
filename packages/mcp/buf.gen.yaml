@@ -30,10 +30,10 @@ managed:
 plugins:
   # ---- Go: messages + Connect service stubs --------------------------------
   - remote: buf.build/protocolbuffers/go:v1.36.11
-    out: contracts-go/gen
+    out: ../sdk/contracts-go/gen
     opt: paths=source_relative
   - remote: buf.build/connectrpc/go:v1.20.0
-    out: contracts-go/gen
+    out: ../sdk/contracts-go/gen
     opt: paths=source_relative
 
   # ---- TypeScript: protobuf-es v2 (messages + service descriptors) ---------
@@ -41,5 +41,5 @@ plugins:
   # @connectrpc/connect v2 builds typed clients from them — no separate
   # connect-es codegen needed.
   - remote: buf.build/bufbuild/es:v2.12.0
-    out: clients/shared-ts/src/gen
+    out: ../sdk/shared-ts/src/gen
     opt: target=ts

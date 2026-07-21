@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CORE="$ROOT/packages/migrate/core"
+CORE="$ROOT/packages/mcp"
 PROTO_ROOT="$ROOT/packages/mcp"
 BUF="$ROOT/node_modules/.bin/buf"
 TEMP="$(mktemp -d)"
@@ -19,7 +19,7 @@ trap 'rm -rf "$TEMP"' EXIT
 
 outputs=(
   "packages/sdk/contracts-go/gen"
-  "packages/migrate/core/clients/shared-ts/src/gen"
+  "packages/sdk/shared-ts/src/gen"
   "packages/migrate/inference/python-agent/agent/gen"
 )
 
@@ -34,10 +34,10 @@ done
 
 (
   cd "$CORE"
-  "$BUF" format --diff --exit-code "$PROTO_ROOT/proto"
-  "$BUF" lint "$PROTO_ROOT/proto"
-  "$BUF" generate "$PROTO_ROOT/proto"
-  "$BUF" generate "$PROTO_ROOT/proto" --template buf.gen.python.yaml
+  "$BUF" format --diff --exit-code proto
+  "$BUF" lint proto
+  "$BUF" generate proto
+  "$BUF" generate proto --template buf.gen.python.yaml
 )
 
 for relative in "${outputs[@]}"; do
@@ -46,8 +46,8 @@ done
 
 if find \
   "$CORE/proto" \
-  "$CORE/contracts-go/gen" \
-  "$CORE/clients/shared-ts/src/gen" \
+  "$ROOT/packages/sdk/contracts-go/gen" \
+  "$ROOT/packages/sdk/shared-ts/src/gen" \
   "$ROOT/packages/migrate/inference/python-agent/agent/gen" \
   -type f -o -type d | grep -E '/rommie(/|$)' >/dev/null; then
   echo "error: retired rommie wire namespace remains in generated contracts" >&2

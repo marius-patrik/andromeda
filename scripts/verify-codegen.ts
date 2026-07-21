@@ -13,11 +13,11 @@ import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 
 const root = resolve(import.meta.dir, "..");
-const core = join(root, "packages/migrate/core");
+const core = join(root, "packages/mcp");
 const buf = join(root, "node_modules/.bin", process.platform === "win32" ? "buf.exe" : "buf");
 const outputs = [
   "packages/sdk/contracts-go/gen",
-  "packages/migrate/core/clients/shared-ts/src/gen",
+  "packages/sdk/shared-ts/src/gen",
   "packages/migrate/inference/python-agent/agent/gen",
   "packages/migrate/gateway/agent_os",
 ];
@@ -128,8 +128,8 @@ function main(): void {
 
     // This package-owned barrel is intentionally not emitted by Buf.
     cpSync(
-      join(beforeRoot, "packages/migrate/core/clients/shared-ts/src/gen/index.ts"),
-      join(root, "packages/migrate/core/clients/shared-ts/src/gen/index.ts"),
+      join(beforeRoot, "packages/sdk/shared-ts/src/gen/index.ts"),
+      join(root, "packages/sdk/shared-ts/src/gen/index.ts"),
     );
     for (const init of ["__init__.py", "agent_os/__init__.py", "agent_os/v1/__init__.py"]) {
       const source = join(beforeRoot, "packages/migrate/inference/python-agent/agent/gen", init);

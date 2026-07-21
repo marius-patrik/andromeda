@@ -18,6 +18,9 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const repoRoot = dirname(__dirname);
+// The proto module and its generation templates moved to packages/mcp when the
+// protocol package took ownership of them; the smoke consumer stays here.
+const protoRoot = join(repoRoot, "..", "..", "mcp");
 
 function run(label, cmd, args, options = {}) {
   console.log(`$ ${label}: ${cmd} ${args.join(" ")}`);
@@ -63,11 +66,11 @@ try {
       "generate",
       "proto",
       "--template",
-      join(repoRoot, "buf.gen.python.smoke.yaml"),
+      join(protoRoot, "buf.gen.python.smoke.yaml"),
       "-o",
       tmp,
     ],
-    { cwd: repoRoot },
+    { cwd: protoRoot },
   );
 
   // Replicate the intended consumer layout: agent/gen/agent_os/v1/...

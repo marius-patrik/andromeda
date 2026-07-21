@@ -103,7 +103,7 @@ const suites = {
     run("generated contract freshness", "bun", ["scripts/verify-codegen.ts"]);
     run("core Python import smoke", "bun", ["packages/migrate/core/scripts/python-smoke.mjs"]);
     run("core Go contracts", "go", ["test", "./..."], {
-      cwd: path.join(root, "packages", "migrate", "core", "contracts-go"),
+      cwd: path.join(root, "packages", "sdk", "contracts-go"),
     });
   },
   gateway() {
