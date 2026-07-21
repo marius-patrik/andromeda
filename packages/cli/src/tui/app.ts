@@ -1,8 +1,8 @@
 import readline from "node:readline";
 import type { SharedState } from "../state";
-import type { SessionDescriptor, SessionMode, SessionTranscript, TranscriptMessage } from "../../../../sdk/harness/session";
-import { loadTranscript, switchSessionProvider } from "../../../../sdk/harness/session";
-import { createTuiTools, runSessionTurnWithTools, type AgentToolContext, type ProviderListing } from "../../../../sdk/harness/tools";
+import type { SessionDescriptor, SessionMode, SessionTranscript, TranscriptMessage } from "../../../sdk/harness/session";
+import { loadTranscript, switchSessionProvider } from "../../../sdk/harness/session";
+import { createTuiTools, runSessionTurnWithTools, type AgentToolContext, type ProviderListing } from "../../../sdk/harness/tools";
 import { providerSessionAdapter } from "../session-adapters";
 import { doctorAdapter, type CliId } from "../adapters";
 import { createStatusBarState, currentModel, currentProvider, statusBarLabel, statusBarReducer } from "./reducer";

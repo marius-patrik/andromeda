@@ -1,6 +1,6 @@
 import { adapterIds } from "../adapters";
 import type { SessionConfig } from "../state";
-import type { SessionDescriptor } from "../../../../sdk/harness/session";
+import type { SessionDescriptor } from "../../../sdk/harness/session";
 
 export function configuredProviderModels(
   config: SessionConfig,

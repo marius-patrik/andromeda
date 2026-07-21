@@ -10,10 +10,10 @@ import { rebuildMemoryProjections, rememberMemory, type MemoryEvent } from "../s
 import { activateIdentityBundle, installCapability } from "../src/capabilities";
 import { recordSourceInstall } from "../src/source-install";
 import { enableEventSync } from "../src/event-sync";
-import { createSession, rebuildSessionProjections, sessionPaths } from "../../../sdk/harness/session";
+import { createSession, rebuildSessionProjections, sessionPaths } from "../../sdk/harness/session";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
-const sourceRoot = path.resolve(repoRoot, "../../..");
+const sourceRoot = path.resolve(repoRoot, "../..");
 const cliPath = path.join(repoRoot, "src", "cli.ts");
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
@@ -72,8 +72,8 @@ async function ensureDoctorProduct(state: ReturnType<typeof tempState>): Promise
   const launcher = path.join(bin, launcherNameForPlatform(process.platform));
   const launcherContent =
     process.platform === "win32"
-      ? `$env:AGENTS_HOME = '${state.stateDir.replaceAll("'", "''")}'\n$env:AGENTS_USER_HOME = '${state.userHome.replaceAll("'", "''")}'\n$env:AGENTS_ROOT = '${state.root.replaceAll("'", "''")}'\n$env:AGENTS_WORKSPACE = '${state.workspaceDir.replaceAll("'", "''")}'\n$env:AGENTS_SYSTEM_DATA_ROOT = '${systemDataPath(state).replaceAll("'", "''")}'\n$env:AGENTS_ENTRYPOINT = '${path.join(state.root, "packages", "clients", "cli", "src", "cli.ts").replaceAll("'", "''")}'\n& bun $env:AGENTS_ENTRYPOINT @args\n`
-      : `#!/usr/bin/env bash\nexport AGENTS_HOME=${shellQuote(state.stateDir)}\nexport AGENTS_USER_HOME=${shellQuote(state.userHome)}\nexport AGENTS_ROOT=${shellQuote(state.root)}\nexport AGENTS_WORKSPACE=${shellQuote(state.workspaceDir)}\nexport AGENTS_SYSTEM_DATA_ROOT=${shellQuote(systemDataPath(state))}\nexport AGENTS_ENTRYPOINT=${shellQuote(path.join(state.root, "packages", "clients", "cli", "src", "cli.ts"))}\nexec bun "$AGENTS_ENTRYPOINT" "$@"\n`;
+      ? `$env:AGENTS_HOME = '${state.stateDir.replaceAll("'", "''")}'\n$env:AGENTS_USER_HOME = '${state.userHome.replaceAll("'", "''")}'\n$env:AGENTS_ROOT = '${state.root.replaceAll("'", "''")}'\n$env:AGENTS_WORKSPACE = '${state.workspaceDir.replaceAll("'", "''")}'\n$env:AGENTS_SYSTEM_DATA_ROOT = '${systemDataPath(state).replaceAll("'", "''")}'\n$env:AGENTS_ENTRYPOINT = '${path.join(state.root, "packages", "cli", "src", "cli.ts").replaceAll("'", "''")}'\n& bun $env:AGENTS_ENTRYPOINT @args\n`
+      : `#!/usr/bin/env bash\nexport AGENTS_HOME=${shellQuote(state.stateDir)}\nexport AGENTS_USER_HOME=${shellQuote(state.userHome)}\nexport AGENTS_ROOT=${shellQuote(state.root)}\nexport AGENTS_WORKSPACE=${shellQuote(state.workspaceDir)}\nexport AGENTS_SYSTEM_DATA_ROOT=${shellQuote(systemDataPath(state))}\nexport AGENTS_ENTRYPOINT=${shellQuote(path.join(state.root, "packages", "cli", "src", "cli.ts"))}\nexec bun "$AGENTS_ENTRYPOINT" "$@"\n`;
   await writeFile(
     launcher,
     launcherContent,

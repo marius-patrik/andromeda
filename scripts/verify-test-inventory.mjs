@@ -120,7 +120,6 @@ export function inventoryIssues(root = repositoryRoot) {
   const actualPackages = [
     ...sortedDirectories(root, "packages"),
     ...sortedDirectories(root, "packages/migrate"),
-    ...sortedDirectories(root, "packages/clients"),
 
     ...sortedDirectories(root, "packages/sdk"),
     ...(fs.existsSync(path.join(root, "sdk")) ? ["sdk"] : []),
@@ -189,7 +188,7 @@ export function inventoryIssues(root = repositoryRoot) {
     ...classifiedPackageGitlinks,
   ]).sort();
   for (const managedPath of managedPackagePaths) {
-    if (!/^packages\/(?:migrate\/(?:agents\/)?|clients\/)?[a-z0-9]+(?:-[a-z0-9]+)*$/.test(managedPath)) {
+    if (!/^packages\/(?:migrate\/(?:agents\/)?)?[a-z0-9]+(?:-[a-z0-9]+)*$/.test(managedPath)) {
       issues.push(`managed component path is not a lowercase child of packages/: ${managedPath}`);
     }
     const declarationCount = declaredPackageGitlinks.filter((entry) => entry === managedPath).length;

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { lstat, open, opendir, readFile, realpath } from "node:fs/promises";
-import { findSecretLikePath } from "../../../clients/cli/src/event-sync";
+import { findSecretLikePath } from "../../../cli/src/event-sync";
 import {
   listMemoryRecords,
   rememberMemory,
@@ -11,12 +11,12 @@ import {
   type MemoryRecord,
   type MemoryRecordStatus,
   type MemorySensitivity,
-} from "../../../clients/cli/src/memory";
-import type { SharedState } from "../../../clients/cli/src/state";
+} from "../../../cli/src/memory";
+import type { SharedState } from "../../../cli/src/state";
 import {
   pluginRuntimeProjectionPath,
   publishPluginRuntimeProjection,
-} from "../../../clients/cli/src/state-v2";
+} from "../../../cli/src/state-v2";
 import { listSessionIds, loadSessionEventBatch, type SessionEvent } from "../../../sdk/harness/session";
 
 export const MEMORY_PLUGIN_SCHEMA_VERSION = 1 as const;

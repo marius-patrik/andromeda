@@ -7,8 +7,8 @@ import type {
   SessionTranscript,
   TurnRequest,
   TurnResult,
-} from "../../../sdk/harness/session";
-import { FakeProviderAdapter, renderTranscriptForCli } from "../../../sdk/harness/session-adapters";
+} from "../../sdk/harness/session";
+import { FakeProviderAdapter, renderTranscriptForCli } from "../../sdk/harness/session-adapters";
 import {
   canonicalChildEnvironment,
   overlayChildEnvironment,

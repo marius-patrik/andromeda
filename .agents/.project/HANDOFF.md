@@ -14,7 +14,7 @@ $env:AGENTS_HOME = "$HOME\.andromeda"
 $env:AGENTS_USER_HOME = "$HOME"
 $env:AGENTS_ROOT = "$HOME\marius-patrik\Andromeda"
 Set-Location $env:AGENTS_ROOT
-bun packages/clients/cli/src/cli.ts state doctor --json
+bun packages/cli/src/cli.ts state doctor --json
 ```
 
 ## What the next session should know

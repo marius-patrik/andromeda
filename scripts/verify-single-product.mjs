@@ -20,7 +20,7 @@ const requiredLayout = [
   "packages/migrate/gateway",
   "packages/sdk/harness",
   "packages/migrate/inference",
-  "packages/clients/cli",
+  "packages/cli",
   ".agents/.global/skills",
   ".agents/.global/hooks",
   ".agents/.global/roles",
@@ -41,11 +41,10 @@ const nestedRepositoryMetadata = [
   /^packages\/(?!\.project\/)(?:.*\/)?(?:\.agents|\.darkfactory|docs)(?:\/|$)/i,
   /^packages\/(?!\.project\/)(?:.*\/)?(?:AGENTS|PRD)\.md$/i,
   // A component may carry exactly one contract README at its own root; anything
-  // deeper is a package pretending to be its own repository again.
-  // clients/ groups the client components one level deeper; each still owns
-  // exactly one contract README at its own root.
-  /^packages\/(?!clients\/)[a-z0-9-]+\/.+\/README\.md$/i,
-  /^packages\/clients\/[a-z0-9-]+\/.+\/README\.md$/i,
+  // deeper is a package pretending to be its own repository again. The clients
+  // no longer group one level deeper, so the grouped form this rule used to
+  // carve out is gone and the single component-depth rule covers every package.
+  /^packages\/[a-z0-9-]+\/.+\/README\.md$/i,
 ];
 // packages/migrate holds former standalone repositories verbatim, frozen for
 // migration. Their original metadata is evidence and is not rewritten here;
@@ -106,9 +105,9 @@ const retiredContent = [
 
 const retiredVariableRejectionFiles = new Set([
   "install/install.sh",
-  "packages/clients/cli/src/runtime-paths.ts",
-  "packages/clients/cli/src/state-doctor.ts",
-  "packages/clients/cli/test/state.test.ts",
+  "packages/cli/src/runtime-paths.ts",
+  "packages/cli/src/state-doctor.ts",
+  "packages/cli/test/state.test.ts",
 ]);
 
 // This policy file necessarily spells the retired identifiers it rejects.
@@ -143,18 +142,18 @@ if (typeof productVersion !== "string" || !productVersion) issues.push("root pac
 if (rootPackage.name !== "@marius-patrik/agents-manager") {
   issues.push("root package.json must remain the recorded @marius-patrik/agents-manager package-name exception");
 }
-if (rootPackage.bin?.andromeda !== "./packages/clients/cli/src/cli.ts") {
+if (rootPackage.bin?.andromeda !== "./packages/cli/src/cli.ts") {
   issues.push("root package.json must own the authoritative agents CLI entrypoint");
 }
 
 const expectedJavaScriptWorkspaces = new Map([
-  ["packages/clients/cli/package.json", "@marius-patrik/andromeda"],
+  ["packages/cli/package.json", "@marius-patrik/andromeda"],
   ["packages/sdk/shared-ts/package.json", "@agent-os/shared-ts"],
 
-  ["packages/clients/web/package.json", "@agent-os/web"],
+  ["packages/web/package.json", "@agent-os/web"],
 ]);
 const declaredWorkspaces = new Set(rootPackage.workspaces ?? []);
-for (const required of ["packages/clients/cli", "packages/clients/web", "packages/sdk/shared-ts"]) {
+for (const required of ["packages/cli", "packages/web", "packages/sdk/shared-ts"]) {
   if (!declaredWorkspaces.has(required)) issues.push(`root package.json does not own workspace pattern: ${required}`);
 }
 for (const [relative, expectedName] of expectedJavaScriptWorkspaces) {

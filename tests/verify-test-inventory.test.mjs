@@ -97,7 +97,7 @@ test("success: serialized manager tests retain a bounded Windows filesystem time
 test("edge input: a missing manager-coupled harness test fails the inventory", () => {
   const target = fixture();
   try {
-    rmSync(path.join(target, "packages", "clients", "cli", "test", "session.test.ts"));
+    rmSync(path.join(target, "packages", "cli", "test", "session.test.ts"));
     assert.match(inventoryIssues(target).join("\n"), /harness is missing required suite path/);
   } finally {
     rmSync(target, { recursive: true, force: true });

@@ -6,7 +6,7 @@ import { readStateManifest, stateV2Paths, type AgentStateManifest } from "./stat
 import { readToolStatus, toolStateSpecs, type ToolStatus } from "./state-consolidation";
 import { readProviderRegistry, verifyProviderRegistration, type ProviderId } from "./provider-registry";
 import { inspectMemoryIntegrity } from "./memory";
-import { inspectSessionIntegrity } from "../../../sdk/harness/session";
+import { inspectSessionIntegrity } from "../../sdk/harness/session";
 import { inspectOrchestratorIntegrity } from "./orchestrator";
 import { inspectCapabilityIntegrity } from "./capabilities";
 import { inspectSourceInstall } from "./source-install";
@@ -566,7 +566,7 @@ async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
         issues.push(`agents launcher is missing canonical binding: ${name}=${value}`);
       }
     }
-    const cliPath = path.join(state.root, "packages", "clients", "cli", "src", "cli.ts");
+    const cliPath = path.join(state.root, "packages", "cli", "src", "cli.ts");
     const entrypointBinding = windows
       ? `$env:AGENTS_ENTRYPOINT = ${powerShellQuote(cliPath)}`
       : `export AGENTS_ENTRYPOINT=${shellQuote(cliPath)}`;

@@ -21,15 +21,15 @@ export function discoverBunTests(relativeDirectory, repositoryRoot = root) {
 }
 
 function managerTests() {
-  return discoverBunTests(path.join("packages", "clients", "cli", "test"));
+  return discoverBunTests(path.join("packages", "cli", "test"));
 }
 
 function harnessTests() {
   return [
     ...discoverBunTests(path.join("packages", "sdk", "harness", "test")),
-    path.join("packages", "clients", "cli", "test", "session.test.ts"),
-    path.join("packages", "clients", "cli", "test", "session-adapters.test.ts"),
-    path.join("packages", "clients", "cli", "test", "tui-tools.test.ts"),
+    path.join("packages", "cli", "test", "session.test.ts"),
+    path.join("packages", "cli", "test", "session-adapters.test.ts"),
+    path.join("packages", "cli", "test", "tui-tools.test.ts"),
   ];
 }
 

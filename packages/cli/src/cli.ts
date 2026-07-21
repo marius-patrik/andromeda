@@ -57,7 +57,7 @@ import {
   type ProviderAdapter,
   type SessionDescriptor,
   type SessionMode,
-} from "../../../sdk/harness/session";
+} from "../../sdk/harness/session";
 import { providerSessionAdapter } from "./session-adapters";
 import { executeModelRequest } from "./model-execution";
 import { modelExecutionRequestFromCli, selectsModelExecution } from "./model-execution-cli";
@@ -705,7 +705,7 @@ async function sessionCommand(args: string[], flags: Record<string, string | boo
       const adapter = await managedSessionAdapter(state, activeProvider);
 
       if (stream && adapter.streamTurn) {
-        for await (const chunk of await import("../../../sdk/harness/session").then((m) => m.streamSessionTurn(state, adapter, descriptor, { prompt, stream, systemPrompt }))) {
+        for await (const chunk of await import("../../sdk/harness/session").then((m) => m.streamSessionTurn(state, adapter, descriptor, { prompt, stream, systemPrompt }))) {
           if (chunk.type === "text" && chunk.delta) process.stdout.write(chunk.delta);
           if (chunk.type === "error") console.error(chunk.error);
         }
