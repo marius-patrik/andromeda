@@ -44,8 +44,8 @@ reimplementation:
   providers, sessions, memory, package/capability registries, lifecycle
   management, and — until the #218 harness migration is implemented and
   accepted — the orchestrator runtime.
-- `packages/migrate/core` — protobuf sources and generated Go, TypeScript, and Python
-  contracts.
+- `packages/sdk` — generated Go, TypeScript, and Python contracts and the
+  suite that verifies them. The protobuf sources are `packages/mcp/proto`.
 - `packages/sdk/harness` — canonical session event handling and tool execution.
   Owner-ruled target (2026-07-13, #218): the operation engine owning
   orchestration, with the orchestrator runtime migrating from the manager.

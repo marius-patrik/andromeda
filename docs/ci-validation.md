@@ -9,7 +9,7 @@ succeeds. The same commands run locally through
 
 | Component | Suite | Hosted platforms | Coverage |
 | --- | --- | --- | --- |
-| `packages/migrate/core` | `core` | Ubuntu, Windows | TypeScript types/imports, generated contract freshness, Python imports, Go tests |
+| `packages/sdk/tests` | `core` | Ubuntu, Windows | TypeScript types/imports, generated contract freshness, Python imports, Go tests |
 | `packages/server/gateway` | `gateway` | Ubuntu | uv lock sync, lint, types, all non-live tests, packaging smoke, build |
 | `packages/sdk/harness` | `harness` | Ubuntu | direct tool-boundary tests plus the complete manager-coupled session, adapter, and tool-loop suites |
 | `packages/server/inference` | `inference` | Ubuntu | uv lock sync, lint, types, all non-live tests, build, CLI/import/layering checks |

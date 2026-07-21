@@ -3,18 +3,18 @@
   "activeComponents": [
     {
       "id": "core",
-      "path": "packages/migrate/core",
+      "path": "packages/sdk/tests",
       "suite": "core",
       "platforms": [
         "ubuntu-latest",
         "windows-latest"
       ],
       "requiredPaths": [
-        "packages/migrate/core/tests/ts-import-smoke.ts",
-        "packages/migrate/core/tests/codegen-retry.test.ts",
-        "packages/migrate/core/tests/python-import-smoke.py",
+        "packages/sdk/tests/ts-import-smoke.ts",
+        "packages/sdk/tests/codegen-retry.test.ts",
+        "packages/sdk/tests/python-import-smoke.py",
         "packages/sdk/contracts-go/smoke_test.go",
-        "packages/migrate/core/scripts/python-smoke.mjs"
+        "packages/sdk/tests/python-smoke.mjs"
       ]
     },
     {

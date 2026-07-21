@@ -75,7 +75,7 @@ The components below are the previous implementation, carried under
 
 | Component | Role |
 | --- | --- |
-| `packages/migrate/core` | Protobuf sources and generated Go, TypeScript, and Python contracts |
+| `packages/sdk` | Generated Go, TypeScript, and Python contracts, the session harness, and the suite verifying the contract surface; protobuf sources live in `packages/mcp` |
 | `packages/cli` | `agents` CLI, state, installs, credentials/secrets, providers, sessions, memory, package/capability registries, and lifecycle management — the single local management surface; hosts the orchestrator runtime until the #218 migration is implemented and accepted |
 | `packages/sdk/harness` | Canonical session event handling and tool execution today. Owner-ruled target (2026-07-13, #218): the operation engine owning orchestration, with the orchestrator runtime migrating from the manager |
 | `packages/server/gateway` | Local model registry, routing, health, quota, and transient control-plane relay; switcher control plane and cloud OAuth dispatch |

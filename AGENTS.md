@@ -25,8 +25,8 @@ Component boundaries:
   credentials/secrets, providers, sessions, memory, packages, lifecycle
   management, and — until the #218 harness migration is implemented and
   accepted — orchestration.
-- `packages/migrate/core` owns protobuf contracts and generated Go, TypeScript, and
-  Python clients.
+- `packages/sdk` owns the generated Go, TypeScript, and Python clients and the
+  suite that verifies them; `packages/mcp` owns the protobuf sources.
 - `packages/sdk/harness` owns canonical session events and the event-backed tool
   loop, with the owner-ruled target (#218) of becoming the operation engine
   owning orchestration; it does not own state-root or provider-discovery

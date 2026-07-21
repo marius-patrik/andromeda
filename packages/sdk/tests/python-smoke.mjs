@@ -20,7 +20,7 @@ const __dirname = dirname(__filename);
 const repoRoot = dirname(__dirname);
 // The proto module and its generation templates moved to packages/mcp when the
 // protocol package took ownership of them; the smoke consumer stays here.
-const protoRoot = join(repoRoot, "..", "..", "mcp");
+const protoRoot = join(repoRoot, "..", "mcp");
 
 function run(label, cmd, args, options = {}) {
   console.log(`$ ${label}: ${cmd} ${args.join(" ")}`);

@@ -1,47 +1,68 @@
-# Agent OS Core
+# Contract surface
 
-Shared Agent OS contracts and generated client packages.
+Shared Andromeda wire contracts and the generated client packages built from
+them. This used to be a `core` component of its own; the contracts have since
+moved to their owners and this document is the map.
 
-## Contents
+## Where things live
 
-- `proto/` holds the canonical Agent OS protobuf wire contract.
-- `contracts-go/` holds generated Go protobuf and Connect stubs.
-- `clients/shared-ts/` holds generated TypeScript protobuf descriptors and shared client exports.
-- `clients/tui/` and `clients/web/` are placeholder client workspaces for the future TUI and web applications; they import `@agent-os/shared-ts` for types and service descriptors.
-- root `packages/mcp/contracts/` holds protocol, engine, execution-lane, and worker lifecycle contracts.
-- `packages/migrate/core/buf.gen.yaml` regenerates the in-repo Go and TypeScript stubs from this package boundary.
+- `packages/mcp/proto/` holds the canonical Andromeda protobuf wire contract.
+- `packages/mcp/buf.gen*.yaml` are the generation templates. Codegen runs with
+  `packages/mcp` as its working directory.
+- `packages/sdk/contracts-go/` holds the generated Go protobuf and Connect stubs.
+- `packages/sdk/shared-ts/` holds the generated TypeScript descriptors and the
+  shared client exports.
+- `packages/sdk/tests/` verifies the surface: TypeScript and Python import
+  smokes, and the codegen retry behaviour.
+- `packages/mcp/contracts/` holds the protocol, engine, execution-lane, and
+  worker lifecycle contracts.
 
 ## Package surface
 
-`agent-os-core` is a **contracts / shared-client package**, not a CLI or end-user
-application. It ships generated wire-contract stubs for downstream OS components:
+The contract surface is a library, not a CLI or end-user application. It ships
+generated wire-contract stubs for downstream components:
 
-- **Go:** module `github.com/marius-patrik/agents-manager/src/migrate/core/contracts-go`
-  - Messages: `agent_osv1 "github.com/marius-patrik/agents-manager/src/migrate/core/contracts-go/gen/agent_os/v1"`
-  - Connect services: `"github.com/marius-patrik/agents-manager/src/migrate/core/contracts-go/gen/agent_os/v1/agent_osv1connect"`
+- **Go:** module `github.com/marius-patrik/agents-manager/packages/core/contracts-go`
+  - Messages: `agent_osv1 "github.com/marius-patrik/agents-manager/packages/core/contracts-go/gen/agent_os/v1"`
+  - Connect services: `"github.com/marius-patrik/agents-manager/packages/core/contracts-go/gen/agent_os/v1/agent_osv1connect"`
   - Consumers: the Go services under `packages/server/inference/`.
-- **TypeScript:** workspace packages `@agent-os/shared-ts`, `@agent-os/tui`, `@agent-os/web`
+  - The module path still says `packages/core` while the directory is
+    `packages/sdk/contracts-go`. That identity is embedded in the generated
+    descriptors, so changing it is a codegen change rather than a rename.
+- **TypeScript:** private workspace `@agent-os/shared-ts`
   - Shared descriptors and types: `@agent-os/shared-ts/gen`
-  - Consumers: the TUI and web clients (`clients/tui` and `clients/web` are placeholders).
-- **Python:** plain protobuf stubs generated to `packages/server/inference/python-agent/agent/gen`
+  - Consumers: `packages/web` and `packages/app`, both still placeholders.
+- **Python:** plain protobuf stubs generated to
+  `packages/server/inference/python-agent/agent/gen` and
+  `packages/server/gateway/agent_os`
   - Bootstrap: `import agent.gen`
   - Messages: `from agent_os.v1 import session_frames_pb2, registry_pb2`
-  - Consumer: the Agent OS inference Python agent.
+  - Consumers: the inference Python agent and the gateway.
 
-There is no user-facing installable CLI or app. `contracts-go/cmd/contracts-go`
-is a development placeholder; downstream services consume the generated module
-directly.
+`contracts-go/cmd/contracts-go` is a development placeholder; downstream
+services consume the generated module directly.
 
-Run default in-repo codegen from the repository root:
+## Regenerating
+
+Verify freshness from the repository root:
 
 ```sh
-cd packages/migrate/core
-bunx --bun @bufbuild/buf generate proto
+bun scripts/verify-codegen.ts
 ```
 
-That updates the committed Go and TypeScript outputs. Python stubs are refreshed
-with `buf.gen.python.yaml` when the in-repository inference consumer is part of
-the same change.
+That regenerates into a scratch tree and fails if the committed output differs,
+which is how CI enforces freshness. To regenerate in place:
+
+```sh
+cd packages/mcp
+bunx --bun @bufbuild/buf generate proto
+bunx --bun @bufbuild/buf generate proto --template buf.gen.python.yaml
+```
+
+The first updates the committed Go and TypeScript outputs; the second refreshes
+the Python stubs for the inference and gateway consumers.
+
+## Validation
 
 Run the full package validation from the repository root:
 
