@@ -2,11 +2,11 @@
 
 Load the project-local authority before non-trivial work:
 
-1. `packages/.project/AGENTS.md`
-2. `packages/.project/PROJECT.md`
-3. `packages/.project/COMMANDS.md`
-4. `packages/.project/STATUS.md`
-5. `packages/.project/HANDOFF.md`
+1. `.agents/.project/AGENTS.md`
+2. `.agents/.project/PROJECT.md`
+3. `.agents/.project/COMMANDS.md`
+4. `.agents/.project/STATUS.md`
+5. `.agents/.project/HANDOFF.md`
 
 Shared identity, memory, roles, and skills are installed once under
 `$AGENTS_HOME`; this repository does not carry a second global agent floor.
@@ -17,7 +17,7 @@ root-owned. Do not add `.agents`, `.darkfactory`, `docs/`, `AGENTS.md`,
 Managed repository gitlinks below `src/` retain their independently owned
 child policy and documentation; those child files do not become Andromeda
 authority. Andromeda component documentation belongs under root `docs/`, and
-component-specific validation commands belong in `packages/.project/COMMANDS.md`.
+component-specific validation commands belong in `.agents/.project/COMMANDS.md`.
 
 Component boundaries:
 
