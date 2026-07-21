@@ -1,0 +1,16 @@
+# Generated contract output is the generator's to format, not ours. buf emits a
+# trailing blank line, which `git diff --check` reports as a new blank line at
+# EOF whenever a generated file is added rather than paired as a rename - as
+# happened when the wire namespace moved from agent_os/v1 to andromeda/v1.
+#
+# The whitespace contract exists to catch sloppy hand-authored edits, so it is
+# narrowed to exclude generated trees rather than satisfied by editing output
+# that would then no longer match `buf generate`. Every hand-authored file,
+# including the one barrel that lives inside a generated tree, stays checked.
+packages/sdk/contracts-go/gen/** -whitespace
+packages/sdk/shared-ts/src/gen/** -whitespace
+packages/server/inference/python-agent/agent/gen/** -whitespace
+packages/server/gateway/andromeda/** -whitespace
+
+# Hand-authored, and buf never emits it: keep it under the whitespace contract.
+packages/sdk/shared-ts/src/gen/index.ts whitespace
