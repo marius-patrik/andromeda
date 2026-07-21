@@ -53,17 +53,17 @@ async function ensureDoctorProduct(state: ReturnType<typeof tempState>): Promise
   await installCapability(state, {
     kind: "skill",
     name: "test",
-    source: path.join(sourceRoot, "packages", ".global", "skills", "test"),
+    source: path.join(sourceRoot, ".agents", ".global", "skills", "test"),
   });
   const identitySource = path.join(state.root, "identity-source");
   await mkdir(path.join(identitySource, "roles"), { recursive: true });
   await mkdir(path.join(identitySource, "prompts"), { recursive: true });
   await copyFile(path.join(sourceRoot, "persona.md"), path.join(identitySource, "persona.md"));
-  for (const name of await readdir(path.join(sourceRoot, "packages", ".global", "roles"))) {
-    if (name.endsWith(".yaml")) await copyFile(path.join(sourceRoot, "packages", ".global", "roles", name), path.join(identitySource, "roles", name));
+  for (const name of await readdir(path.join(sourceRoot, ".agents", ".global", "roles"))) {
+    if (name.endsWith(".yaml")) await copyFile(path.join(sourceRoot, ".agents", ".global", "roles", name), path.join(identitySource, "roles", name));
   }
-  for (const name of await readdir(path.join(sourceRoot, "packages", ".global", "commands"))) {
-    if (name.endsWith(".md")) await copyFile(path.join(sourceRoot, "packages", ".global", "commands", name), path.join(identitySource, "prompts", name));
+  for (const name of await readdir(path.join(sourceRoot, ".agents", ".global", "commands"))) {
+    if (name.endsWith(".md")) await copyFile(path.join(sourceRoot, ".agents", ".global", "commands", name), path.join(identitySource, "prompts", name));
   }
   await activateIdentityBundle(state, identitySource, { replace: true });
   await rm(identitySource, { recursive: true, force: true });

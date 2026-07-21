@@ -157,8 +157,6 @@
   "scaffoldedComponents": [
     "packages",
     "packages-manager-legacy",
-    "packages/.global",
-    "packages/.project",
     "packages/clients",
     "packages/clients/app",
     "packages/clients/cli",

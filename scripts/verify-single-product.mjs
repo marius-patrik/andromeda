@@ -21,10 +21,10 @@ const requiredLayout = [
   "packages/migrate/harness",
   "packages/migrate/inference",
   "packages/clients/cli",
-  "packages/.global/skills",
-  "packages/.global/hooks",
-  "packages/.global/roles",
-  "packages/.global/commands",
+  ".agents/.global/skills",
+  ".agents/.global/hooks",
+  ".agents/.global/roles",
+  ".agents/.global/commands",
 ];
 for (const relative of requiredLayout) {
   if (!fs.statSync(path.join(root, relative), { throwIfNoEntry: false })?.isDirectory()) {
@@ -73,7 +73,10 @@ for (const match of gitmodules.matchAll(/^\s*path\s*=\s*(.+)\s*$/gm)) {
 }
 
 const forbiddenPaths = [
-  [/(^|\/)\.agents\/\.global(\/|$)/, "copied global agent state"],
+  // The repository's own .agents/.global at the root is the authored capability
+  // root. The rule still rejects a .agents/.global copied in anywhere below the
+  // root, which is what leaking provider-home state looks like.
+  [/.+\/\.agents\/\.global(\/|$)/, "copied global agent state"],
   [/(^|\/)legacy(\/|$)/i, "legacy implementation tree"],
   [/^packages\/core\/src\/(?:plugin|dream)(\/|$)/, "retired provider-era memory plugin"],
   [/(^|\/)rommie\/v1(\/|$)/, "retired wire namespace"],
