@@ -115,13 +115,9 @@ export function inventoryIssues(root = repositoryRoot) {
   ]
     .filter((entry) => typeof entry === "string" && (["templates"].includes(entry) || entry.startsWith("packages/") || entry.startsWith("agents/") || entry.startsWith("templates/")))
     .sort();
-  // packages/migrate nests one level deeper: its children are frozen former
-  // components, each still individually declared in the inventory. sdk and
-  // server nest the same way, holding the contract and deployment components
-  // that have left migrate.
+  // sdk and server nest one level deeper, holding the contract and deployment`n  // components. Each child is individually declared in the inventory.
   const actualPackages = [
     ...sortedDirectories(root, "packages"),
-    ...sortedDirectories(root, "packages/migrate"),
     ...sortedDirectories(root, "packages/server"),
     ...sortedDirectories(root, "packages/sdk"),
     ...(fs.existsSync(path.join(root, "sdk")) ? ["sdk"] : []),

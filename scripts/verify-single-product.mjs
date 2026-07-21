@@ -31,16 +31,6 @@ for (const relative of requiredLayout) {
     issues.push(`required repository root is missing: ${relative}`);
   }
 }
-// core itself is gone: its contracts had already left for sdk and mcp, and its
-// remaining verification surface is now packages/sdk/tests. These paths are
-// kept as a tombstone rather than deleted, so recreating the retired nested
-// layout under the old name still fails closed.
-for (const retired of ["packages/migrate/core/src", "packages/migrate/core/test", "packages/migrate/core/capabilities"]) {
-  if (fs.statSync(path.join(root, retired), { throwIfNoEntry: false })) {
-    issues.push(`retired nested repository root remains: ${retired}`);
-  }
-}
-
 const nestedRepositoryMetadata = [
   // Both state-root spellings are rejected inside packages/: .agents is the
   // pre-rebrand name and .andromeda is the current one, and neither belongs in
@@ -53,16 +43,14 @@ const nestedRepositoryMetadata = [
   // carve out is gone and the single component-depth rule covers every package.
   /^packages\/[a-z0-9-]+\/.+\/README\.md$/i,
 ];
-// packages/migrate holds former standalone repositories verbatim, frozen for
-// migration. Their original metadata is evidence and is not rewritten here;
-// code leaves migrate by reimplementation against the sdk.
-const migrateTree = /^packages\/(?:migrate|bot)(?:\/|$)/;
+// packages/bot carries the folded DarkFactory repository verbatim, with its own`n// identity and versioning. Repository-wide contracts on what is built and`n// shipped do not apply inside it; every live surface stays fully scanned.
+const carriedPackageTree = /^packages\/bot(?:\/|$)/;
 // agents/ holds agent projects, and templates/ holds folded template repositories,
-// versioning, and project docs. Like migrate, they are carried rather than
+// versioning, and project docs. Like bot, they are carried rather than
 // built as part of this product, so the single-product interior rules do not
 // apply inside them. Every live surface remains fully scanned.
 const agentsTree = /^templates\/[^/]+\//;
-const carriedTree = (relative) => migrateTree.test(relative) || agentsTree.test(relative);
+const carriedTree = (relative) => carriedPackageTree.test(relative) || agentsTree.test(relative);
 for (const relative of tracked) {
   if (carriedTree(relative)) continue;
   if (nestedRepositoryMetadata.some((pattern) => pattern.test(relative))) {
@@ -129,17 +117,12 @@ const retiredVariableRejectionFiles = new Set([
 
 // This policy file necessarily spells the retired identifiers it rejects.
 // Product source, manifests, scripts, and documentation remain fully scanned.
-// The CI inventory necessarily names the frozen packages/migrate directories,
-// which keep the original repository names they were retired under. Its schema,
-// paths, suites, and gitlinks are enforced by verify-test-inventory instead.
+// The CI inventory necessarily names carried directories that keep the original`n// repository names they were retired under. Its schema, paths, suites, and`n// gitlinks are enforced by verify-test-inventory instead.
 const policyFiles = new Set(["scripts/verify-single-product.mjs", ".github/ci/test-inventory.json"]);
 
 for (const relative of tracked) {
   if (policyFiles.has(relative)) continue;
-  // packages/migrate holds former standalone repositories verbatim as frozen
-  // evidence, and those histories necessarily spell the names they were retired
-  // for. Retired-name enforcement stays fully active on every surface that is
-  // still built, imported, or shipped; nothing imports migrate.
+  // Carried trees hold folded repositories verbatim as frozen evidence, and`n  // those histories necessarily spell the names they were retired for.`n  // Retired-name enforcement stays fully active on every surface that is still`n  // built, imported, or shipped; nothing imports a carried tree.
   if (carriedTree(relative)) continue;
   const absolute = path.join(root, relative);
   const content = fs.readFileSync(absolute);

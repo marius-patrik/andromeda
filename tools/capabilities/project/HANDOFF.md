@@ -21,10 +21,10 @@ bun packages/cli/src/cli.ts state doctor --json
 
 The target components — `sdk`, `mcp`, `server`, `clients/*`, `plugins` — exist
 as contracts without implementation. The work ahead is reimplementing capability
-out of `packages/migrate` against the sdk, not extending the frozen tree in place.
+out of `packages/bot` against the sdk, not extending the frozen tree in place.
 Nothing outside a carried tree may depend on one.
 
-Carried trees (`packages/migrate/`, `agents/<project>/`, `templates/<project>/`) hold
+Carried trees (`packages/bot/`, `agents/<project>/`, `templates/<project>/`) hold
 former standalone repositories with their full history. Repository-wide
 contracts that govern what is built and shipped do not apply inside them; every
 live surface is still fully scanned. If a rule needs relaxing for a carried

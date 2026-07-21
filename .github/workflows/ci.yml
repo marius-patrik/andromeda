@@ -110,7 +110,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           git diff --check "$BASE_SHA...$HEAD_SHA"
-          # No submodules remain: every former gitlink is folded into packages/migrate
+          # No submodules remain: every former gitlink was folded in
           # with its history. If one is ever declared again, verify-test-inventory
           # fails until this job initializes and verifies exactly that set.
           if [ -s .gitmodules ]; then

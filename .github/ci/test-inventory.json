@@ -157,13 +157,10 @@
   "scaffoldedComponents": [
     "packages",
     "packages-manager-legacy",
-    "packages/app",
     "packages/cli",
     "packages/web",
     "packages/bot",
     "packages/mcp",
-    "packages/migrate",
-    "packages/migrate/genesis-os",
     "packages/memory",
     "packages/sdk",
     "packages/sdk/contracts-go",

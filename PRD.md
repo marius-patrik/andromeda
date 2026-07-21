@@ -72,8 +72,7 @@ machines, each joined as either a client or a server, never both.
 | `clients/cli`, `clients/app`, `clients/web` | Clients only. They hold no business logic; anything a client needs must be reachable through the protocol. |
 | `plugins` | Capabilities loaded through the sdk plugin contract. |
 
-The components below are the previous implementation, carried under
-`packages/migrate` and mined by reimplementation rather than extended in place.
+The components below are the current implementation.
 
 | Component | Role |
 | --- | --- |
@@ -489,17 +488,16 @@ clients/        cli, app, web
 plugins/        capabilities loaded through the sdk plugin contract
 agents/         agent projects, carried with their own identity
 templates/      folded template repositories
-packages/migrate/    the previous implementation, frozen for migration
 skills/  hooks/  roles/  commands/  persona.md
 docs/    ci/     install/  scripts/  .github/  .darkfactory/
 ```
 
 Two rules govern this layout.
 
-**Carried trees are not built.** `packages/migrate/`, `agents/<project>/`, and
+**Carried trees are not built.** `packages/bot/`, `agents/<project>/`, and
 `templates/<project>/` hold former standalone repositories folded in with their
 full history. They keep their own identity, versioning, and project docs, and
-nothing outside them may depend on them. Code leaves `packages/migrate` by being
+nothing outside them may depend on them. Code leaves a carried tree by being
 reimplemented against the sdk — never by being re-imported, and never by being
 deleted. Repository-wide contracts that govern what is built and shipped
 (retired names, forbidden paths, nested package metadata, the single-product

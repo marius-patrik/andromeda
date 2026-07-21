@@ -160,11 +160,11 @@ test("denied failure: managed package classifications must be unique and mutuall
       submodule: true,
       platforms: ["ubuntu-latest"],
     });
-    inventory.parkedPlugins.push("packages/seeded", "packages/migrate/dream", "packages/migrate/dream");
+    inventory.parkedPlugins.push("packages/seeded", "packages/parked-twice", "packages/parked-twice");
     writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);
     const issues = inventoryIssues(target).join("\n");
     assert.match(issues, /managed package has conflicting CI classifications \(active, parked plugin\): packages\/seeded/);
-    assert.match(issues, /managed package is repeated in the parked plugin CI classification: packages\/migrate\/dream/);
+    assert.match(issues, /managed package is repeated in the parked plugin CI classification: packages\/parked-twice/);
   } finally {
     rmSync(target, { recursive: true, force: true });
   }

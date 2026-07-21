@@ -10,10 +10,10 @@ once a separate repository is folded in with its full history:
 
 - **Target components** — `sdk`, `mcp`, `server`, `clients/{cli,app,web}`, and
   `plugins` — carry their contracts and are where new implementation belongs.
-- **Carried trees** — `packages/migrate/`, `agents/<project>/`, and
+- **Carried trees** — `packages/bot/`, `agents/<project>/`, and
   `templates/<project>/` — hold former standalone repositories. They keep their
   own identity and versioning, nothing outside them may depend on them, and code
-  leaves `packages/migrate` by reimplementation against the sdk rather than by
+  leaves `packages/bot` by reimplementation against the sdk rather than by
   re-import or deletion.
 
 Durable state is not part of this repository. It lives in `private-data` and is
@@ -37,7 +37,7 @@ Target component ownership:
 - `clients/cli`, `clients/app`, `clients/web` — clients only, no business logic.
 - `plugins` — capabilities loaded through the sdk plugin contract.
 
-Carried component ownership, frozen under `packages/migrate` and mined by
+Carried component ownership, frozen under `packages/bot` and mined by
 reimplementation:
 
 - `packages/cli` — `agents` CLI, state, installs, credentials/secrets,

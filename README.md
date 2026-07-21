@@ -184,8 +184,6 @@ These hold former standalone repositories, folded in with their full history.
 They keep their own identity and versioning, and nothing outside them may
 depend on them.
 
-- `packages/migrate/` — the previous implementation, frozen and mined by
-  reimplementation against the sdk: `manager` (the `agents` CLI and state
   runtime, see [manager](docs/manager.md)), `core`
   ([contracts and generated clients](docs/core.md)), `harness`
   ([managed runtime](docs/harness.md)), `gateway`

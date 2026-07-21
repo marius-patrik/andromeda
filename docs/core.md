@@ -31,7 +31,7 @@ generated wire-contract stubs for downstream components:
     descriptors, so changing it is a codegen change rather than a rename.
 - **TypeScript:** private workspace `@marius-patrik/andromeda-sdk`
   - Shared descriptors and types: `@marius-patrik/andromeda-sdk/gen`
-  - Consumers: `packages/web` and `packages/app`, both still placeholders.
+  - Consumers: `packages/web`, still a placeholder.
 - **Python:** plain protobuf stubs generated to
   `packages/server/inference/python-agent/agent/gen` and
   `packages/server/gateway/andromeda`
