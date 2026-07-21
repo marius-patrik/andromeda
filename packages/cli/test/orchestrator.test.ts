@@ -18,7 +18,7 @@ import {
   writeOrchestratorHeartbeat,
 } from "../src/orchestrator";
 import { renewableLockDatabasePath } from "../src/state-lock";
-import { loadTranscript } from "../../../sdk/harness/session";
+import { loadTranscript } from "../../sdk/harness/session";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const cliPath = path.join(repoRoot, "src", "cli.ts");

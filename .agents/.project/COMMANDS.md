@@ -32,9 +32,9 @@ node scripts/run-ci-suite.mjs harness
 
 # The exhaustive manager-coupled harness files remain:
 bun test packages/sdk/harness/test/tools.test.ts \
-  packages/clients/cli/test/session.test.ts \
-  packages/clients/cli/test/session-adapters.test.ts \
-  packages/clients/cli/test/tui-tools.test.ts
+  packages/cli/test/session.test.ts \
+  packages/cli/test/session-adapters.test.ts \
+  packages/cli/test/tui-tools.test.ts
 
 # Gateway package
 (

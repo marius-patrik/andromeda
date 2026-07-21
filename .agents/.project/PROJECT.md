@@ -40,7 +40,7 @@ Target component ownership:
 Carried component ownership, frozen under `packages/migrate` and mined by
 reimplementation:
 
-- `packages/clients/cli` — `agents` CLI, state, installs, credentials/secrets,
+- `packages/cli` — `agents` CLI, state, installs, credentials/secrets,
   providers, sessions, memory, package/capability registries, lifecycle
   management, and — until the #218 harness migration is implemented and
   accepted — the orchestrator runtime.

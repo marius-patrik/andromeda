@@ -7,7 +7,7 @@ import {
   runSessionTurn,
   type SessionMode,
   type TurnResult,
-} from "../../../sdk/harness/session";
+} from "../../sdk/harness/session";
 import { doctorAdapter, type AdapterDoctorResult } from "./adapters";
 import { providerSessionAdapter } from "./session-adapters";
 import type { ProviderId } from "./provider-registry";
