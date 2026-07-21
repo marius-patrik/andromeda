@@ -147,7 +147,7 @@ if (rootPackage.bin?.andromeda !== "./packages/clients/cli/src/cli.ts") {
 const expectedJavaScriptWorkspaces = new Map([
   ["packages/clients/cli/package.json", "@marius-patrik/andromeda"],
   ["packages/sdk/shared-ts/package.json", "@agent-os/shared-ts"],
-  
+
   ["packages/clients/web/package.json", "@agent-os/web"],
 ]);
 const declaredWorkspaces = new Set(rootPackage.workspaces ?? []);

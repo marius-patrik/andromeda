@@ -121,7 +121,7 @@ export function inventoryIssues(root = repositoryRoot) {
     ...sortedDirectories(root, "packages"),
     ...sortedDirectories(root, "packages/migrate"),
     ...sortedDirectories(root, "packages/clients"),
-    
+
     ...sortedDirectories(root, "packages/sdk"),
     ...(fs.existsSync(path.join(root, "sdk")) ? ["sdk"] : []),
     ...(fs.existsSync(path.join(root, "server")) ? ["server"] : []),
