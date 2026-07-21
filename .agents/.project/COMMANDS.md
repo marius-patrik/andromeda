@@ -22,7 +22,7 @@ subshell is shown:
 
 ```sh
 # Core contracts and generated clients
-bunx tsc --noEmit -p packages/migrate/core/tsconfig.json
+bunx tsc --noEmit -p packages/sdk/tsconfig.json
 bunx buf lint packages/mcp/proto
 bun scripts/verify-codegen.ts
 (cd packages/sdk/contracts-go && go test ./...)

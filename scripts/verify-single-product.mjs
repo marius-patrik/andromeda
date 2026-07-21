@@ -16,7 +16,7 @@ const tracked = execFileSync("git", ["-C", root, "ls-files", "--cached", "--othe
 const issues = [];
 issues.push(...inventoryIssues(root));
 const requiredLayout = [
-  "packages/migrate/core",
+  "packages/sdk/tests",
   "packages/server/gateway",
   "packages/sdk/harness",
   "packages/server/inference",
@@ -31,6 +31,10 @@ for (const relative of requiredLayout) {
     issues.push(`required repository root is missing: ${relative}`);
   }
 }
+// core itself is gone: its contracts had already left for sdk and mcp, and its
+// remaining verification surface is now packages/sdk/tests. These paths are
+// kept as a tombstone rather than deleted, so recreating the retired nested
+// layout under the old name still fails closed.
 for (const retired of ["packages/migrate/core/src", "packages/migrate/core/test", "packages/migrate/core/capabilities"]) {
   if (fs.statSync(path.join(root, retired), { throwIfNoEntry: false })) {
     issues.push(`retired nested repository root remains: ${retired}`);

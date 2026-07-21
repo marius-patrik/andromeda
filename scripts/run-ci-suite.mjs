@@ -97,11 +97,11 @@ const suites = {
     run("repository layout and suite inventory", "bun", ["run", "layout:check"]);
   },
   core() {
-    run("core TypeScript types", "bun", ["./node_modules/typescript/bin/tsc", "--noEmit", "-p", "packages/migrate/core/tsconfig.json"]);
-    run("core TypeScript import smoke", "bun", ["packages/migrate/core/tests/ts-import-smoke.ts"]);
-    run("core TypeScript tests", "bun", ["test", ...discoverBunTests(path.join("packages", "migrate", "core", "tests"))]);
+    run("core TypeScript types", "bun", ["./node_modules/typescript/bin/tsc", "--noEmit", "-p", "packages/sdk/tsconfig.json"]);
+    run("core TypeScript import smoke", "bun", ["packages/sdk/tests/ts-import-smoke.ts"]);
+    run("core TypeScript tests", "bun", ["test", ...discoverBunTests(path.join("packages", "sdk", "tests"))]);
     run("generated contract freshness", "bun", ["scripts/verify-codegen.ts"]);
-    run("core Python import smoke", "bun", ["packages/migrate/core/scripts/python-smoke.mjs"]);
+    run("core Python import smoke", "bun", ["packages/sdk/tests/python-smoke.mjs"]);
     run("core Go contracts", "go", ["test", "./..."], {
       cwd: path.join(root, "packages", "sdk", "contracts-go"),
     });
