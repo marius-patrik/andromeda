@@ -46,7 +46,7 @@ reimplementation:
   accepted — the orchestrator runtime.
 - `packages/migrate/core` — protobuf sources and generated Go, TypeScript, and Python
   contracts.
-- `packages/migrate/harness` — canonical session event handling and tool execution.
+- `packages/sdk/harness` — canonical session event handling and tool execution.
   Owner-ruled target (2026-07-13, #218): the operation engine owning
   orchestration, with the orchestrator runtime migrating from the manager.
 - `packages/migrate/gateway` — local model registry, routing, health, quota, and

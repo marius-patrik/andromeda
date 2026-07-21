@@ -28,8 +28,8 @@ import {
   type SessionTranscript,
   type TurnRequest,
   type TurnResult,
-} from "../../../migrate/harness/session";
-import { FakeProviderAdapter } from "../../../migrate/harness/session-adapters";
+} from "../../../sdk/harness/session";
+import { FakeProviderAdapter } from "../../../sdk/harness/session-adapters";
 import { providerSessionAdapter } from "../src/session-adapters";
 import { renewableLockDatabasePath } from "../src/state-lock";
 

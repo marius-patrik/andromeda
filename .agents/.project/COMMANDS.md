@@ -31,7 +31,7 @@ bun scripts/verify-codegen.ts
 node scripts/run-ci-suite.mjs harness
 
 # The exhaustive manager-coupled harness files remain:
-bun test packages/migrate/harness/test/tools.test.ts \
+bun test packages/sdk/harness/test/tools.test.ts \
   packages/clients/cli/test/session.test.ts \
   packages/clients/cli/test/session-adapters.test.ts \
   packages/clients/cli/test/tui-tools.test.ts

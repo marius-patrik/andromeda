@@ -18,7 +18,7 @@ issues.push(...inventoryIssues(root));
 const requiredLayout = [
   "packages/migrate/core",
   "packages/migrate/gateway",
-  "packages/migrate/harness",
+  "packages/sdk/harness",
   "packages/migrate/inference",
   "packages/clients/cli",
   ".agents/.global/skills",

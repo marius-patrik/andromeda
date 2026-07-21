@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ensureSharedState, sharedState } from "../src/state";
-import { createSession, loadSessionEvents, loadTranscript } from "../../../migrate/harness/session";
+import { createSession, loadSessionEvents, loadTranscript } from "../../../sdk/harness/session";
 import {
   createTuiTools,
   executeToolCalls,
@@ -12,8 +12,8 @@ import {
   runSessionTurnWithTools,
   type AgentToolContext,
   type ProviderListing,
-} from "../../../migrate/harness/tools";
-import type { ProviderAdapter, SessionDescriptor, TurnRequest, TurnResult } from "../../../migrate/harness/session";
+} from "../../../sdk/harness/tools";
+import type { ProviderAdapter, SessionDescriptor, TurnRequest, TurnResult } from "../../../sdk/harness/session";
 
 function fakeContext(
   descriptor: SessionDescriptor,

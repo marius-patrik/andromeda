@@ -16,7 +16,7 @@ import type {
   TranscriptMessage,
   TurnRequest,
   TurnResult,
-} from "../../../migrate/harness/session";
+} from "../../../sdk/harness/session";
 import { commandInvocation } from "./process-command";
 import { runAnchoredFileAuthority } from "./anchored-file-authority";
 

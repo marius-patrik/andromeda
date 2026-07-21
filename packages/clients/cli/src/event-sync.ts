@@ -22,7 +22,7 @@ import {
   inspectSessionIntegrity,
   rebuildSessionProjectionsWhileLocked,
   withSessionWriteLock,
-} from "../../../migrate/harness/session";
+} from "../../../sdk/harness/session";
 import {
   inspectOrchestratorIntegrity,
   rebuildOrchestratorProjectionWhileLocked,

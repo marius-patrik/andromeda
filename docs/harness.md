@@ -1,7 +1,7 @@
 # Agent OS Runtime Harness
 
 This directory contains the TypeScript runtime harness used by `agents`. It is
-an implementation component rooted at `packages/migrate/harness`; it is not a separate
+an implementation component rooted at `packages/sdk/harness`; it is not a separate
 product, install, release, or state authority.
 
 ## Current surface
