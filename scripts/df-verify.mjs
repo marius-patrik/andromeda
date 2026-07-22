@@ -18,7 +18,7 @@ import {
   writeRunLedger
 } from "./df-lib.mjs";
 
-const CONTROL_ROOT = pathToFileURL(new URL("../../", import.meta.url).href).pathname;
+const CONTROL_ROOT = pathToFileURL(new URL("../", import.meta.url).href).pathname;
 const TRIGGER = process.env.DF_TRIGGER ?? "unknown";
 const DATA_REPO = process.env.DF_DATA_REPO ?? DARK_FACTORY_DATA_REPO;
 const VERIFICATION_MARKER = "<!-- dark-factory:worker-verification -->";
