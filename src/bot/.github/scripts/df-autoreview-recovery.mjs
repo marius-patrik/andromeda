@@ -12,7 +12,7 @@ import {
 } from "./df-lib.mjs";
 import {
   resolveEffectiveIssueContent
-} from "../../src/issue-spec.ts";
+} from "../../issue-spec.ts";
 import { classifyExactAutoreviewResult } from "./run-darkfactory-autoreview.mjs";
 
 const CONTROL_REPOSITORY = { owner: "marius-patrik", repo: "DarkFactory" };

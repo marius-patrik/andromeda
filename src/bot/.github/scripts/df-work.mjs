@@ -38,7 +38,7 @@ import {
   agentProcessEnvironment,
   executeModelTurn,
   validationCommandsForRepository
-} from "../../src/model-turn.ts";
+} from "../../model-turn.ts";
 
 const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TOKEN = requiredEnv("DARK_FACTORY_TOKEN");

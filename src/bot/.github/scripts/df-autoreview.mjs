@@ -6,7 +6,7 @@ import {
   validateAgentExecutionReceipt,
   validateModelPolicy
 } from "./df-model-policy.mjs";
-import { validatePromptProvenance } from "../../src/model-turn.ts";
+import { validatePromptProvenance } from "../../model-turn.ts";
 
 export const AUTOREVIEW_POLICY_PATH = ".darkfactory/autoreview-policy.json";
 export const AUTOREVIEW_SCHEMA_PATH = ".github/darkfactory-autoreview.schema.json";

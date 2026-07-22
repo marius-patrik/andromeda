@@ -35,14 +35,14 @@ import {
   ModelTurnError,
   executeModelTurn,
   validationCommandsForRepository
-} from "../../src/model-turn.ts";
+} from "../../model-turn.ts";
 import {
   autoreviewTargetVersionMarker,
   issueVersion,
   renderIssueAutofixComment,
   resolveEffectiveIssueContent,
   validateIssueAutofixProposal
-} from "../../src/issue-spec.ts";
+} from "../../issue-spec.ts";
 
 const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CONTROL_REPOSITORY = "marius-patrik/darkfactory";

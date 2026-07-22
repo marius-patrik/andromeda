@@ -32,7 +32,7 @@ import { runRepositoryDoctor } from "./df-audit.mjs";
 import {
   evaluateIssueReady,
   resolveEffectiveIssueContent
-} from "../../src/issue-spec.ts";
+} from "../../issue-spec.ts";
 
 const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const ORCHESTRATION_POLICY_PATH = ".darkfactory/orchestration.json";
