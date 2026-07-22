@@ -14,6 +14,7 @@ export const MODEL_PURPOSES = Object.freeze([
   "explicitMaximum"
 ]);
 export const TASK_CLASSES = Object.freeze(["mechanical", "standard", "hard"]);
+const TOOL_POLICIES = new Set(["standard", "none"]);
 
 const SAFE_ROUTE_VALUE = /^[A-Za-z0-9][A-Za-z0-9_.\/-]{0,127}$/;
 const SAFE_ROUTE_MODEL = /^[A-Za-z0-9][A-Za-z0-9_.\/() -]{0,127}$/;
