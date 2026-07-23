@@ -3,11 +3,20 @@
 // Licensed under the Apache License, Version 2.0.
 
 import path from "node:path";
-import { parseMemoryConcept, serializeMemoryConcept, sha256 } from "./okf";
+import {
+  compareMemoryText,
+  parseMemoryConcept,
+  serializeMemoryConcept,
+  sha256,
+} from "./okf";
 import type { CanonicalMemoryDocument, MemoryConceptFrontmatter, MemoryFrontmatterValue } from "./types";
 
 const MAX_MIGRATION_SOURCE_BYTES = 8 * 1024 * 1024;
 const MAX_MIGRATION_TOTAL_BYTES = 128 * 1024 * 1024;
+const MAX_MIGRATION_SOURCES = 10_000;
+const MAX_MIGRATION_SOURCE_PATH_BYTES = 4 * 1024;
+const MAX_MIGRATION_SOURCE_SEGMENT_BYTES = 255;
+const MAX_MIGRATION_TOPIC_BYTES = 1024;
 const SAFE_SOURCE_SEGMENT = /^[^\0\r\n/\\]+$/u;
 const RESERVED_SLUGS = new Set(["agents", "claude", "index", "log", "readme"]);
 
@@ -54,33 +63,59 @@ interface NormalizedSource extends MemoryMigrationEvidence {
 }
 
 function normalizeSourcePath(input: string): string {
-  if (typeof input !== "string" || !input || input.startsWith("/") || /^[A-Za-z]:[\\/]/.test(input)) {
+  if (
+    typeof input !== "string" ||
+    !input ||
+    input.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(input)
+  ) {
     throw new Error("memory migration source path must be repository-relative");
+  }
+  if (Buffer.byteLength(input, "utf8") > MAX_MIGRATION_SOURCE_PATH_BYTES) {
+    throw new Error(`memory migration source path exceeds ${MAX_MIGRATION_SOURCE_PATH_BYTES} bytes`);
   }
   if (input.includes("\\") || input.includes("//")) {
     throw new Error(`memory migration source path is not canonical: ${input}`);
   }
   const segments = input.split("/");
-  if (segments.some((segment) => segment === "." || segment === ".." || !SAFE_SOURCE_SEGMENT.test(segment))) {
+  if (
+    segments.some(
+      (segment) =>
+        segment === "." ||
+        segment === ".." ||
+        Buffer.byteLength(segment, "utf8") > MAX_MIGRATION_SOURCE_SEGMENT_BYTES ||
+        !SAFE_SOURCE_SEGMENT.test(segment),
+    )
+  ) {
     throw new Error(`memory migration source path contains an unsafe segment: ${input}`);
   }
   return input.normalize("NFC");
 }
 
-function decodeSource(bytes: string | Uint8Array, sourcePath: string): { text: string; size: number } {
+function decodeSource(
+  bytes: string | Uint8Array,
+  sourcePath: string,
+): { text: string; size: number; encoded: Buffer } {
+  if (typeof bytes !== "string" && !(bytes instanceof Uint8Array)) {
+    throw new Error(`memory migration source bytes must be UTF-8 text at ${sourcePath}`);
+  }
   const encoded = typeof bytes === "string" ? Buffer.from(bytes, "utf8") : Buffer.from(bytes);
   if (encoded.byteLength > MAX_MIGRATION_SOURCE_BYTES) {
     throw new Error(`memory migration source exceeds ${MAX_MIGRATION_SOURCE_BYTES} bytes: ${sourcePath}`);
   }
   try {
-    return { text: new TextDecoder("utf-8", { fatal: true }).decode(encoded), size: encoded.byteLength };
+    return {
+      text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(encoded),
+      size: encoded.byteLength,
+      encoded,
+    };
   } catch {
     throw new Error(`memory migration source is not UTF-8 text: ${sourcePath}`);
   }
 }
 
 function mediaType(sourcePath: string): NormalizedSource["mediaType"] {
-  switch (path.posix.extname(sourcePath).toLocaleLowerCase("en-US")) {
+  switch (path.posix.extname(sourcePath).toLowerCase()) {
     case ".md":
     case ".markdown":
       return "markdown";
@@ -103,24 +138,33 @@ function basenameTitle(sourcePath: string): string {
   const base = path.posix.basename(sourcePath, path.posix.extname(sourcePath));
   return base
     .replace(/[-_.]+/g, " ")
-    .replace(/\b\p{L}/gu, (letter) => letter.toLocaleUpperCase("en-US"))
+    .replace(/\b\p{L}/gu, (letter) => letter.toUpperCase())
     .trim();
 }
 
 function normalizeTopic(source: LegacyMemorySource, sourcePath: string, text: string): { key: string; title: string } {
+  if (source.topic !== undefined && typeof source.topic !== "string") {
+    throw new Error(`memory migration topic is invalid for ${sourcePath}`);
+  }
   const supplied = source.topic?.trim();
-  if (source.topic !== undefined && (!supplied || /[\r\n\0]/.test(source.topic))) {
+  if (
+    source.topic !== undefined &&
+    (!supplied ||
+      supplied !== source.topic ||
+      /[\r\n\0]/.test(source.topic) ||
+      Buffer.byteLength(source.topic, "utf8") > MAX_MIGRATION_TOPIC_BYTES)
+  ) {
     throw new Error(`memory migration topic is invalid for ${sourcePath}`);
   }
   const title = supplied ?? heading(text) ?? basenameTitle(sourcePath);
-  return { key: title.normalize("NFKC").toLocaleLowerCase("en-US"), title };
+  return { key: title.normalize("NFKC").toLowerCase(), title };
 }
 
 function slug(value: string): string {
   let result = value
     .normalize("NFKD")
     .replace(/\p{M}/gu, "")
-    .toLocaleLowerCase("en-US")
+    .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   if (!result) result = `concept-${sha256(value).slice(0, 12)}`;
@@ -129,13 +173,16 @@ function slug(value: string): string {
 }
 
 function normalizedSource(source: LegacyMemorySource): NormalizedSource {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw new Error("memory migration source must be an object");
+  }
   const sourcePath = normalizeSourcePath(source.sourcePath);
   const decoded = decodeSource(source.bytes, sourcePath);
   const topic = normalizeTopic(source, sourcePath, decoded.text);
   return {
     sourcePath,
     sourceBytes: decoded.size,
-    sha256: sha256(typeof source.bytes === "string" ? Buffer.from(source.bytes, "utf8") : source.bytes),
+    sha256: sha256(decoded.encoded),
     mediaType: mediaType(sourcePath),
     text: decoded.text,
     topicKey: topic.key,
@@ -143,11 +190,30 @@ function normalizedSource(source: LegacyMemorySource): NormalizedSource {
   };
 }
 
+function longestRun(value: string, marker: "`" | "~"): number {
+  let longest = 0;
+  let current = 0;
+  for (const character of value) {
+    if (character === marker) {
+      current += 1;
+      if (current > longest) longest = current;
+    } else {
+      current = 0;
+    }
+  }
+  return longest;
+}
+
 function fenced(source: NormalizedSource): string {
-  if (source.mediaType === "markdown") return source.text.trim();
+  if (source.mediaType === "markdown") return source.text;
   const language =
     source.mediaType === "json" ? "json" : source.mediaType === "lean" ? "lean" : source.mediaType === "coq" ? "coq" : "text";
-  return `\`\`\`${language}\n${source.text.trim()}\n\`\`\``;
+  const backticks = Math.max(3, longestRun(source.text, "`") + 1);
+  const tildes = Math.max(3, longestRun(source.text, "~") + 1);
+  const marker = backticks <= tildes ? "`" : "~";
+  const fence = marker.repeat(marker === "`" ? backticks : tildes);
+  const separator = source.text.endsWith("\n") ? "" : "\n";
+  return `${fence}${language}\n${source.text}${separator}${fence}`;
 }
 
 function sourceBody(sources: readonly NormalizedSource[]): string {
@@ -157,7 +223,7 @@ function sourceBody(sources: readonly NormalizedSource[]): string {
       try {
         return parseMemoryConcept({ path: "/concepts/source.md", raw: source.text }).body;
       } catch {
-        return source.text.trim();
+        return source.text;
       }
     }
     return fenced(source);
@@ -214,21 +280,57 @@ function receiptHash(receipt: Omit<MemoryMigrationReceipt, "planHash">): string 
   return sha256(JSON.stringify(receipt));
 }
 
+function preflightMigrationSources(inputs: readonly LegacyMemorySource[]): number {
+  let totalBytes = 0;
+  for (const source of inputs) {
+    if (!source || typeof source !== "object" || Array.isArray(source)) {
+      throw new Error("memory migration source must be an object");
+    }
+    normalizeSourcePath(source.sourcePath);
+    if (source.topic !== undefined) {
+      if (
+        typeof source.topic !== "string" ||
+        !source.topic.trim() ||
+        source.topic.trim() !== source.topic ||
+        /[\r\n\0]/.test(source.topic) ||
+        Buffer.byteLength(source.topic, "utf8") > MAX_MIGRATION_TOPIC_BYTES
+      ) {
+        throw new Error(`memory migration topic is invalid for ${source.sourcePath}`);
+      }
+    }
+    if (typeof source.bytes !== "string" && !(source.bytes instanceof Uint8Array)) {
+      throw new Error(`memory migration source bytes must be UTF-8 text at ${source.sourcePath}`);
+    }
+    const sourceBytes =
+      typeof source.bytes === "string" ? Buffer.byteLength(source.bytes, "utf8") : source.bytes.byteLength;
+    if (sourceBytes > MAX_MIGRATION_SOURCE_BYTES) {
+      throw new Error(`memory migration source exceeds ${MAX_MIGRATION_SOURCE_BYTES} bytes: ${source.sourcePath}`);
+    }
+    totalBytes += sourceBytes;
+    if (totalBytes > MAX_MIGRATION_TOTAL_BYTES) {
+      throw new Error(`memory migration sources exceed ${MAX_MIGRATION_TOTAL_BYTES} bytes`);
+    }
+  }
+  return totalBytes;
+}
+
 /**
  * Build a deterministic, reviewable migration plan. This function performs no
  * writes; the state service must publish the returned concepts transactionally.
  */
 export function planMemoryMigration(inputs: readonly LegacyMemorySource[]): MemoryMigrationPlan {
-  if (inputs.length === 0) throw new Error("memory migration requires at least one source");
-  const sources = inputs.map(normalizedSource).sort((left, right) => left.sourcePath.localeCompare(right.sourcePath));
+  if (!Array.isArray(inputs) || inputs.length === 0) throw new Error("memory migration requires at least one source");
+  if (inputs.length > MAX_MIGRATION_SOURCES) {
+    throw new Error(`memory migration exceeds ${MAX_MIGRATION_SOURCES} sources`);
+  }
+  const totalBytes = preflightMigrationSources(inputs);
+  const sources = inputs
+    .map(normalizedSource)
+    .sort((left, right) => compareMemoryText(left.sourcePath, right.sourcePath));
   for (let index = 1; index < sources.length; index += 1) {
     if (sources[index - 1].sourcePath === sources[index].sourcePath) {
       throw new Error(`memory migration repeats source path ${sources[index].sourcePath}`);
     }
-  }
-  const totalBytes = sources.reduce((sum, source) => sum + source.sourceBytes, 0);
-  if (totalBytes > MAX_MIGRATION_TOTAL_BYTES) {
-    throw new Error(`memory migration sources exceed ${MAX_MIGRATION_TOTAL_BYTES} bytes`);
   }
   const grouped = new Map<string, NormalizedSource[]>();
   for (const source of sources) {
@@ -236,7 +338,7 @@ export function planMemoryMigration(inputs: readonly LegacyMemorySource[]): Memo
     members.push(source);
     grouped.set(source.topicKey, members);
   }
-  const groupKeys = [...grouped.keys()].sort();
+  const groupKeys = [...grouped.keys()].sort(compareMemoryText);
   const paths = uniqueConceptPaths(
     groupKeys.map((key) => ({ key, title: grouped.get(key)![0].title })),
   );
@@ -256,7 +358,7 @@ export function planMemoryMigration(inputs: readonly LegacyMemorySource[]): Memo
       })),
     };
   });
-  concepts.sort((left, right) => left.path.localeCompare(right.path));
+  concepts.sort((left, right) => compareMemoryText(left.path, right.path));
   const withoutHash: Omit<MemoryMigrationReceipt, "planHash"> = {
     schemaVersion: 1,
     sourceCount: sources.length,

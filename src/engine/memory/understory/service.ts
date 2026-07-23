@@ -9,7 +9,11 @@ import {
   replaceMemorySection,
   serializeMemoryConcept,
 } from "./okf";
-import { UnderstoryMemoryProjection } from "./projection";
+import {
+  UnderstoryMemoryProjection,
+  parseCanonicalMemorySnapshot,
+  validateMemorySearchInput,
+} from "./projection";
 import type {
   CanonicalMemoryAuthority,
   CanonicalMemoryDocument,
@@ -25,15 +29,27 @@ import type {
   ParsedMemoryConcept,
 } from "./types";
 
-function requiredOneLine(value: string, field: string): string {
+const MAX_MEMORY_TRANSACTION_UPDATES = 1_000;
+const MAX_MEMORY_ACTOR_BYTES = 512;
+const MAX_MEMORY_EVIDENCE_URI_BYTES = 8 * 1024;
+
+function requiredOneLine(value: unknown, field: string, maxBytes: number): string {
   if (typeof value !== "string" || !value.trim() || value !== value.trim() || /[\r\n\0]/.test(value)) {
     throw new Error(`${field} is required and must be one normalized line`);
   }
+  if (Buffer.byteLength(value, "utf8") > maxBytes) throw new Error(`${field} exceeds ${maxBytes} bytes`);
   return value;
 }
 
 function validateEvidence(evidence: CanonicalMemoryEvidence): CanonicalMemoryEvidence {
-  const uri = requiredOneLine(evidence.uri, "memory transaction evidence URI");
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    throw new Error("memory transaction evidence must be an object");
+  }
+  const uri = requiredOneLine(
+    evidence.uri,
+    "memory transaction evidence URI",
+    MAX_MEMORY_EVIDENCE_URI_BYTES,
+  );
   let parsed: URL;
   try {
     parsed = new URL(uri);
@@ -49,8 +65,7 @@ function validateEvidence(evidence: CanonicalMemoryEvidence): CanonicalMemoryEvi
 
 function documentMap(snapshot: CanonicalMemorySnapshot): Map<string, CanonicalMemoryDocument> {
   const documents = new Map<string, CanonicalMemoryDocument>();
-  for (const document of snapshot.documents) {
-    const parsed = parseMemoryConcept(document);
+  for (const parsed of parseCanonicalMemorySnapshot(snapshot)) {
     if (documents.has(parsed.path)) throw new Error(`canonical memory repeats path ${parsed.path}`);
     documents.set(parsed.path, { path: parsed.path, raw: parsed.raw });
   }
@@ -74,7 +89,12 @@ function transactionMutations(
   snapshot: CanonicalMemorySnapshot,
   updates: readonly MemoryUpdate[],
 ): CanonicalMemoryTransactionMutation[] {
-  if (updates.length === 0) throw new Error("memory transaction requires at least one update");
+  if (!Array.isArray(updates) || updates.length === 0) {
+    throw new Error("memory transaction requires at least one update");
+  }
+  if (updates.length > MAX_MEMORY_TRANSACTION_UPDATES) {
+    throw new Error(`memory transaction exceeds ${MAX_MEMORY_TRANSACTION_UPDATES} updates`);
+  }
   const documents = documentMap(snapshot);
   const touched = new Set<string>();
   const mutations: CanonicalMemoryTransactionMutation[] = [];
@@ -170,56 +190,86 @@ function assertCommitted(
  * Markdown snapshot, never from the caller's candidate.
  */
 export class UnderstoryMemoryService {
+  private operationTail: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly authority: CanonicalMemoryAuthority,
     private readonly projection: UnderstoryMemoryProjection,
   ) {}
 
-  async refresh(): Promise<{ revision: string; digest: string; conceptCount: number }> {
+  private exclusively<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationTail.then(operation);
+    this.operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async refreshProjection(): Promise<{ revision: string; digest: string; conceptCount: number }> {
     return this.projection.ensure(await this.authority.readSnapshot());
   }
 
-  async read(conceptPath: string): Promise<ParsedMemoryConcept | null> {
-    await this.refresh();
-    return this.projection.read(conceptPath);
+  refresh(): Promise<{ revision: string; digest: string; conceptCount: number }> {
+    return this.exclusively(() => this.refreshProjection());
   }
 
-  async search(query: string, options?: MemorySearchOptions): Promise<MemorySearchHit[]> {
-    await this.refresh();
-    return this.projection.search(query, options);
+  read(conceptPath: string): Promise<ParsedMemoryConcept | null> {
+    const canonicalPath = canonicalMemoryConceptPath(conceptPath);
+    return this.exclusively(async () => {
+      await this.refreshProjection();
+      return this.projection.read(canonicalPath);
+    });
   }
 
-  async graph(): Promise<MemoryGraph> {
-    await this.refresh();
-    return this.projection.graph();
+  search(query: string, options?: MemorySearchOptions): Promise<MemorySearchHit[]> {
+    validateMemorySearchInput(query, options);
+    return this.exclusively(async () => {
+      await this.refreshProjection();
+      return this.projection.search(query, options);
+    });
   }
 
-  async validate(): Promise<MemoryValidationReport> {
-    await this.refresh();
-    return this.projection.validate();
+  graph(): Promise<MemoryGraph> {
+    return this.exclusively(async () => {
+      await this.refreshProjection();
+      return this.projection.graph();
+    });
   }
 
-  async update(
+  validate(): Promise<MemoryValidationReport> {
+    return this.exclusively(async () => {
+      await this.refreshProjection();
+      return this.projection.validate();
+    });
+  }
+
+  update(
     updates: readonly MemoryUpdate[],
     options: { actor: string; evidence: CanonicalMemoryEvidence },
   ): Promise<{ revision: string; digest: string; conceptCount: number }> {
-    const actor = requiredOneLine(options.actor, "memory transaction actor");
-    const evidence = validateEvidence(options.evidence);
-    const before = await this.authority.readSnapshot();
-    const mutations = transactionMutations(before, updates);
-    const result = await this.authority.transact({
-      baseRevision: before.revision,
-      actor,
-      evidence,
-      mutations,
-    });
-    const after = await this.authority.readSnapshot();
-    if (after.revision !== result.revision) {
-      throw new Error(
-        `canonical memory authority returned revision ${result.revision} but published ${after.revision}`,
-      );
+    if (!options || typeof options !== "object" || Array.isArray(options)) {
+      throw new Error("memory transaction options must be an object");
     }
-    assertCommitted(before, after, mutations);
-    return this.projection.rebuild(after);
+    const actor = requiredOneLine(options.actor, "memory transaction actor", MAX_MEMORY_ACTOR_BYTES);
+    const evidence = validateEvidence(options.evidence);
+    if (!Array.isArray(updates) || updates.length === 0) {
+      throw new Error("memory transaction requires at least one update");
+    }
+    if (updates.length > MAX_MEMORY_TRANSACTION_UPDATES) {
+      throw new Error(`memory transaction exceeds ${MAX_MEMORY_TRANSACTION_UPDATES} updates`);
+    }
+    return this.exclusively(async () => {
+      const before = await this.authority.readSnapshot();
+      const mutations = transactionMutations(before, updates);
+      const committed = await this.authority.transact({
+        baseRevision: before.revision,
+        actor,
+        evidence,
+        mutations,
+      });
+      assertCommitted(before, committed, mutations);
+      return this.projection.rebuild(committed);
+    });
   }
 }

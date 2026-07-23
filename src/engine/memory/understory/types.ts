@@ -123,7 +123,8 @@ export interface CanonicalMemoryTransaction {
  */
 export interface CanonicalMemoryAuthority {
   readSnapshot(): Promise<CanonicalMemorySnapshot>;
-  transact(transaction: CanonicalMemoryTransaction): Promise<{ revision: string }>;
+  /** Return the immutable snapshot created by this exact transaction. */
+  transact(transaction: CanonicalMemoryTransaction): Promise<CanonicalMemorySnapshot>;
 }
 
 export type MemoryUpdate =

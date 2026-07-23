@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   UnderstoryMemoryProjection,
   UnderstoryMemoryService,
+  compareMemoryText,
   parseMemoryConcept,
   planMemoryMigration,
   serializeMemoryConcept,
@@ -42,19 +43,33 @@ class FakeCanonicalMemoryAuthority implements CanonicalMemoryAuthority {
   snapshot: CanonicalMemorySnapshot;
   transactions: CanonicalMemoryTransaction[] = [];
   rejectNextTransaction = false;
+  publishLaterCommitAfterTransaction = false;
+  readCalls = 0;
+  activeReads = 0;
+  maxConcurrentReads = 0;
+  readSnapshotHook?: (call: number, captured: CanonicalMemorySnapshot) => Promise<void>;
 
   constructor(documents: CanonicalMemoryDocument[]) {
     this.snapshot = { revision: "commit-1", documents };
   }
 
   async readSnapshot(): Promise<CanonicalMemorySnapshot> {
-    return {
+    const captured = {
       revision: this.snapshot.revision,
       documents: this.snapshot.documents.map((document) => ({ ...document })),
     };
+    this.readCalls += 1;
+    this.activeReads += 1;
+    this.maxConcurrentReads = Math.max(this.maxConcurrentReads, this.activeReads);
+    try {
+      await this.readSnapshotHook?.(this.readCalls, captured);
+      return captured;
+    } finally {
+      this.activeReads -= 1;
+    }
   }
 
-  async transact(transaction: CanonicalMemoryTransaction): Promise<{ revision: string }> {
+  async transact(transaction: CanonicalMemoryTransaction): Promise<CanonicalMemorySnapshot> {
     this.transactions.push(structuredClone(transaction));
     if (this.rejectNextTransaction) {
       this.rejectNextTransaction = false;
@@ -73,10 +88,28 @@ class FakeCanonicalMemoryAuthority implements CanonicalMemoryAuthority {
     const revision = `commit-${this.transactions.length + 1}`;
     this.snapshot = {
       revision,
-      documents: [...documents.values()].sort((left, right) => left.path.localeCompare(right.path)),
+      documents: [...documents.values()].sort((left, right) => compareMemoryText(left.path, right.path)),
     };
-    return { revision };
+    const committed = await this.readSnapshot();
+    if (this.publishLaterCommitAfterTransaction) {
+      this.snapshot = {
+        revision: "commit-later",
+        documents: [
+          ...committed.documents,
+          concept("/concepts/later.md", "fact", "Later", "A second writer committed immediately.\n"),
+        ],
+      };
+    }
+    return committed;
   }
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (predicate()) return;
+    await Bun.sleep(1);
+  }
+  throw new Error("test condition did not become true");
 }
 
 describe("Understory-derived canonical memory boundary", () => {
@@ -164,6 +197,37 @@ describe("Understory-derived canonical memory boundary", () => {
         }),
       ).toThrow('requires a normalized non-empty "type"');
       expect(projection.metadata()).toEqual(baseline);
+      expect(() =>
+        projection.rebuild({
+          revision: "alias-yaml",
+          documents: [
+            {
+              path: "/concepts/alias.md",
+              raw: "---\ntype: fact\nshared: &shared [one, two]\ntags: *shared\n---\nAliases.\n",
+            },
+          ],
+        }),
+      ).toThrow("uses aliases, anchors, tags, or merge keys");
+      expect(projection.metadata()).toEqual(baseline);
+      const quotedIndicator = concept(
+        "/concepts/quoted.md",
+        "fact",
+        "Quoted",
+        "Quoted YAML indicators remain ordinary text.\n",
+        { description: "The literal *wildcard and !tag strings are evidence." },
+      );
+      expect(parseMemoryConcept(quotedIndicator).frontmatter.description).toContain("*wildcard");
+      expect(() => projection.search("term ".repeat(65))).toThrow("exceeds 64 terms");
+      expect(() =>
+        projection.search("term", { tags: Array.from({ length: 129 }, (_, index) => `tag-${index}`) }),
+      ).toThrow("at most 128 entries");
+      expect(() =>
+        projection.rebuild({
+          revision: "too-many",
+          documents: Array.from({ length: 50_001 }, () => good.documents[0]),
+        }),
+      ).toThrow("exceeds 50000 concepts");
+      expect(projection.metadata()).toEqual(baseline);
     } finally {
       projection.close();
     }
@@ -202,6 +266,112 @@ describe("Understory-derived canonical memory boundary", () => {
       projection.close();
     }
   });
+
+  test("successful update verifies and rebuilds its exact commit when another writer commits immediately", async () => {
+    const authority = new FakeCanonicalMemoryAuthority([
+      concept("/concepts/fact.md", "fact", "Fact", "Original.\n"),
+    ]);
+    const projection = new UnderstoryMemoryProjection();
+    const service = new UnderstoryMemoryService(authority, projection);
+    try {
+      const current = await service.read("/concepts/fact.md");
+      authority.publishLaterCommitAfterTransaction = true;
+      const committed = await service.update(
+        [
+          {
+            type: "put",
+            path: "/concepts/fact.md",
+            frontmatter: { type: "fact", title: "Fact" },
+            body: "First writer's exact commit.\n",
+            expectedContentHash: current!.contentHash,
+          },
+        ],
+        {
+          actor: "memory-plugin:test",
+          evidence: { uri: "session://test/exact-commit", contentHash: hash("exact commit evidence") },
+        },
+      );
+      expect(committed.revision).toBe("commit-2");
+      expect(projection.metadata()?.revision).toBe("commit-2");
+      expect(projection.read("/concepts/fact.md")?.body).toBe("First writer's exact commit.\n");
+      expect(projection.read("/concepts/later.md")).toBeNull();
+      expect(authority.snapshot.revision).toBe("commit-later");
+
+      expect((await service.search("second writer"))[0]?.path).toBe("/concepts/later.md");
+      expect(projection.metadata()?.revision).toBe("commit-later");
+    } finally {
+      projection.close();
+    }
+  });
+
+  test("concurrent requests serialize snapshot refresh and projection access", async () => {
+    const authority = new FakeCanonicalMemoryAuthority([
+      concept("/concepts/alpha.md", "fact", "Alpha", "Alpha revision.\n"),
+    ]);
+    let releaseFirstRead!: () => void;
+    const firstReadGate = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    authority.readSnapshotHook = async (call) => {
+      if (call === 1) await firstReadGate;
+    };
+    const projection = new UnderstoryMemoryProjection();
+    const service = new UnderstoryMemoryService(authority, projection);
+    try {
+      const first = service.search("alpha");
+      await waitFor(() => authority.readCalls === 1);
+      authority.snapshot = {
+        revision: "commit-beta",
+        documents: [concept("/concepts/beta.md", "fact", "Beta", "Beta revision.\n")],
+      };
+      const second = service.search("beta");
+      await Bun.sleep(5);
+      expect(authority.readCalls).toBe(1);
+      expect(authority.maxConcurrentReads).toBe(1);
+
+      releaseFirstRead();
+      expect((await first)[0]?.path).toBe("/concepts/alpha.md");
+      expect((await second)[0]?.path).toBe("/concepts/beta.md");
+      expect(authority.maxConcurrentReads).toBe(1);
+      expect(projection.metadata()?.revision).toBe("commit-beta");
+    } finally {
+      releaseFirstRead();
+      projection.close();
+    }
+  });
+
+  test("public transaction bounds fail before authority or projection mutation", async () => {
+    const authority = new FakeCanonicalMemoryAuthority([
+      concept("/concepts/fact.md", "fact", "Fact", "Original.\n"),
+    ]);
+    const projection = new UnderstoryMemoryProjection();
+    const service = new UnderstoryMemoryService(authority, projection);
+    try {
+      const before = await service.refresh();
+      const reads = authority.readCalls;
+      expect(() =>
+        service.update(
+          [
+            {
+              type: "delete",
+              path: "/concepts/fact.md",
+              expectedContentHash: hash(authority.snapshot.documents[0].raw),
+            },
+          ],
+          {
+            actor: "a".repeat(513),
+            evidence: { uri: "session://test/bounds", contentHash: hash("bounds") },
+          },
+        ),
+      ).toThrow("actor exceeds 512 bytes");
+      expect(() => service.search("q".repeat(16 * 1024 + 1))).toThrow("query exceeds 16384 bytes");
+      expect(authority.readCalls).toBe(reads);
+      expect(authority.transactions).toHaveLength(0);
+      expect(projection.metadata()).toEqual(before);
+    } finally {
+      projection.close();
+    }
+  });
 });
 
 describe("deterministic memory migration receipts", () => {
@@ -233,6 +403,7 @@ describe("deterministic memory migration receipts", () => {
       const parsed = parseMemoryConcept(migrated);
       expect((parsed.frontmatter.andromeda_evidence as unknown[]).length).toBe(2);
       expect(hash(migrated.raw)).toBe(migrated.contentHash);
+      expect(migrated.raw).toContain("andromeda_evidence:\n  -\n");
     }
   });
 
@@ -251,6 +422,33 @@ describe("deterministic memory migration receipts", () => {
       "/concepts/instructions.md",
     ]);
     expect(reserved.concepts.every((entry) => !/\/(?:agents|index)\.md$/.test(entry.path))).toBeTrue();
+
+    const unicodeSources: LegacyMemorySource[] = [
+      { sourcePath: "wiki/Ångström.md", topic: "Ångström", bytes: "# Ångström\n\nFirst.\n" },
+      { sourcePath: "wiki/évidence.md", topic: "Évidence", bytes: "# Évidence\n\nSecond.\n" },
+      { sourcePath: "wiki/😀.md", topic: "Emoji", bytes: "# Emoji\n\nThird.\n" },
+    ];
+    const unicodeForward = planMemoryMigration(unicodeSources);
+    const unicodeReverse = planMemoryMigration([...unicodeSources].reverse());
+    expect(unicodeReverse).toEqual(unicodeForward);
+    expect(unicodeForward.receipt.sources.map((source) => source.sourcePath)).toEqual([
+      "wiki/Ångström.md",
+      "wiki/évidence.md",
+      "wiki/😀.md",
+    ]);
+  });
+
+  test("non-Markdown sources retain leading/trailing bytes behind a collision-safe dynamic fence", () => {
+    const sourceText = "  leading spaces\n```\n~~~\ntrailing spaces  ";
+    const plan = planMemoryMigration([
+      { sourcePath: "artifacts/evidence.json", bytes: sourceText, topic: "Fenced Evidence" },
+    ]);
+    const body = parseMemoryConcept(plan.concepts[0]).body;
+    expect(body).toContain(`\`\`\`\`json\n${sourceText}\n\`\`\`\``);
+    expect(plan.concepts[0].evidence[0]).toMatchObject({
+      sourceBytes: Buffer.byteLength(sourceText, "utf8"),
+      sha256: hash(sourceText),
+    });
   });
 
   test("denied failure: duplicate provenance paths are rejected and changed bytes change the plan hash", () => {
@@ -260,6 +458,24 @@ describe("deterministic memory migration receipts", () => {
         { sourcePath: "wiki/same.md", bytes: "two" },
       ]),
     ).toThrow("repeats source path");
+    expect(() =>
+      planMemoryMigration(
+        Array.from({ length: 10_001 }, (_, index) => ({
+          sourcePath: `bulk/${index}.md`,
+          bytes: "bounded",
+        })),
+      ),
+    ).toThrow("exceeds 10000 sources");
+    expect(() =>
+      planMemoryMigration([
+        { sourcePath: "wiki/topic.md", topic: "x".repeat(1025), bytes: "bounded" },
+      ]),
+    ).toThrow("topic is invalid");
+    expect(() =>
+      planMemoryMigration([
+        { sourcePath: `wiki/${"x".repeat(256)}.md`, bytes: "bounded" },
+      ]),
+    ).toThrow("unsafe segment");
     const original = planMemoryMigration(overlapping);
     const changed = planMemoryMigration([
       ...overlapping.slice(0, -1),

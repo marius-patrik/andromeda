@@ -3,7 +3,12 @@
 // Licensed under the Apache License, Version 2.0.
 
 import { Database } from "bun:sqlite";
-import { canonicalMemoryConceptPath, parseMemoryConcept, sha256 } from "./okf";
+import {
+  canonicalMemoryConceptPath,
+  compareMemoryText,
+  parseMemoryConcept,
+  sha256,
+} from "./okf";
 import type {
   CanonicalMemorySnapshot,
   MemoryGraph,
@@ -18,6 +23,14 @@ import type {
 
 const PROJECTION_SCHEMA_VERSION = 1;
 const LINK_RE = /\]\((\/[^)#?\s]+\.md)\)/g;
+const MAX_SNAPSHOT_CONCEPTS = 50_000;
+const MAX_SNAPSHOT_BYTES = 512 * 1024 * 1024;
+const MAX_SNAPSHOT_REVISION_BYTES = 4 * 1024;
+const MAX_SEARCH_QUERY_BYTES = 16 * 1024;
+const MAX_SEARCH_TERMS = 64;
+const MAX_SEARCH_TERM_BYTES = 256;
+const MAX_SEARCH_FILTER_BYTES = 512;
+const MAX_SEARCH_TAGS = 128;
 
 interface StoredConcept {
   path: string;
@@ -34,13 +47,34 @@ function requiredRevision(value: string): string {
   if (typeof value !== "string" || !value.trim() || /[\r\n\0]/.test(value)) {
     throw new Error("canonical memory snapshot revision is required and must be one line");
   }
+  if (Buffer.byteLength(value, "utf8") > MAX_SNAPSHOT_REVISION_BYTES) {
+    throw new Error(`canonical memory snapshot revision exceeds ${MAX_SNAPSHOT_REVISION_BYTES} bytes`);
+  }
   return value;
 }
 
-function parseSnapshot(snapshot: CanonicalMemorySnapshot): ParsedMemoryConcept[] {
+export function parseCanonicalMemorySnapshot(snapshot: CanonicalMemorySnapshot): ParsedMemoryConcept[] {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    throw new Error("canonical memory snapshot must be an object");
+  }
   requiredRevision(snapshot.revision);
   if (!Array.isArray(snapshot.documents)) throw new Error("canonical memory snapshot documents must be an array");
-  const concepts = snapshot.documents.map(parseMemoryConcept).sort((left, right) => left.path.localeCompare(right.path));
+  if (snapshot.documents.length > MAX_SNAPSHOT_CONCEPTS) {
+    throw new Error(`canonical memory snapshot exceeds ${MAX_SNAPSHOT_CONCEPTS} concepts`);
+  }
+  let aggregateBytes = 0;
+  for (const document of snapshot.documents) {
+    if (!document || typeof document !== "object" || typeof document.raw !== "string") {
+      throw new Error("canonical memory snapshot contains a non-text document");
+    }
+    aggregateBytes += Buffer.byteLength(document.raw, "utf8");
+    if (aggregateBytes > MAX_SNAPSHOT_BYTES) {
+      throw new Error(`canonical memory snapshot exceeds ${MAX_SNAPSHOT_BYTES} aggregate bytes`);
+    }
+  }
+  const concepts = snapshot.documents
+    .map(parseMemoryConcept)
+    .sort((left, right) => compareMemoryText(left.path, right.path));
   for (let index = 1; index < concepts.length; index += 1) {
     if (concepts[index - 1].path === concepts[index].path) {
       throw new Error(`canonical memory snapshot repeats concept path ${concepts[index].path}`);
@@ -99,8 +133,14 @@ function graphRows(concepts: readonly ParsedMemoryConcept[]): {
       }
     }
   }
-  edges.sort((left, right) => left.source.localeCompare(right.source) || left.target.localeCompare(right.target));
-  brokenLinks.sort((left, right) => left.path.localeCompare(right.path) || left.target.localeCompare(right.target));
+  edges.sort(
+    (left, right) =>
+      compareMemoryText(left.source, right.source) || compareMemoryText(left.target, right.target),
+  );
+  brokenLinks.sort(
+    (left, right) =>
+      compareMemoryText(left.path, right.path) || compareMemoryText(left.target, right.target),
+  );
   const nodes = concepts.map((concept) => ({
     path: concept.path,
     type: concept.frontmatter.type,
@@ -112,11 +152,24 @@ function graphRows(concepts: readonly ParsedMemoryConcept[]): {
 }
 
 function queryTerms(query: string): string[] {
-  return query
+  if (typeof query !== "string" || query.includes("\0")) {
+    throw new Error("memory search query must be a string without NUL bytes");
+  }
+  if (Buffer.byteLength(query, "utf8") > MAX_SEARCH_QUERY_BYTES) {
+    throw new Error(`memory search query exceeds ${MAX_SEARCH_QUERY_BYTES} bytes`);
+  }
+  const terms = query
     .normalize("NFKC")
-    .toLocaleLowerCase("en-US")
+    .toLowerCase()
     .split(/[^\p{L}\p{N}_-]+/u)
     .filter((term) => term.length > 1);
+  if (terms.length > MAX_SEARCH_TERMS) {
+    throw new Error(`memory search query exceeds ${MAX_SEARCH_TERMS} terms`);
+  }
+  if (terms.some((term) => Buffer.byteLength(term, "utf8") > MAX_SEARCH_TERM_BYTES)) {
+    throw new Error(`memory search term exceeds ${MAX_SEARCH_TERM_BYTES} bytes`);
+  }
+  return terms;
 }
 
 function ftsExpression(terms: readonly string[]): string {
@@ -125,11 +178,11 @@ function ftsExpression(terms: readonly string[]): string {
 
 function searchScore(concept: StoredConcept, terms: readonly string[]): { score: number; bodyIndex: number } {
   if (terms.length === 0) return { score: 1, bodyIndex: -1 };
-  const title = (concept.title ?? "").toLocaleLowerCase("en-US");
-  const description = (concept.description ?? "").toLocaleLowerCase("en-US");
-  const tagText = (JSON.parse(concept.tags_json) as string[]).join(" ").toLocaleLowerCase("en-US");
-  const body = concept.body.toLocaleLowerCase("en-US");
-  const conceptPath = concept.path.toLocaleLowerCase("en-US");
+  const title = (concept.title ?? "").toLowerCase();
+  const description = (concept.description ?? "").toLowerCase();
+  const tagText = (JSON.parse(concept.tags_json) as string[]).join(" ").toLowerCase();
+  const body = concept.body.toLowerCase();
+  const conceptPath = concept.path.toLowerCase();
   let score = 0;
   let bodyIndex = -1;
   for (const term of terms) {
@@ -144,6 +197,54 @@ function searchScore(concept: StoredConcept, terms: readonly string[]): { score:
     }
   }
   return { score, bodyIndex };
+}
+
+function searchOptions(options: MemorySearchOptions | undefined): {
+  type?: string;
+  tags: string[];
+  limit: number;
+} {
+  if (options === undefined) return { tags: [], limit: 20 };
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("memory search options must be an object");
+  }
+  let type: string | undefined;
+  if (options.type !== undefined) {
+    if (
+      typeof options.type !== "string" ||
+      !options.type.trim() ||
+      options.type !== options.type.trim() ||
+      Buffer.byteLength(options.type, "utf8") > MAX_SEARCH_FILTER_BYTES
+    ) {
+      throw new Error(`memory search type must be normalized and at most ${MAX_SEARCH_FILTER_BYTES} bytes`);
+    }
+    type = options.type.toLowerCase();
+  }
+  const inputTags = options.tags ?? [];
+  if (!Array.isArray(inputTags) || inputTags.length > MAX_SEARCH_TAGS) {
+    throw new Error(`memory search tags must be an array of at most ${MAX_SEARCH_TAGS} entries`);
+  }
+  const tags = inputTags.map((tag) => {
+    if (
+      typeof tag !== "string" ||
+      !tag.trim() ||
+      tag !== tag.trim() ||
+      Buffer.byteLength(tag, "utf8") > MAX_SEARCH_FILTER_BYTES
+    ) {
+      throw new Error(`memory search tag must be normalized and at most ${MAX_SEARCH_FILTER_BYTES} bytes`);
+    }
+    return tag.toLowerCase();
+  });
+  const limit = options.limit ?? 20;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+    throw new Error("memory search limit must be an integer between 1 and 1000");
+  }
+  return { ...(type ? { type } : {}), tags, limit };
+}
+
+export function validateMemorySearchInput(query: string, options?: MemorySearchOptions): void {
+  queryTerms(query);
+  searchOptions(options);
 }
 
 /**
@@ -174,7 +275,7 @@ export class UnderstoryMemoryProjection {
   }
 
   rebuild(snapshot: CanonicalMemorySnapshot): { revision: string; digest: string; conceptCount: number } {
-    const concepts = parseSnapshot(snapshot);
+    const concepts = parseCanonicalMemorySnapshot(snapshot);
     const digest = projectionDigest(snapshot, concepts);
     const graph = graphRows(concepts);
     const rebuild = this.database.transaction(() => {
@@ -254,7 +355,7 @@ export class UnderstoryMemoryProjection {
   }
 
   ensure(snapshot: CanonicalMemorySnapshot): { revision: string; digest: string; conceptCount: number } {
-    const concepts = parseSnapshot(snapshot);
+    const concepts = parseCanonicalMemorySnapshot(snapshot);
     const expectedDigest = projectionDigest(snapshot, concepts);
     const current = this.metadata();
     if (
@@ -263,13 +364,16 @@ export class UnderstoryMemoryProjection {
       current.conceptCount === concepts.length
     ) {
       const stored = this.database
-        .query("SELECT path, content_hash FROM concepts ORDER BY path")
-        .all() as { path: string; content_hash: string }[];
+        .query("SELECT path, raw, content_hash FROM concepts ORDER BY path")
+        .all() as { path: string; raw: string; content_hash: string }[];
       if (
         stored.length === concepts.length &&
         stored.every(
           (entry, index) =>
-            entry.path === concepts[index].path && entry.content_hash === concepts[index].contentHash,
+            entry.path === concepts[index].path &&
+            entry.raw === concepts[index].raw &&
+            entry.content_hash === concepts[index].contentHash &&
+            sha256(entry.raw) === entry.content_hash,
         )
       ) {
         return current;
@@ -287,6 +391,7 @@ export class UnderstoryMemoryProjection {
 
   search(query: string, options: MemorySearchOptions = {}): MemorySearchHit[] {
     const terms = queryTerms(query);
+    const filters = searchOptions(options);
     const rows =
       terms.length === 0
         ? (this.database.query("SELECT * FROM concepts ORDER BY path").all() as StoredConcept[])
@@ -295,13 +400,11 @@ export class UnderstoryMemoryProjection {
               "SELECT concepts.* FROM concept_fts JOIN concepts ON concepts.path = concept_fts.path WHERE concept_fts MATCH ? ORDER BY concepts.path",
             )
             .all(ftsExpression(terms)) as StoredConcept[]);
-    const requestedType = options.type?.toLocaleLowerCase("en-US");
-    const requestedTags = (options.tags ?? []).map((tag) => tag.toLocaleLowerCase("en-US"));
     const hits: MemorySearchHit[] = [];
     for (const row of rows) {
-      if (requestedType && row.type.toLocaleLowerCase("en-US") !== requestedType) continue;
-      const rowTags = (JSON.parse(row.tags_json) as string[]).map((tag) => tag.toLocaleLowerCase("en-US"));
-      if (requestedTags.some((tag) => !rowTags.includes(tag))) continue;
+      if (filters.type && row.type.toLowerCase() !== filters.type) continue;
+      const rowTags = (JSON.parse(row.tags_json) as string[]).map((tag) => tag.toLowerCase());
+      if (filters.tags.some((tag) => !rowTags.includes(tag))) continue;
       const { score, bodyIndex } = searchScore(row, terms);
       if (score === 0) continue;
       hits.push({
@@ -320,12 +423,8 @@ export class UnderstoryMemoryProjection {
         score,
       });
     }
-    hits.sort((left, right) => right.score - left.score || left.path.localeCompare(right.path));
-    const limit = options.limit ?? 20;
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
-      throw new Error("memory search limit must be an integer between 1 and 1000");
-    }
-    return hits.slice(0, limit);
+    hits.sort((left, right) => right.score - left.score || compareMemoryText(left.path, right.path));
+    return hits.slice(0, filters.limit);
   }
 
   listTypes(): string[] {
