@@ -19,6 +19,7 @@ import {
   type AgentsPackageManifest,
   type PackageRegistration,
 } from "./packages";
+import type { AgentPackageDescriptorV2 } from "../sdk/shared-ts/plugin-manifest";
 import {
   readInstalls,
   type InstallKind,
@@ -136,18 +137,6 @@ const executableManifestKinds = new Set<CapabilityKind>([
   "hook",
   "cli",
   "harness",
-]);
-const packageManifestFields = new Set([
-  "schemaVersion",
-  "id",
-  "name",
-  "kind",
-  "description",
-  "entry",
-  "workingDirectory",
-  "requires",
-  "dataRepo",
-  "provides",
 ]);
 const forbiddenTreeSegments = new Set([
   ".git",
@@ -343,102 +332,6 @@ function parseSkillFrontmatter(
   return { name, description };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function assertOptionalString(
-  value: unknown,
-  field: string,
-  manifestFile: string,
-): void {
-  if (value !== undefined && (typeof value !== "string" || !value.trim())) {
-    throw new Error(`${manifestFile}: ${field} must be a non-empty string`);
-  }
-}
-
-function assertStringArray(
-  value: unknown,
-  field: string,
-  manifestFile: string,
-): void {
-  if (
-    !Array.isArray(value) ||
-    value.some((item) => typeof item !== "string" || !item.trim())
-  ) {
-    throw new Error(
-      `${manifestFile}: ${field} must be an array of non-empty strings`,
-    );
-  }
-}
-
-async function validateCanonicalManifestShape(
-  manifestFile: string,
-): Promise<void> {
-  const raw = JSON.parse(await readFile(manifestFile, "utf8")) as unknown;
-  if (!isRecord(raw))
-    throw new Error(`${manifestFile}: manifest must be an object`);
-  for (const field of Object.keys(raw)) {
-    if (!packageManifestFields.has(field)) {
-      throw new Error(`${manifestFile}: unsupported manifest field ${field}`);
-    }
-  }
-  if (raw.schemaVersion !== 1)
-    throw new Error(`${manifestFile}: schemaVersion must be 1`);
-  assertOptionalString(raw.id, "id", manifestFile);
-  assertOptionalString(raw.kind, "kind", manifestFile);
-  for (const field of ["name", "description", "entry", "workingDirectory"]) {
-    assertOptionalString(raw[field], field, manifestFile);
-  }
-  if (raw.requires !== undefined) {
-    if (!isRecord(raw.requires))
-      throw new Error(`${manifestFile}: requires must be an object`);
-    for (const field of Object.keys(raw.requires)) {
-      if (field !== "clis" && field !== "state") {
-        throw new Error(`${manifestFile}: unsupported requires field ${field}`);
-      }
-      assertStringArray(raw.requires[field], `requires.${field}`, manifestFile);
-    }
-  }
-  if (raw.dataRepo !== undefined) {
-    if (!isRecord(raw.dataRepo))
-      throw new Error(`${manifestFile}: dataRepo must be an object`);
-    const allowed = new Set([
-      "id",
-      "repo",
-      "path",
-      "branch",
-      "managedPath",
-      "env",
-    ]);
-    for (const field of Object.keys(raw.dataRepo)) {
-      if (!allowed.has(field)) {
-        throw new Error(`${manifestFile}: unsupported dataRepo field ${field}`);
-      }
-    }
-    for (const field of ["id", "repo", "path"]) {
-      assertOptionalString(
-        raw.dataRepo[field],
-        `dataRepo.${field}`,
-        manifestFile,
-      );
-      if (raw.dataRepo[field] === undefined) {
-        throw new Error(`${manifestFile}: dataRepo.${field} is required`);
-      }
-    }
-    for (const field of ["branch", "managedPath", "env"]) {
-      assertOptionalString(
-        raw.dataRepo[field],
-        `dataRepo.${field}`,
-        manifestFile,
-      );
-    }
-  }
-  if (raw.provides !== undefined) {
-    assertStringArray(raw.provides, "provides", manifestFile);
-  }
-}
-
 async function validatePayload(
   root: string,
   kind: CapabilityKind,
@@ -472,11 +365,14 @@ async function validatePayload(
   if (packageManifestKinds.has(kind) && !hasCanonicalManifest) {
     throw new Error(`${root}: ${kind} requires agent.package.json`);
   }
-  if (hasCanonicalManifest) {
-    await validateCanonicalManifestShape(canonicalManifest);
-  }
-  const packageManifest = await readPackageManifest(root);
+  const packageManifest = await readPackageManifest(root, {
+    artifactSha256: tree.sha256,
+    requireSchemaVersion2: packageManifestKinds.has(kind),
+  });
   if (packageManifest) {
+    if (packageManifest.schemaVersion === 2) {
+      validatePublicPluginPayload(packageManifest, tree, canonicalManifest);
+    }
     if (packageManifest.id !== name)
       throw new Error(
         `package manifest id ${packageManifest.id} does not match ${name}`,
@@ -486,13 +382,108 @@ async function validatePayload(
         `package manifest kind ${packageManifest.kind} does not match ${kind}`,
       );
     }
-    if (executableManifestKinds.has(kind) && !packageManifest.entry?.trim()) {
+    if (
+      packageManifest.schemaVersion === 1 &&
+      executableManifestKinds.has(kind) &&
+      !packageManifest.entry?.trim()
+    ) {
       throw new Error(
         `${canonicalManifest}: ${kind} requires a non-empty entry command`,
       );
     }
   }
   return tree;
+}
+
+function validatePublicPluginPayload(
+  manifest: AgentPackageDescriptorV2,
+  tree: ValidatedTree,
+  manifestFile: string,
+): void {
+  if (manifest.artifactDigest !== `sha256:${tree.sha256}`) {
+    throw new Error(`${manifestFile}: normalized artifact digest is invalid`);
+  }
+  const files = new Map(
+    tree.entries
+      .filter(
+        (entry): entry is TreeEntry & { bytes: Uint8Array } =>
+          entry.kind === "file" && entry.bytes !== undefined,
+      )
+      .map((entry) => [entry.relativePath, entry.bytes]),
+  );
+  if (manifest.runtime.kind === "wasi") {
+    const moduleBytes = files.get(manifest.runtime.module);
+    if (!moduleBytes) {
+      throw new Error(
+        `${manifestFile}: WASI module is missing: ${manifest.runtime.module}`,
+      );
+    }
+    const digest = createHash("sha256").update(moduleBytes).digest("hex");
+    if (digest !== manifest.runtime.sha256) {
+      throw new Error(
+        `${manifestFile}: WASI module digest does not match runtime.sha256`,
+      );
+    }
+    const modulePayload = Uint8Array.from(moduleBytes);
+    if (!WebAssembly.validate(modulePayload)) {
+      throw new Error(
+        `${manifestFile}: WASI module is not valid WebAssembly`,
+      );
+    }
+    const module = new WebAssembly.Module(modulePayload);
+    const unsupportedImport = WebAssembly.Module.imports(module).find(
+      (entry) => entry.module !== "wasi_snapshot_preview1",
+    );
+    if (unsupportedImport) {
+      throw new Error(
+        `${manifestFile}: WASI module imports unsupported host namespace ${unsupportedImport.module}`,
+      );
+    }
+    const exports = new Map(
+      WebAssembly.Module.exports(module).map((entry) => [
+        entry.name,
+        entry.kind,
+      ]),
+    );
+    for (const command of manifest.contributions.commands) {
+      if (
+        command.handler.kind === "wasi" &&
+        exports.get(command.handler.export) !== "function"
+      ) {
+        throw new Error(
+          `${manifestFile}: WASI command export is missing or not a function: ${command.handler.export}`,
+        );
+      }
+    }
+  }
+  const descriptors = [
+    ...Object.values(manifest.contributions.agent).flat(),
+    ...Object.values(manifest.contributions.tui).flat(),
+    ...Object.values(manifest.contributions.web).flat(),
+    ...Object.values(manifest.contributions.server).flat(),
+    ...manifest.contributions.models,
+  ];
+  for (const contribution of descriptors) {
+    const bytes = files.get(contribution.descriptor);
+    if (!bytes) {
+      throw new Error(
+        `${manifestFile}: contribution descriptor is missing: ${contribution.descriptor}`,
+      );
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    } catch {
+      throw new Error(
+        `${manifestFile}: contribution descriptor is not valid JSON: ${contribution.descriptor}`,
+      );
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(
+        `${manifestFile}: contribution descriptor must contain a JSON object: ${contribution.descriptor}`,
+      );
+    }
+  }
 }
 
 async function normalizeModes(
@@ -1169,6 +1160,13 @@ async function withCapabilityLock<T>(
   }
 }
 
+export async function recoverCapabilityPlatform(
+  state: SharedState,
+): Promise<CapabilityIntegrityInspection> {
+  await withCapabilityLock(state, async () => undefined);
+  return inspectCapabilityIntegrity(state);
+}
+
 function upsertInstallRecord(
   installs: InstallRecord[],
   record: InstallRecord,
@@ -1703,7 +1701,10 @@ export async function installCapability(
           ? existingRecord
           : candidate;
       const nextInstalls = upsertInstallRecord(installs, record);
-      const manifest = await readPackageManifest(materialized.root);
+      const manifest = await readPackageManifest(materialized.root, {
+        artifactSha256: sourceTree.sha256,
+        requireSchemaVersion2: packageManifestKinds.has(options.kind),
+      });
       const registeredAt = (options.now ?? new Date()).toISOString();
       const nextPackages = upsertPackageRecord(
         await readPackageRegistrations(state),

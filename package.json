@@ -1,17 +1,21 @@
 {
   "name": "@marius-patrik/andromeda",
   "version": "0.10.0",
-  "description": "Authoritative Agent OS package surface for the unified `agents` CLI and the Andromeda system implementation.",
+  "description": "Authoritative Andromeda product surface with `andromeda`, `agent`, and `agents` command aliases.",
   "type": "module",
   "bin": {
     "andromeda": "./src/cli/cli.ts",
+    "agent": "./src/cli/cli.ts",
+    "agents": "./src/cli/cli.ts",
     "andromeda-memory": "./src/memory/cli.ts"
   },
   "exports": {
     "./sdk": "./src/sdk/shared-ts/index.ts",
-    "./sdk/gen": "./src/sdk/shared-ts/gen/index.ts"
+    "./sdk/gen": "./src/sdk/shared-ts/gen/index.ts",
+    "./sdk/agent-package.schema.json": "./src/sdk/agent-package.schema.json"
   },
   "scripts": {
+    "agent": "bun src/cli/cli.ts",
     "agents": "bun src/cli/cli.ts",
     "check": "bun x tsc --noEmit",
     "test": "bun test src/cli/test/*.test.ts",

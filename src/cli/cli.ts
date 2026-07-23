@@ -16,7 +16,13 @@ import {
   type CreditStore,
   type SharedState,
 } from "./state";
-import { activateIdentityBundle, installCapability, type CapabilityKind } from "./capabilities";
+import {
+  activateIdentityBundle,
+  inspectCapabilityIntegrity,
+  installCapability,
+  recoverCapabilityPlatform,
+  type CapabilityKind,
+} from "./capabilities";
 import { canonicalChildEnvironment } from "./runtime-paths";
 import {
   readPackageManifest,
@@ -79,9 +85,14 @@ import {
   startOrchestratorHeartbeat,
   type OrchestratorHeartbeatController,
 } from "./orchestrator";
+import {
+  createBuiltinCommandRegistry,
+  selectCommandInvocation,
+} from "../commands/registry";
 
 const invocationRoot = process.cwd();
 const root = invocationRoot;
+const productRoot = path.resolve(import.meta.dir, "..", "..");
 const gitmodulesPath = path.join(root, ".gitmodules");
 
 function systemPromptForMode(mode: SessionMode): string | undefined {
@@ -115,9 +126,10 @@ function runtimeState(): SharedState {
 }
 
 function help(): void {
-  console.log(`andromeda - Bun agent package manager
+  console.log(`andromeda - unified agent, model, memory, and workspace runtime
 
 Usage:
+  andromeda [--provider <id>] [--model <model>] [--mode <mode>]
   andromeda run --model-tier low|medium|high|max --effort low|medium|high --execution-policy read-only|workspace-write --tool-policy standard|none --receipt <absolute-new-path> [--mode orchestrator|default|chat|task] [--prompt-file <absolute-path> | --prompt-stdin | <prompt>]
   andromeda run [--mode orchestrator|default] [--provider <id>] [--model <model>] [--tui] <prompt>
   andromeda route probe [--model-tier low|medium|high|max] [--effort low|medium|high] [--json]
@@ -173,6 +185,9 @@ Usage:
   andromeda session show <id> [--json]
   andromeda install <skill|plugin|hook|template|cli|harness> <name> <source-path-or-git-url> [--replace]
   andromeda installs [--json]
+  andromeda plugins list [--json]
+  andromeda plugins doctor [--json]
+  andromeda plugins recover [--json]
   andromeda secrets list [--json]
   andromeda secrets set <NAME> [--from-file path]
   andromeda secrets path <NAME>
@@ -197,6 +212,7 @@ Usage:
   andromeda os remove <name> [--prune-data] [--dry-run]
   andromeda os deploy <profile> [--image andromeda-os] [--env andromeda-os] [--channel dev] [--dry-run]
   andromeda runner install|enable|disable|status|repair [--json]
+  andromeda version
 
 All runtime data is shared through .agents so every managed CLI sees the same
 skills, plugins, CLI metadata, and credit store.`);
@@ -1173,6 +1189,55 @@ async function installs(flags: Record<string, string | boolean>): Promise<void> 
   else for (const record of records) console.log(`${record.kind.padEnd(8)} ${record.name.padEnd(24)} ${record.path}`);
 }
 
+async function pluginsCommand(
+  values: string[],
+  flags: Record<string, string | boolean>,
+): Promise<void> {
+  const [action = "list", ...extra] = values;
+  if (extra.length > 0) throw new Error(`plugins ${action} accepts no positional arguments`);
+  const state = runtimeState();
+  await ensureSharedState(state);
+  if (action === "list") {
+    const records = (await readInstalls(state)).filter(
+      (record) => record.kind === "plugin",
+    );
+    if (flags.json) console.log(JSON.stringify(records, null, 2));
+    else {
+      for (const record of records) {
+        console.log(`${record.name.padEnd(24)} sha256:${record.sha256}`);
+      }
+    }
+    return;
+  }
+  if (action === "doctor" || action === "recover") {
+    const report =
+      action === "recover"
+        ? await recoverCapabilityPlatform(state)
+        : await inspectCapabilityIntegrity(state);
+    if (flags.json) console.log(JSON.stringify(report, null, 2));
+    else if (report.ok) {
+      console.log(
+        `ok plugins=${report.installs} storeObjects=${report.storeObjects}`,
+      );
+    } else {
+      console.error(report.issues.join("\n"));
+    }
+    if (!report.ok) process.exitCode = 1;
+    return;
+  }
+  throw new Error(`unknown plugins action: ${action}`);
+}
+
+async function versionCommand(): Promise<void> {
+  const manifest = (await Bun.file(path.join(productRoot, "package.json")).json()) as {
+    version?: unknown;
+  };
+  if (typeof manifest.version !== "string" || !manifest.version.trim()) {
+    throw new Error("product package.json has no valid version");
+  }
+  console.log(manifest.version);
+}
+
 async function identityCommand(values: string[], flags: Record<string, string | boolean>): Promise<void> {
   const [action, source] = values;
   if (action !== "activate") throw new Error(`unknown identity action: ${action ?? "(missing)"}`);
@@ -1355,35 +1420,56 @@ async function doctor(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const [command = "help", ...rest] = Bun.argv.slice(2);
+  const { command, args: rest } = selectCommandInvocation(Bun.argv.slice(2));
   const { values, flags } = parseArgs(rest);
-  if (command === "help" || flags.help) return help();
-  if (command === "run") return runCommand(values, flags);
-  if (command === "route") return routeCommand(values, flags);
-  if (command === "tui") return tuiCommand(values, flags);
-  if (command === "sessions") return sessionsCommand(values, flags);
-  if (command === "list") return list(flags);
-  if (command === "info") return info(values[0], flags);
-  if (command === "add") return add(values, flags);
-  if (command === "remove") return remove(values[0]);
-  if (command === "sync") return syncCommand(values, flags);
-  if (command === "state") return stateCommand(values, flags);
-  if (command === "memory") return memoryCommand(runtimeState(), values, flags);
-  if (command === "identity") return identityCommand(values, flags);
-  if (command === "cli") return cliCommand(rest);
-  if (command === "packages") return packageCommand(values, flags);
-  if (command === "env") return envCommand(values, flags);
-  if (command === "data") return dataCommand(values, flags);
-  if (command === "harness") return harnessCommand(values, flags);
-  if (command === "session") return sessionCommand(values, flags);
-  if (command === "install") return install(values, flags);
-  if (command === "installs") return installs(flags);
-  if (command === "secrets") return secretsCommand(values, flags);
-  if (command === "credits") return credits(values, flags);
-  if (command === "doctor") return doctor();
-  if (command === "os") return osCommand(rest);
-  if (command === "runner") return runnerCommand(rest);
-  throw new Error(`unknown command: ${command}`);
+  const registry = createBuiltinCommandRegistry();
+  const descriptor = registry.resolve(flags.help ? "help" : command);
+  if (!descriptor) throw new Error(`unknown command: ${command}`);
+  if (descriptor.handler.kind !== "host-rpc") {
+    throw new Error(
+      `command ${descriptor.name} is not executable by the built-in router`,
+    );
+  }
+  const handlers: Record<
+    string,
+    () => void | Promise<void>
+  > = {
+    "builtin.help": () => help(),
+    "builtin.version": () => versionCommand(),
+    "builtin.run": () => runCommand(values, flags),
+    "builtin.route": () => routeCommand(values, flags),
+    "builtin.tui": () => tuiCommand(values, flags),
+    "builtin.sessions": () => sessionsCommand(values, flags),
+    "builtin.list": () => list(flags),
+    "builtin.info": () => info(values[0], flags),
+    "builtin.add": () => add(values, flags),
+    "builtin.remove": () => remove(values[0]),
+    "builtin.sync": () => syncCommand(values, flags),
+    "builtin.state": () => stateCommand(values, flags),
+    "builtin.memory": () => memoryCommand(runtimeState(), values, flags),
+    "builtin.identity": () => identityCommand(values, flags),
+    "builtin.cli": () => cliCommand(rest),
+    "builtin.packages": () => packageCommand(values, flags),
+    "builtin.env": () => envCommand(values, flags),
+    "builtin.data": () => dataCommand(values, flags),
+    "builtin.harness": () => harnessCommand(values, flags),
+    "builtin.session": () => sessionCommand(values, flags),
+    "builtin.install": () => install(values, flags),
+    "builtin.installs": () => installs(flags),
+    "builtin.plugins": () => pluginsCommand(values, flags),
+    "builtin.secrets": () => secretsCommand(values, flags),
+    "builtin.credits": () => credits(values, flags),
+    "builtin.doctor": () => doctor(),
+    "builtin.os": () => osCommand(rest),
+    "builtin.runner": () => runnerCommand(rest),
+  };
+  const handler = handlers[descriptor.handler.method];
+  if (!handler) {
+    throw new Error(
+      `built-in command handler is not registered: ${descriptor.handler.method}`,
+    );
+  }
+  return handler();
 }
 
 main().catch((error) => {

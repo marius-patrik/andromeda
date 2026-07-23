@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   cp,
   lstat,
@@ -119,6 +120,51 @@ async function writeSkillFixture(
     path.join(root, "agent.package.json"),
     `${JSON.stringify({ schemaVersion: 1, id: "probe", kind: "skill", description })}\n`,
   );
+}
+
+function publicCapabilityManifest(
+  id: string,
+  kind: "plugin" | "hook" | "template" | "cli" | "harness",
+) {
+  return {
+    schemaVersion: 2,
+    publisher: "andromeda-test",
+    id,
+    kind,
+    version: "1.0.0",
+    license: "Apache-2.0",
+    compatibility: {
+      andromeda: ">=0.10.0 <2.0.0",
+      api: "2",
+    },
+    runtime: {
+      kind: "declarative",
+    },
+    contributions: {
+      commands: [
+        {
+          id: "probe",
+          name: "probe",
+          description: "Run the probe.",
+          handler: {
+            kind: "declarative",
+            action: "probe.run",
+          },
+        },
+      ],
+    },
+    permissions: {
+      workspaces: "none",
+      sessions: "none",
+      memory: "none",
+      models: [],
+      networkOrigins: [],
+      secrets: [],
+      clipboard: "none",
+      notifications: false,
+      externalUrls: [],
+    },
+  };
 }
 
 async function writeIdentityFixture(
@@ -347,13 +393,7 @@ describe("install CLI", () => {
       await mkdir(source, { recursive: true });
       await Bun.write(
         path.join(source, "agent.package.json"),
-        JSON.stringify({
-          schemaVersion: 1,
-          id: "probe-harness",
-          kind: "harness",
-          entry: `${process.execPath} probe.ts`,
-          requires: { clis: [], state: ["credits"] },
-        }),
+        JSON.stringify(publicCapabilityManifest("probe-harness", "harness")),
       );
 
       const install = await runAgents(root, [
@@ -498,19 +538,21 @@ describe("install CLI", () => {
         }),
       ).rejects.toThrow("agents.package.json is not supported");
 
-      const noEntry = path.join(root, "missing-entry");
-      await mkdir(noEntry, { recursive: true });
+      const legacyNative = path.join(root, "legacy-native");
+      await mkdir(legacyNative, { recursive: true });
       await Bun.write(
-        path.join(noEntry, "agent.package.json"),
-        '{"schemaVersion":1,"id":"no-entry","kind":"harness"}\n',
+        path.join(legacyNative, "agent.package.json"),
+        '{"schemaVersion":1,"id":"legacy-native","kind":"harness","entry":"bun main.ts"}\n',
       );
       await expect(
         installCapability(state, {
           kind: "harness",
-          name: "no-entry",
-          source: noEntry,
+          name: "legacy-native",
+          source: legacyNative,
         }),
-      ).rejects.toThrow("requires a non-empty entry command");
+      ).rejects.toThrow(
+        "schemaVersion 2 is required for public capabilities",
+      );
 
       const oldSchema = path.join(root, "old-schema");
       await mkdir(oldSchema, { recursive: true });
@@ -524,13 +566,17 @@ describe("install CLI", () => {
           name: "old-schema",
           source: oldSchema,
         }),
-      ).rejects.toThrow("schemaVersion must be 1");
+      ).rejects.toThrow("schemaVersion 2 is required for public capabilities");
 
       const invalidShape = path.join(root, "invalid-shape");
       await mkdir(invalidShape, { recursive: true });
+      const invalidManifest = {
+        ...publicCapabilityManifest("invalid-shape", "plugin"),
+        provides: "old-shape",
+      };
       await Bun.write(
         path.join(invalidShape, "agent.package.json"),
-        '{"schemaVersion":1,"id":"invalid-shape","kind":"plugin","provides":"old-shape"}\n',
+        JSON.stringify(invalidManifest),
       );
       await expect(
         installCapability(state, {
@@ -538,9 +584,96 @@ describe("install CLI", () => {
           name: "invalid-shape",
           source: invalidShape,
         }),
-      ).rejects.toThrow("provides must be an array of non-empty strings");
+      ).rejects.toThrow("manifest contains unsupported field provides");
 
+      const native = path.join(root, "native-entry");
+      await mkdir(native, { recursive: true });
+      await Bun.write(
+        path.join(native, "agent.package.json"),
+        JSON.stringify({
+          ...publicCapabilityManifest("native-entry", "plugin"),
+          entry: "node plugin.js",
+        }),
+      );
+      await expect(
+        installCapability(state, {
+          kind: "plugin",
+          name: "native-entry",
+          source: native,
+        }),
+      ).rejects.toThrow("manifest contains unsupported field entry");
+
+      const wasi = path.join(root, "wasi-plugin");
+      await mkdir(path.join(wasi, "runtime"), { recursive: true });
+      const wasm = Uint8Array.from([
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+        0x03, 0x02, 0x01, 0x00,
+        0x07, 0x0d, 0x01, 0x09, 0x72, 0x75, 0x6e, 0x5f, 0x70, 0x72, 0x6f,
+        0x62, 0x65, 0x00, 0x00,
+        0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b,
+      ]);
+      await Bun.write(path.join(wasi, "runtime", "plugin.wasm"), wasm);
+      const wasiManifest = publicCapabilityManifest("wasi-plugin", "plugin");
+      (wasiManifest as any).runtime = {
+        kind: "wasi",
+        module: "runtime/plugin.wasm",
+        sha256: "f".repeat(64),
+      };
+      (wasiManifest.contributions.commands[0] as any).handler = {
+        kind: "wasi",
+        export: "run_probe",
+      };
+      await Bun.write(
+        path.join(wasi, "agent.package.json"),
+        JSON.stringify(wasiManifest),
+      );
+      await expect(
+        installCapability(state, {
+          kind: "plugin",
+          name: "wasi-plugin",
+          source: wasi,
+        }),
+      ).rejects.toThrow(
+        "WASI module digest does not match runtime.sha256",
+      );
       expect(await snapshotTree(state.stateDir)).toEqual(before);
+
+      (wasiManifest.runtime as any).sha256 = createHash("sha256")
+        .update(wasm)
+        .digest("hex");
+      await Bun.write(
+        path.join(wasi, "agent.package.json"),
+        JSON.stringify(wasiManifest),
+      );
+      await expect(
+        installCapability(state, {
+          kind: "plugin",
+          name: "wasi-plugin",
+          source: wasi,
+        }),
+      ).resolves.toMatchObject({
+        changed: true,
+      });
+
+      (wasiManifest.contributions.commands[0] as any).handler.export =
+        "missing_export";
+      await Bun.write(
+        path.join(wasi, "agent.package.json"),
+        JSON.stringify(wasiManifest),
+      );
+      const beforeMissingExport = await snapshotTree(state.stateDir);
+      await expect(
+        installCapability(state, {
+          kind: "plugin",
+          name: "wasi-plugin",
+          source: wasi,
+          replace: true,
+        }),
+      ).rejects.toThrow(
+        "WASI command export is missing or not a function: missing_export",
+      );
+      expect(await snapshotTree(state.stateDir)).toEqual(beforeMissingExport);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
