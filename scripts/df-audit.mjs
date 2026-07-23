@@ -1028,7 +1028,7 @@ function parseManagedManifest(text) {
 async function auditProjectOverlay(github, repository, targetRef, agentOsDataRevision) {
   const findings = [];
   const dataRepo = parseRepo(AGENT_OS_DATA_REPO);
-  const prefix = `managed-repository/repositories/${repository.owner}/${repository.repo}/agents/.project`;
+  const prefix = `managed-repository/repositories/${repository.owner}/${repository.repo}/.agents/project`;
   const files = await listRemoteDirectoryFiles(github, dataRepo, prefix, agentOsDataRevision);
   for (const source of files) {
     const relative = source.path.slice(prefix.length + 1);

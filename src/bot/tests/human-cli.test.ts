@@ -157,7 +157,7 @@ test("submodule CLI rejects ambiguous and bypassing mutation requests", () => {
 test("CLI and Actions invoke the same issue and PR Autoreview engine with exact version admission", async () => {
   const root = path.resolve(import.meta.dirname, "..");
   const [cli, workflow, runner, drafting] = await Promise.all([
-    readFile(path.join(root, "src", "cli.ts"), "utf8"),
+    readFile(path.join(root, "cli.ts"), "utf8"),
     readFile(path.join(root, ".github", "workflows", "darkfactory-autoreview.yml"), "utf8"),
     readFile(path.join(root, ".github", "scripts", "run-darkfactory-autoreview.mjs"), "utf8"),
     readFile(path.join(root, "src", "issue-development.ts"), "utf8")
