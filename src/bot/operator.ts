@@ -16,7 +16,7 @@ export type RepairClass = "auto" | "pr" | "owner" | "blocked";
 export type SetupStage = (typeof SETUP_STAGE_ORDER)[number];
 
 const MAIN_ONLY_DATA_REPOSITORIES = new Set([
-  "marius-patrik/andromeda-data",
+  "marius-patrik/private-data",
   "marius-patrik/darkfactory-data"
 ]);
 
