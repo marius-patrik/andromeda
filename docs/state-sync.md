@@ -70,10 +70,11 @@ operation; they do not exchange runtime state.
 ## Inspection
 
 ```sh
-agents sync status --json
-agents state doctor --json
-agents memory status
-agents sessions list --json
+andromeda sync status --json
+andromeda state doctor --json
+andromeda memory status
+andromeda sessions list --json
+andromeda sessions capture status --json
 ```
 
 `state doctor` is read-only. When exchange is enabled it verifies the encrypted
@@ -90,6 +91,13 @@ sync artifacts.
 - Raw provider databases/WALs, provider transcripts, credentials, models,
   caches, logs, temporary files, locks, process state, and arbitrary files are
   local-only.
+- Canonical sessions reconciled from provider transcripts are also local-only.
+  Export skips each session before secret scanning and reports the
+  `provider-transcript` reason, including empty captures and later local
+  resume/provider-switch events. Ordinary non-provider-derived sessions remain
+  eligible for exchange. Valid provider creation provenance combined with a
+  malformed imported turn or receipt aborts export; it never falls through to
+  the roaming event collector.
 - Migration evidence remains below `ANDROMEDA_HOME/provenance/migrations/` and in
   the separately protected Recovery archive.
 
@@ -101,8 +109,9 @@ has not been recovered.
 
 On Windows, physical top-level `.codex` and `.claude` directories used by the
 desktop applications may coexist as `app-owned` surfaces only when distinct
-canonical CLI homes exist below `ANDROMEDA_HOME/clis`. They are never exchange
-sources or Agent OS authority.
+canonical CLI homes exist below `ANDROMEDA_HOME/clis`. The bounded transcript
+reconciler may read supported JSONL evidence from them, but they are never
+exchange sources or Agent OS authority.
 
 See [Canonical State and Memory v2](state-memory-v2.md) for the complete
 authority and acceptance contract.

@@ -129,8 +129,8 @@ One proto module -> language stubs via **buf remote plugins** (no local protoc
 needed). From the **repo root**:
 
 ```sh
-(cd src/mcp && bunx --bun @bufbuild/buf generate proto)
-bunx --bun @bufbuild/buf lint src/mcp/proto
+(cd src/mcp && bun x --bun @bufbuild/buf generate proto)
+bun x --bun @bufbuild/buf lint src/mcp/proto
 ```
 
 Default outputs (all committable, all in this repo):
@@ -149,7 +149,7 @@ Default outputs (all committable, all in this repo):
 - **Python:** plain protobuf `*_pb2.py` + `*_pb2.pyi` for the in-repository
   Agent OS inference consumer are generated with the opt-in template:
   ```sh
-  (cd src/mcp && bunx --bun @bufbuild/buf generate proto --template buf.gen.python.yaml)
+  (cd src/mcp && bun x --bun @bufbuild/buf generate proto --template buf.gen.python.yaml)
   ```
   That writes to `src/server/inference/python-agent/agent/gen` and is run whenever the
   in-repository Python consumer changes. Import as:
@@ -226,7 +226,7 @@ bun install
 bun run check
 
 # Refresh and validate the in-repository Python consumer:
-(cd src/mcp && bunx --bun @bufbuild/buf generate proto --template buf.gen.python.yaml)
+(cd src/mcp && bun x --bun @bufbuild/buf generate proto --template buf.gen.python.yaml)
 (cd src/server/inference/python-agent && uv sync && uv run python -c "import agent.gen; from andromeda.v1 import session_frames_pb2")
 ```
 

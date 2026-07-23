@@ -13,7 +13,7 @@
   },
   "scripts": {
     "agents": "bun src/cli/cli.ts",
-    "check": "bunx tsc --noEmit",
+    "check": "bun x tsc --noEmit",
     "test": "bun test src/cli/test/*.test.ts",
     "proto:check": "bun scripts/verify-codegen.ts",
     "layout:check": "node scripts/verify-single-product.mjs",

@@ -22,8 +22,8 @@ subshell is shown:
 
 ```sh
 # Core contracts and generated clients
-bunx tsc --noEmit -p src/sdk/tsconfig.json
-bunx buf lint src/mcp/proto
+bun x tsc --noEmit -p src/sdk/tsconfig.json
+bun x buf lint src/mcp/proto
 bun scripts/verify-codegen.ts
 (cd src/sdk/contracts-go && go test ./...)
 

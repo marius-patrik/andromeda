@@ -55,8 +55,8 @@ which is how CI enforces freshness. To regenerate in place:
 
 ```sh
 cd src/mcp
-bunx --bun @bufbuild/buf generate proto
-bunx --bun @bufbuild/buf generate proto --template buf.gen.python.yaml
+bun x --bun @bufbuild/buf generate proto
+bun x --bun @bufbuild/buf generate proto --template buf.gen.python.yaml
 ```
 
 The first updates the committed Go and TypeScript outputs; the second refreshes
