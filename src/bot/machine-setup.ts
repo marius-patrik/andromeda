@@ -70,12 +70,12 @@ export async function convergeMachineRuntime(input: MachineConvergenceInput): Pr
     const npm = platform === "win32" ? "npm.cmd" : "npm";
     const build = run(npm, ["run", "build"], { cwd: packageRoot, env: { ...process.env, ANDROMEDA_HOME: agentsHome } });
     if (build.status !== 0) throw commandFailure("npm run build", build);
-    invokeAgents(["src", "register", packageRoot]);
-    const packages = parseJson(invokeAgents(["src", "list", "--json"]), "Agent OS package registry");
+    invokeAgents(["packages", "register", packageRoot]);
+    const packages = parseJson(invokeAgents(["packages", "list", "--json"]), "Agent OS package registry");
     if (!Array.isArray(packages) || !packages.some((entry) => isRecord(entry) && entry.id === "darkfactory" && path.resolve(String(entry.path || "")) === packageRoot)) {
       throw new Error("DarkFactory package registration did not converge to the exact trusted package root");
     }
-    invokeAgents(["src", "run", "darkfactory", "--", "--help"]);
+    invokeAgents(["packages", "run", "darkfactory", "--", "--help"]);
     receipts.push({
       action: "machine-package-binding",
       target: "canonical-agent-os",

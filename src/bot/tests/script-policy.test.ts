@@ -856,7 +856,7 @@ test("df-plan drift detection maps M2 PRD commitments to code artifacts", async 
   assert.match(source, /PRD drift reporting when code or backlog contradicts the PRD/);
   assert.match(source, /prd\\W\*backlog/);
   assert.match(source, /\.github\/workflows\/df-plan\.yml/);
-  assert.match(source, /\.github\/scripts\/df-plan\.mjs/);
+  assert.match(source, /scripts\/df-plan\.mjs/);
   assert.match(source, /listen for PRD file changes/);
   assert.match(source, /maintain sequencing references/);
   assert.match(source, /file or update a drift report issue/);
